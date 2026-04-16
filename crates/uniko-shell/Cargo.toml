@@ -1,0 +1,10 @@
+[package]
+name = "uniko-shell"
+description = "Layer 6: Semantic shell binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+uniko-api = { workspace = true }
+tokio = { workspace = true }

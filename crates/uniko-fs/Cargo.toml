@@ -1,0 +1,11 @@
+[package]
+name = "uniko-fs"
+description = "Layer 6: Shadow filesystem, file watching, git integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+uniko-api = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

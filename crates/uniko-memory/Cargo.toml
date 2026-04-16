@@ -1,0 +1,14 @@
+[package]
+name = "uniko-memory"
+description = "Layer 4: Memory management — pipelines, recall cascade, rules, consolidation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+uniko-extract = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

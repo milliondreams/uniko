@@ -1,0 +1,33 @@
+[package]
+name = "uniko-extract"
+description = "Layer 3: Content processing — NER, observations, chunking, ingest, embedding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+uniko-pipes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tiktoken-rs = { workspace = true }
+
+# Optional dependencies for feature-gated functionality
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-rust = { workspace = true, optional = true }
+tree-sitter-javascript = { workspace = true, optional = true }
+tree-sitter-typescript = { workspace = true, optional = true }
+ort = { workspace = true, optional = true }
+
+[features]
+default = ["code-parse"]
+onnx = ["dep:ort"]
+code-parse = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+]

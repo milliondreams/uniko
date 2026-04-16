@@ -1,0 +1,17 @@
+[package]
+name = "uniko-cortex"
+description = "Layer 5: Higher reasoning — procedures, topics, MCTS planning, rule induction"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+uniko-memory = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+llm = []

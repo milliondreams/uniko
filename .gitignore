@@ -1,0 +1,7 @@
+target/
+*.db
+.env
+*.swp
+*.swo
+.DS_Store
+proptest-regressions/
