@@ -7,11 +7,18 @@ license.workspace = true
 
 [dependencies]
 uniko-pipes = { workspace = true }
+uniko-store = { workspace = true }
+uni-db = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
 tiktoken-rs = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+regex = { workspace = true }
 
 # Optional dependencies for feature-gated functionality
 tree-sitter = { workspace = true, optional = true }
@@ -20,6 +27,9 @@ tree-sitter-rust = { workspace = true, optional = true }
 tree-sitter-javascript = { workspace = true, optional = true }
 tree-sitter-typescript = { workspace = true, optional = true }
 ort = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio-util = { workspace = true }
 
 [features]
 default = ["code-parse"]

@@ -4314,16 +4314,6 @@ dependencies = [
 
 [[package]]
 name = "metrics"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3045b4193fbdc5b5681f32f11070da9be3609f189a79f3390706d42587f46bb5"
-dependencies = [
- "ahash",
- "portable-atomic",
-]
-
-[[package]]
-name = "metrics"
 version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d5312e9ba3771cfa961b585728215e3d972c950a3eed9252aa093d6301277e8"
@@ -7280,7 +7270,9 @@ checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "uni-algo"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7cbd0f8985e4ed175c4e731c1f4fc0f503203634c733c0d95e4b6a37cb322fd"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -7299,7 +7291,9 @@ dependencies = [
 
 [[package]]
 name = "uni-btic"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc839c0b0cb64cb585d1e27ae8d4ce0f0f81f6c29a856ee48d7a6c1cef6d0391"
 dependencies = [
  "chrono",
  "serde",
@@ -7308,7 +7302,9 @@ dependencies = [
 
 [[package]]
 name = "uni-common"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "186da765d46b688a4f8107cd3ce4641172e23aacd211ca3285055263bd7914cf"
 dependencies = [
  "anyhow",
  "arrow-schema",
@@ -7327,7 +7323,9 @@ dependencies = [
 
 [[package]]
 name = "uni-crdt"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e025816cb6fe2111299b329d44cc676a6d312f5608260e95f7d5dd3b45e0ce0"
 dependencies = [
  "fxhash",
  "rmp-serde",
@@ -7339,7 +7337,9 @@ dependencies = [
 
 [[package]]
 name = "uni-cypher"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f9f19838afb9e3f5ce4c0e586f36eeade44618f1bb958232fb4a1db17927413"
 dependencies = [
  "pest",
  "pest_derive",
@@ -7350,7 +7350,9 @@ dependencies = [
 
 [[package]]
 name = "uni-db"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18fdbfcebcfd11362facc8a57aa9dfc567bb70becd18eb410e92ed90cb38015a"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -7384,7 +7386,9 @@ dependencies = [
 
 [[package]]
 name = "uni-locy"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fba761d5b36db28fac02bdea2efb14083b30e452f3c765837fed5452ef8b7798"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -7394,7 +7398,9 @@ dependencies = [
 
 [[package]]
 name = "uni-query"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0da0499e17e2edb6175f401ecda8ef769a80f59cbd9e2bb138eceb9c7bbf9cc"
 dependencies = [
  "anyhow",
  "arrow",
@@ -7437,7 +7443,9 @@ dependencies = [
 
 [[package]]
 name = "uni-store"
-version = "1.0.2"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f710929ee7a3b2fca31c11bf119144478b8bae235657c4b751d56ab6ca9be89"
 dependencies = [
  "anyhow",
  "arrow",
@@ -7474,14 +7482,14 @@ dependencies = [
 
 [[package]]
 name = "uni-xervo"
-version = "0.2.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38e8ef25e3230e7ac88f4e215389f988de0f751812114ed6005735e55630c561"
+checksum = "5857e48426dc7560215e140e38d0875e6bdd86a329aac7b81423555ac83d26d1"
 dependencies = [
  "anyhow",
  "async-trait",
  "fastembed",
- "metrics 0.23.1",
+ "metrics 0.24.3",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -7556,18 +7564,26 @@ dependencies = [
 name = "uniko-extract"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
+ "hex",
  "ort",
+ "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tiktoken-rs",
  "tokio",
+ "tokio-util",
  "tracing",
  "tree-sitter",
  "tree-sitter-javascript",
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "uni-db",
  "uniko-pipes",
+ "uniko-store",
 ]
 
 [[package]]
@@ -7593,20 +7609,28 @@ dependencies = [
 name = "uniko-memory"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
+ "uni-db",
  "uniko-extract",
+ "uniko-pipes",
+ "uniko-store",
 ]
 
 [[package]]
 name = "uniko-pipes"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
  "metrics 0.24.3",
  "metrics-exporter-prometheus",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -7614,6 +7638,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uni-db",
  "uniko-store",
 ]
 

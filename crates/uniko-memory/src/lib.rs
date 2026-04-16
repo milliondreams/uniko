@@ -9,3 +9,6 @@ pub mod consolidation;
 pub mod pipeline;
 pub mod recall;
 pub mod rules;
+
+#[doc(inline)]
+pub use pipeline::PipelineSystem;

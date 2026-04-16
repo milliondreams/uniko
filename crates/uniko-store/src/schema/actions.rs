@@ -1,0 +1,44 @@
+//! Layer 2: Action node type.
+
+use uni_db::{DataType, IndexType, ScalarType, SchemaBuilder};
+
+use super::constants::{edges, labels, DEFAULT_VECTOR_DIM};
+use super::hnsw_index;
+
+pub(crate) fn register_labels(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
+    builder
+        .label(labels::ACTION)
+            .property("action_id", DataType::String)
+            .property("action_type", DataType::String)
+            .property_nullable("input", DataType::CypherValue)
+            .property_nullable("output", DataType::CypherValue)
+            .property_nullable("status", DataType::String)
+            .property_nullable("started_at", DataType::DateTime)
+            .property_nullable("ended_at", DataType::DateTime)
+            .property_nullable("duration_ms", DataType::Int64)
+            .property_nullable("error", DataType::String)
+            .property_nullable("embedding", DataType::Vector { dimensions: DEFAULT_VECTOR_DIM })
+            .index("action_id", IndexType::Scalar(ScalarType::Hash))
+            .index("action_type", IndexType::Scalar(ScalarType::Hash))
+            .index("status", IndexType::Scalar(ScalarType::Hash))
+            .index("started_at", IndexType::Scalar(ScalarType::BTree))
+            .index("embedding", IndexType::Vector(hnsw_index()))
+        .done()
+}
+
+pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
+    builder
+        .edge_type(edges::PERFORMED_BY, &[labels::ACTION], &[labels::PARTICIPANT])
+        .done()
+        // TRIGGERED_BY: multi-source (Action, Episode → Message)
+        .edge_type(
+            edges::TRIGGERED_BY,
+            &[labels::ACTION, labels::EPISODE],
+            &[labels::MESSAGE],
+        )
+        .done()
+        .edge_type(edges::PRODUCED, &[labels::ACTION], &[labels::ARTIFACT])
+        .done()
+        .edge_type(edges::NEXT_ACTION, &[labels::ACTION], &[labels::ACTION])
+        .done()
+}

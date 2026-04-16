@@ -28,7 +28,7 @@ uniko-cortex = { path = "crates/uniko-cortex" }
 uniko-api = { path = "crates/uniko-api" }
 
 # Database
-uni-db = { path = "../projectX/uni-db/crates/uni", default-features = false, features = [
+uni-db = { version = "1.1.0", default-features = false, features = [
     "lance-backend",
     "provider-fastembed",
     "snapshot-internals",
@@ -47,6 +47,12 @@ uuid = { version = "1", features = ["v7"] }
 # Error handling
 thiserror = "2"
 anyhow = "1"
+
+# Async traits (object-safe async fn in trait)
+async-trait = "0.1"
+
+# Random (retry jitter)
+rand = "0.9"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -72,6 +78,13 @@ tiktoken-rs = "0.6"
 
 # Python binding
 pyo3 = { version = "0.23", features = ["extension-module"] }
+
+# Text processing
+regex = "1"
+
+# Hashing
+sha2 = "0.10"
+hex = "0.4"
 
 # Dev dependencies
 proptest = "1"

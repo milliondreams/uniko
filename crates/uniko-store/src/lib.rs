@@ -16,4 +16,6 @@ pub mod storage;
 pub mod types;
 
 pub use error::{Result, UnikoError};
+#[doc(inline)]
+pub use storage::KnowledgeBase;
 pub use types::*;

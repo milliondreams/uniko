@@ -7,8 +7,13 @@ license.workspace = true
 
 [dependencies]
 uniko-extract = { workspace = true }
+uniko-pipes = { workspace = true }
+uniko-store = { workspace = true }
+uni-db = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
