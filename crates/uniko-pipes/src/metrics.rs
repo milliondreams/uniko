@@ -14,13 +14,19 @@ use crate::circuit_breaker::CircuitState;
 ///
 /// Safe to call multiple times — descriptions are idempotent.
 pub fn register_pipeline_metrics() {
-    describe_counter!("uniko.ingest.items_total", "Total items submitted to ingest");
+    describe_counter!(
+        "uniko.ingest.items_total",
+        "Total items submitted to ingest"
+    );
     describe_counter!("uniko.ingest.items_failed", "Items that failed at a step");
     describe_histogram!(
         "uniko.ingest.duration_ms",
         "End-to-end ingest processing time per item"
     );
-    describe_gauge!("uniko.ingest.queue_depth", "Current ingest channel occupancy");
+    describe_gauge!(
+        "uniko.ingest.queue_depth",
+        "Current ingest channel occupancy"
+    );
 
     describe_counter!(
         "uniko.consolidation.cycles_total",
@@ -43,7 +49,10 @@ pub fn register_pipeline_metrics() {
         "uniko.recall.phase1_only_pct",
         "Recalls satisfied by Phase 1 alone"
     );
-    describe_histogram!("uniko.recall.assembly_ms", "Context bundle assembly latency");
+    describe_histogram!(
+        "uniko.recall.assembly_ms",
+        "Context bundle assembly latency"
+    );
 
     describe_counter!("uniko.llm.calls_total", "Total LLM API calls");
     describe_counter!("uniko.llm.errors_total", "LLM call failures");

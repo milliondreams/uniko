@@ -55,9 +55,7 @@ pub fn resolve_temporal(text: &str, reference: DateTime<Utc>) -> DateTime<Utc> {
 /// Parse "N days/weeks/months ago" patterns.
 fn parse_n_ago(text: &str) -> Option<Duration> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(\d+)\s+(days?|weeks?|months?|years?)\s+ago").unwrap()
-    });
+    let re = RE.get_or_init(|| Regex::new(r"(\d+)\s+(days?|weeks?|months?|years?)\s+ago").unwrap());
 
     let caps = re.captures(text)?;
     let n: i64 = caps[1].parse().ok()?;
@@ -75,14 +73,29 @@ fn parse_n_ago(text: &str) -> Option<Duration> {
 /// Parse "in January" through "in December".
 fn parse_in_month(text: &str) -> Option<u32> {
     let months = [
-        ("january", 1), ("february", 2), ("march", 3),
-        ("april", 4), ("may", 5), ("june", 6),
-        ("july", 7), ("august", 8), ("september", 9),
-        ("october", 10), ("november", 11), ("december", 12),
-        ("jan", 1), ("feb", 2), ("mar", 3),
-        ("apr", 4), ("jun", 6), ("jul", 7),
-        ("aug", 8), ("sep", 9), ("oct", 10),
-        ("nov", 11), ("dec", 12),
+        ("january", 1),
+        ("february", 2),
+        ("march", 3),
+        ("april", 4),
+        ("may", 5),
+        ("june", 6),
+        ("july", 7),
+        ("august", 8),
+        ("september", 9),
+        ("october", 10),
+        ("november", 11),
+        ("december", 12),
+        ("jan", 1),
+        ("feb", 2),
+        ("mar", 3),
+        ("apr", 4),
+        ("jun", 6),
+        ("jul", 7),
+        ("aug", 8),
+        ("sep", 9),
+        ("oct", 10),
+        ("nov", 11),
+        ("dec", 12),
     ];
 
     for (name, num) in months {

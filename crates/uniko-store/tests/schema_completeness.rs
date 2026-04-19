@@ -1,17 +1,21 @@
 //! Programmatic verification that schema registration is complete.
 
 use uni_db::Uni;
+use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::schema::register_schema;
 use uniko_store::storage::embed_catalog;
 
 async fn test_db() -> Uni {
+    let config = UnikoConfig::default();
     let db = Uni::in_memory()
-        .xervo_catalog(embed_catalog())
+        .xervo_catalog(embed_catalog(&config))
         .build()
         .await
         .expect("in-memory db");
-    register_schema(&db).await.expect("schema registration");
+    register_schema(&db, &config)
+        .await
+        .expect("schema registration");
     db
 }
 

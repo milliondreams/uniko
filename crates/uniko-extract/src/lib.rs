@@ -8,4 +8,6 @@
 pub mod embedding;
 pub mod ingest;
 pub mod ner;
+#[cfg(feature = "onnx")]
+pub mod nlp;
 pub mod observations;

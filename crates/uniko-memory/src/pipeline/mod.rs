@@ -81,7 +81,8 @@ impl PipelineSystem {
 
         // Bounded channels with backpressure.
         let (ingest_tx, ingest_rx) = mpsc::channel(config.ingest_queue_capacity);
-        let (consolidation_tx, consolidation_rx) = mpsc::channel(config.consolidation_queue_capacity);
+        let (consolidation_tx, consolidation_rx) =
+            mpsc::channel(config.consolidation_queue_capacity);
 
         let ingest_health = Arc::new(Mutex::new(HealthTracker::new()));
         let consolidation_health = Arc::new(Mutex::new(HealthTracker::new()));
@@ -133,13 +134,10 @@ impl PipelineSystem {
     /// # Errors
     ///
     /// Returns [`uniko_store::UnikoError::Pipeline`] on channel failure.
-    pub fn submit_ingest(
-        &self,
-        task: IngestTask,
-    ) -> Result<(), uniko_store::UnikoError> {
-        self.ingest_tx.try_send(task).map_err(|e| {
-            uniko_store::UnikoError::Pipeline(format!("ingest channel: {e}"))
-        })
+    pub fn submit_ingest(&self, task: IngestTask) -> Result<(), uniko_store::UnikoError> {
+        self.ingest_tx
+            .try_send(task)
+            .map_err(|e| uniko_store::UnikoError::Pipeline(format!("ingest channel: {e}")))
     }
 
     /// Submit a consolidation task.
@@ -151,25 +149,23 @@ impl PipelineSystem {
         &self,
         task: ConsolidationTask,
     ) -> Result<(), uniko_store::UnikoError> {
-        self.consolidation_tx.try_send(task).map_err(|e| {
-            uniko_store::UnikoError::Pipeline(format!("consolidation channel: {e}"))
-        })
+        self.consolidation_tx
+            .try_send(task)
+            .map_err(|e| uniko_store::UnikoError::Pipeline(format!("consolidation channel: {e}")))
     }
 
     /// Query aggregate pipeline health.
     pub fn health(&self) -> PipelineHealth {
         let circuit_open = self.llm_breaker.state() == CircuitState::Open;
 
-        let ingest_depth =
-            self.ingest_tx.max_capacity() - self.ingest_tx.capacity();
-        let ingest = self
-            .ingest_health
-            .lock()
-            .unwrap()
-            .health(ingest_depth, self.ingest_tx.max_capacity(), circuit_open);
+        let ingest_depth = self.ingest_tx.max_capacity() - self.ingest_tx.capacity();
+        let ingest = self.ingest_health.lock().unwrap().health(
+            ingest_depth,
+            self.ingest_tx.max_capacity(),
+            circuit_open,
+        );
 
-        let consol_depth = self.consolidation_tx.max_capacity()
-            - self.consolidation_tx.capacity();
+        let consol_depth = self.consolidation_tx.max_capacity() - self.consolidation_tx.capacity();
         let consolidation = self.consolidation_health.lock().unwrap().health(
             consol_depth,
             self.consolidation_tx.max_capacity(),

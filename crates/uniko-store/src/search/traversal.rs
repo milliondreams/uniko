@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use crate::error::{Result, UnikoError};
-use crate::storage::edges::Direction;
 use crate::storage::KnowledgeBase;
+use crate::storage::edges::Direction;
 use crate::types::{EdgeId, NodeId};
 
 /// A step in a traversal path.
@@ -94,9 +94,7 @@ impl KnowledgeBase {
                 format!("MATCH (s)-[{rel_pattern}]-(t) WHERE id(s) = $sid")
             }
         };
-        let cypher = format!(
-            "{match_clause} RETURN DISTINCT t, id(t) AS tid"
-        );
+        let cypher = format!("{match_clause} RETURN DISTINCT t, id(t) AS tid");
 
         let session = self.db.session();
         let result = session
@@ -290,10 +288,7 @@ impl KnowledgeBase {
 
         // 4. Rank and return top-k.
         let mut ranked: Vec<(NodeId, f64)> = scores.into_iter().collect();
-        ranked.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         ranked.truncate(top_k);
 
         Ok(PageRankResult {

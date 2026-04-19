@@ -2,35 +2,43 @@
 
 use uni_db::{DataType, IndexType, ScalarType, SchemaBuilder};
 
-use super::constants::{edges, labels, DEFAULT_VECTOR_DIM};
-use super::hnsw_index;
+use super::constants::{edges, labels};
+use crate::config::UnikoConfig;
 
-pub(crate) fn register_labels(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
+pub(crate) fn register_labels<'a>(
+    builder: SchemaBuilder<'a>,
+    config: &UnikoConfig,
+) -> SchemaBuilder<'a> {
     builder
         .label(labels::FACT)
-            .property("fact_id", DataType::String)
-            .property("subject", DataType::String)
-            .property("predicate", DataType::String)
-            .property_nullable("object", DataType::String)
-            .property_nullable("confidence", DataType::Float64)
-            .property_nullable("observation_count", DataType::Int64)
-            .property_nullable("valid_at", DataType::Btic)
-            .property_nullable("source_rule", DataType::String)
-            .property_nullable("visibility", DataType::String)
-            .property_nullable("embedding", DataType::Vector { dimensions: DEFAULT_VECTOR_DIM })
-            .index("fact_id", IndexType::Scalar(ScalarType::Hash))
-            .index("subject", IndexType::Scalar(ScalarType::Hash))
-            .index("subject", IndexType::FullText)
-            .index("predicate", IndexType::Scalar(ScalarType::Hash))
-            .index("confidence", IndexType::Scalar(ScalarType::BTree))
-            .index("embedding", IndexType::Vector(hnsw_index()))
+        .property("fact_id", DataType::String)
+        .property("subject", DataType::String)
+        .property("predicate", DataType::String)
+        .property_nullable("object", DataType::String)
+        .property_nullable("confidence", DataType::Float64)
+        .property_nullable("observation_count", DataType::Int64)
+        .property_nullable("valid_at", DataType::Btic)
+        .property_nullable("source_rule", DataType::String)
+        .property_nullable("visibility", DataType::String)
+        .property_nullable(
+            "embedding",
+            DataType::Vector {
+                dimensions: config.embedding.dimensions,
+            },
+        )
+        .index("fact_id", IndexType::Scalar(ScalarType::Hash))
+        .index("subject", IndexType::Scalar(ScalarType::Hash))
+        .index("subject", IndexType::FullText)
+        .index("predicate", IndexType::Scalar(ScalarType::Hash))
+        .index("confidence", IndexType::Scalar(ScalarType::BTree))
+        .index("embedding", IndexType::Vector(super::vector_index(config)))
         .done()
 }
 
 pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
     builder
         .edge_type(edges::SUPPORTED_BY, &[labels::FACT], &[labels::OBSERVATION])
-            .property_nullable("weight", DataType::Float64)
+        .property_nullable("weight", DataType::Float64)
         .done()
         // DERIVED_BY: Fact → Rule
         .edge_type(edges::DERIVED_BY, &[labels::FACT], &[labels::RULE])
@@ -43,10 +51,10 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
         )
         .done()
         .edge_type(edges::INVALIDATES, &[labels::FACT], &[labels::FACT])
-            .property_nullable("reason", DataType::String)
+        .property_nullable("reason", DataType::String)
         .done()
         .edge_type(edges::SHARED_FROM, &[labels::FACT], &[labels::FACT])
-            .property_nullable("shared_by", DataType::String)
-            .property_nullable("shared_at", DataType::DateTime)
+        .property_nullable("shared_by", DataType::String)
+        .property_nullable("shared_at", DataType::DateTime)
         .done()
 }

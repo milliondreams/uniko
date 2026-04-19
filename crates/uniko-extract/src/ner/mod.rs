@@ -1,19 +1,19 @@
 //! Pipeline 2 — Entity extraction.
 //!
 //! [`EntityExtractionStep`] implements the [`Step`](uniko_pipes::Step)
-//! trait and orchestrates rule-based, code AST, ONNX (stub), and LLM
+//! trait and orchestrates rule-based, code AST, ONNX NLP, and LLM
 //! (stub) entity extraction followed by deduplication and graph
 //! persistence.
 
 // Rust guideline compliant
 
-pub mod types;
-pub mod rules;
 #[cfg(feature = "code-parse")]
 pub mod code;
 pub mod dedup;
-pub mod onnx;
 pub mod llm;
+pub mod onnx;
+pub mod rules;
+pub mod types;
 
 pub use types::{EntityMatch, EntityType, ExtractionSource, RawEntity};
 
@@ -67,10 +67,31 @@ impl uniko_pipes::Step for EntityExtractionStep {
             all_raw.extend(code_ents);
         }
 
-        // 3. ONNX NER stub.
-        match onnx::extract_entities_onnx(&ctx.content) {
-            Ok(onnx_ents) => all_raw.extend(onnx_ents),
-            Err(e) => tracing::debug!(error = %e, "ONNX NER unavailable"),
+        // 3. ONNX NER via multi-task NLP pipeline.
+        #[cfg(feature = "onnx")]
+        {
+            match crate::nlp::NlpPipeline::try_new(&ctx.kb).await {
+                Some(pipeline) => match pipeline.analyze(&ctx.content).await {
+                    Ok(nlp_result) => {
+                        let onnx_ents = onnx::entities_from_nlp_result(&nlp_result, &ctx.content);
+                        tracing::debug!(count = onnx_ents.len(), "ONNX NER entities");
+                        all_raw.extend(onnx_ents);
+                        // Stash full NLP result for P3 (observations).
+                        if let Ok(val) = serde_json::to_value(&nlp_result) {
+                            ctx.metadata.insert("nlp_result".into(), val);
+                        }
+                    }
+                    Err(e) => tracing::debug!(error = %e, "NLP analysis failed"),
+                },
+                None => tracing::debug!("NLP pipeline unavailable, using rules only"),
+            }
+        }
+        #[cfg(not(feature = "onnx"))]
+        {
+            match onnx::extract_entities_onnx(&ctx.content) {
+                Ok(onnx_ents) => all_raw.extend(onnx_ents),
+                Err(e) => tracing::debug!(error = %e, "ONNX NER unavailable"),
+            }
         }
 
         // 4. LLM enhancement stub.

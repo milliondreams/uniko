@@ -24,7 +24,10 @@ async fn test_vector_search_empty_embedding() {
         .vector_search(&[], "Message", "embedding", 10, None)
         .await
         .unwrap();
-    assert!(results.is_empty(), "empty embedding should return no results");
+    assert!(
+        results.is_empty(),
+        "empty embedding should return no results"
+    );
     kb.shutdown().await.unwrap();
 }
 
@@ -35,10 +38,7 @@ async fn test_vector_search_basic() {
     // Insert messages with embeddings (384-dim per schema).
     for i in 0..5u8 {
         let mut props = HashMap::new();
-        props.insert(
-            "message_id".into(),
-            Value::String(format!("vs-{i}")),
-        );
+        props.insert("message_id".into(), Value::String(format!("vs-{i}")));
         props.insert(
             "content".into(),
             Value::String(format!("vector test message {i}")),
@@ -102,11 +102,7 @@ async fn test_multi_type_vector_search() {
 
     // multi_type search should not error.
     let results = kb
-        .multi_type_vector_search(
-            &emb,
-            &[("Message", "embedding"), ("Fact", "embedding")],
-            10,
-        )
+        .multi_type_vector_search(&emb, &[("Message", "embedding"), ("Fact", "embedding")], 10)
         .await
         .unwrap();
 
@@ -164,10 +160,7 @@ async fn test_fulltext_basic() {
         .await
         .unwrap();
 
-    assert!(
-        !results.is_empty(),
-        "should find message containing 'Rust'"
-    );
+    assert!(!results.is_empty(), "should find message containing 'Rust'");
 
     kb.shutdown().await.unwrap();
 }

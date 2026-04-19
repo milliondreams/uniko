@@ -10,7 +10,7 @@ use uni_db::Value;
 use uniko_pipes::types::IngestMessage;
 use uniko_store::{KnowledgeBase, NodeId};
 
-use super::chunking::{count_tokens, select_chunker, ChunkConfig};
+use super::chunking::{ChunkConfig, count_tokens, select_chunker};
 use super::session::{ensure_participant, ensure_participated_in, get_or_create_session};
 
 /// Convert a `chrono::DateTime<Utc>` to `uni_db::Value::Temporal(DateTime)`.
@@ -75,10 +75,7 @@ pub async fn ingest_message(
 
     // 4. Create Message node.
     let mut props = HashMap::new();
-    props.insert(
-        "message_id".into(),
-        Value::String(msg.message_id.clone()),
-    );
+    props.insert("message_id".into(), Value::String(msg.message_id.clone()));
     props.insert("content".into(), Value::String(msg.content.clone()));
     props.insert(
         "content_type".into(),
@@ -182,7 +179,8 @@ async fn create_addressed_to_edges(
         // Explicit recipients — ensure each exists and collect node IDs.
         let mut nids = Vec::with_capacity(ids.len());
         for pid in ids {
-            let nid = super::session::ensure_participant(kb, pid, &msg.timestamp.to_rfc3339()).await?;
+            let nid =
+                super::session::ensure_participant(kb, pid, &msg.timestamp.to_rfc3339()).await?;
             nids.push(nid);
         }
         nids

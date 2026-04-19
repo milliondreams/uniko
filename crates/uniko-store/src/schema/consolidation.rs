@@ -8,44 +8,68 @@ pub(crate) fn register_labels(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
     builder
         // ── ConsolidationCycle ──
         .label(labels::CONSOLIDATION_CYCLE)
-            .property("cycle_id", DataType::String)
-            .property("agent_id", DataType::String)
-            .property_nullable("started_at", DataType::DateTime)
-            .property_nullable("completed_at", DataType::DateTime)
-            .property_nullable("observations_processed", DataType::Int64)
-            .property_nullable("episodes_involved", DataType::Int64)
-            .property_nullable("facts_created", DataType::Int64)
-            .property_nullable("facts_reinforced", DataType::Int64)
-            .property_nullable("facts_invalidated", DataType::Int64)
-            .property_nullable("procedures_promoted", DataType::Int64)
-            .property_nullable("drift_alerts", DataType::Int64)
-            .index("cycle_id", IndexType::Scalar(ScalarType::Hash))
-            .index("agent_id", IndexType::Scalar(ScalarType::Hash))
-            .index("started_at", IndexType::Scalar(ScalarType::BTree))
+        .property("cycle_id", DataType::String)
+        .property("agent_id", DataType::String)
+        .property_nullable("started_at", DataType::DateTime)
+        .property_nullable("completed_at", DataType::DateTime)
+        .property_nullable("observations_processed", DataType::Int64)
+        .property_nullable("episodes_involved", DataType::Int64)
+        .property_nullable("facts_created", DataType::Int64)
+        .property_nullable("facts_reinforced", DataType::Int64)
+        .property_nullable("facts_invalidated", DataType::Int64)
+        .property_nullable("procedures_promoted", DataType::Int64)
+        .property_nullable("drift_alerts", DataType::Int64)
+        .index("cycle_id", IndexType::Scalar(ScalarType::Hash))
+        .index("agent_id", IndexType::Scalar(ScalarType::Hash))
+        .index("started_at", IndexType::Scalar(ScalarType::BTree))
         // ── DeadLetter ──
         .label(labels::DEAD_LETTER)
-            .property_nullable("step", DataType::String)
-            .property_nullable("error", DataType::String)
-            .property_nullable("node_ref", DataType::Int64)
-            .property_nullable("retry_count", DataType::Int64)
-            .property_nullable("max_retries", DataType::Int64)
-            .property_nullable("next_retry_at", DataType::DateTime)
-            .property_nullable("created_at", DataType::DateTime)
+        .property_nullable("step", DataType::String)
+        .property_nullable("error", DataType::String)
+        .property_nullable("node_ref", DataType::Int64)
+        .property_nullable("retry_count", DataType::Int64)
+        .property_nullable("max_retries", DataType::Int64)
+        .property_nullable("next_retry_at", DataType::DateTime)
+        .property_nullable("created_at", DataType::DateTime)
         .done()
 }
 
 pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
     builder
-        .edge_type(edges::PROCESSED, &[labels::CONSOLIDATION_CYCLE], &[labels::OBSERVATION])
+        .edge_type(
+            edges::PROCESSED,
+            &[labels::CONSOLIDATION_CYCLE],
+            &[labels::OBSERVATION],
+        )
         .done()
-        .edge_type(edges::INVOLVED, &[labels::CONSOLIDATION_CYCLE], &[labels::EPISODE])
+        .edge_type(
+            edges::INVOLVED,
+            &[labels::CONSOLIDATION_CYCLE],
+            &[labels::EPISODE],
+        )
         .done()
-        .edge_type(edges::CREATED, &[labels::CONSOLIDATION_CYCLE], &[labels::FACT])
+        .edge_type(
+            edges::CREATED,
+            &[labels::CONSOLIDATION_CYCLE],
+            &[labels::FACT],
+        )
         .done()
-        .edge_type(edges::INVALIDATED, &[labels::CONSOLIDATION_CYCLE], &[labels::FACT])
+        .edge_type(
+            edges::INVALIDATED,
+            &[labels::CONSOLIDATION_CYCLE],
+            &[labels::FACT],
+        )
         .done()
-        .edge_type(edges::PROMOTED, &[labels::CONSOLIDATION_CYCLE], &[labels::PROCEDURE])
+        .edge_type(
+            edges::PROMOTED,
+            &[labels::CONSOLIDATION_CYCLE],
+            &[labels::PROCEDURE],
+        )
         .done()
-        .edge_type(edges::APPLIED_RULE, &[labels::CONSOLIDATION_CYCLE], &[labels::RULE])
+        .edge_type(
+            edges::APPLIED_RULE,
+            &[labels::CONSOLIDATION_CYCLE],
+            &[labels::RULE],
+        )
         .done()
 }

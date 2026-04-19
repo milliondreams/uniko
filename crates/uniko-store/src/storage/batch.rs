@@ -6,7 +6,9 @@ use std::collections::HashMap;
 
 use uni_db::Value;
 
-use super::{build_inline_props, build_set_clause, validate_edge_type, validate_label, KnowledgeBase};
+use super::{
+    KnowledgeBase, build_inline_props, build_set_clause, validate_edge_type, validate_label,
+};
 use crate::error::{Result, UnikoError};
 use crate::types::{EdgeId, NodeId};
 

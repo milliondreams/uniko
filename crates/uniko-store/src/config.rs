@@ -6,11 +6,186 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UnikoError};
 
+// ── Embedding + Vector index config types ─────────────────────────
+
+/// Embedding model selection.
+///
+/// Controls which fastembed model is used for auto-embedding and
+/// computed embeddings.  Dimensions must match the model's output.
+///
+/// Use [`EmbeddingConfig::nomic_v15`] (768d, recommended) or
+/// [`EmbeddingConfig::minilm_l6_v2`] (384d, legacy) for presets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingConfig {
+    /// Fastembed model identifier (e.g., `"NomicEmbedTextV15"`).
+    pub model_id: String,
+    /// Output vector dimensions (must match model).
+    pub dimensions: usize,
+    /// Batch size for auto-embed operations.
+    pub batch_size: usize,
+}
+
+impl EmbeddingConfig {
+    /// Nomic Embed Text v1.5 — 768d, 8192 context, recommended.
+    pub fn nomic_v15() -> Self {
+        Self {
+            model_id: "NomicEmbedTextV15".into(),
+            dimensions: 768,
+            batch_size: 32,
+        }
+    }
+
+    /// Nomic Embed Text v1.5 quantized — 768d, faster, lower memory.
+    pub fn nomic_v15_quantized() -> Self {
+        Self {
+            model_id: "NomicEmbedTextV15Q".into(),
+            dimensions: 768,
+            batch_size: 32,
+        }
+    }
+
+    /// All-MiniLM-L6-v2 — 384d, legacy default for existing databases.
+    pub fn minilm_l6_v2() -> Self {
+        Self {
+            model_id: "AllMiniLML6V2".into(),
+            dimensions: 384,
+            batch_size: 32,
+        }
+    }
+}
+
+/// Vector index algorithm and quantization strategy.
+///
+/// Controls how embedding vectors are indexed for similarity search.
+/// Choose based on dataset scale and recall/memory tradeoff.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum VectorAlgorithm {
+    /// HNSW with scalar quantization (default, best all-round).
+    HnswSq {
+        /// Max connections per node (higher = better recall, more memory).
+        m: u32,
+        /// Build-time search width (higher = better index quality, slower build).
+        ef_construction: u32,
+    },
+    /// HNSW without quantization (maximum recall, ~4x more memory).
+    HnswFlat {
+        /// Max connections per node.
+        m: u32,
+        /// Build-time search width.
+        ef_construction: u32,
+    },
+    /// HNSW with product quantization (large-scale, ~2-5% recall loss).
+    HnswPq {
+        /// Max connections per node.
+        m: u32,
+        /// Build-time search width.
+        ef_construction: u32,
+        /// Number of sub-vector segments for PQ (e.g., 48 for 768d → 16d each).
+        sub_vectors: u32,
+    },
+    /// IVF with scalar quantization.
+    IvfSq {
+        /// Number of Voronoi partitions.
+        partitions: u32,
+    },
+    /// IVF with product quantization.
+    IvfPq {
+        /// Number of Voronoi partitions.
+        partitions: u32,
+        /// Number of sub-vector segments.
+        sub_vectors: u32,
+    },
+    /// IVF with residual quantization (best compression ratio).
+    IvfRq {
+        /// Number of Voronoi partitions.
+        partitions: u32,
+        /// Bits per dimension (default 8 if None).
+        num_bits: Option<u8>,
+    },
+}
+
+impl VectorAlgorithm {
+    /// Convert to the uni-db `VectorAlgo` enum.
+    pub(crate) fn to_uni_algo(&self) -> uni_db::VectorAlgo {
+        match self {
+            Self::HnswSq { m, ef_construction } => uni_db::VectorAlgo::HnswSq {
+                m: *m,
+                ef_construction: *ef_construction,
+                partitions: None,
+            },
+            Self::HnswFlat { m, ef_construction } => uni_db::VectorAlgo::HnswFlat {
+                m: *m,
+                ef_construction: *ef_construction,
+                partitions: None,
+            },
+            Self::HnswPq {
+                m,
+                ef_construction,
+                sub_vectors,
+            } => uni_db::VectorAlgo::HnswPq {
+                m: *m,
+                ef_construction: *ef_construction,
+                sub_vectors: *sub_vectors,
+                partitions: None,
+            },
+            Self::IvfSq { partitions } => uni_db::VectorAlgo::IvfSq {
+                partitions: *partitions,
+            },
+            Self::IvfPq {
+                partitions,
+                sub_vectors,
+            } => uni_db::VectorAlgo::IvfPq {
+                partitions: *partitions,
+                sub_vectors: *sub_vectors,
+            },
+            Self::IvfRq {
+                partitions,
+                num_bits,
+            } => uni_db::VectorAlgo::IvfRq {
+                partitions: *partitions,
+                num_bits: *num_bits,
+            },
+        }
+    }
+}
+
+/// Distance metric for vector similarity search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VectorMetricChoice {
+    /// Cosine similarity (default, best for normalized embeddings).
+    Cosine,
+    /// Euclidean (L2) distance.
+    L2,
+    /// Dot product (for unnormalized embeddings).
+    Dot,
+}
+
+impl VectorMetricChoice {
+    /// Convert to the uni-db `VectorMetric` enum.
+    pub(crate) fn to_uni_metric(self) -> uni_db::VectorMetric {
+        match self {
+            Self::Cosine => uni_db::VectorMetric::Cosine,
+            Self::L2 => uni_db::VectorMetric::L2,
+            Self::Dot => uni_db::VectorMetric::Dot,
+        }
+    }
+}
+
+// ── Main config ───────────────────────────────────────────────────
+
 /// Configuration for all uniko runtime parameters.
 ///
 /// Default values match the uniko specification v6.0 exactly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnikoConfig {
+    // Embedding + vector index
+    /// Embedding model selection (controls dimensions and model ID).
+    pub embedding: EmbeddingConfig,
+    /// Vector index algorithm and quantization strategy.
+    pub vector_algorithm: VectorAlgorithm,
+    /// Distance metric for similarity search.
+    pub vector_metric: VectorMetricChoice,
+
     // Pipeline capacities
     /// Bounded channel capacity for the ingest worker.
     pub ingest_queue_capacity: usize,
@@ -65,6 +240,12 @@ pub struct UnikoConfig {
 impl Default for UnikoConfig {
     fn default() -> Self {
         Self {
+            embedding: EmbeddingConfig::nomic_v15(),
+            vector_algorithm: VectorAlgorithm::HnswSq {
+                m: 16,
+                ef_construction: 100,
+            },
+            vector_metric: VectorMetricChoice::Cosine,
             ingest_queue_capacity: 200,
             consolidation_queue_capacity: 32,
             consolidation_threshold: 20,
@@ -91,6 +272,18 @@ impl UnikoConfig {
     ///
     /// Returns `Err(UnikoError::Config)` if any constraint is violated.
     pub fn validate(&self) -> Result<()> {
+        if self.embedding.dimensions == 0 {
+            return Err(UnikoError::Config(
+                "embedding.dimensions must be positive".into(),
+            ));
+        }
+
+        if self.embedding.batch_size == 0 {
+            return Err(UnikoError::Config(
+                "embedding.batch_size must be positive".into(),
+            ));
+        }
+
         if self.min_chunk_tokens >= self.max_chunk_tokens {
             return Err(UnikoError::Config(format!(
                 "min_chunk_tokens ({}) must be less than max_chunk_tokens ({})",
@@ -144,6 +337,20 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let c = UnikoConfig::default();
+        // Embedding defaults to Nomic v1.5 / 768d
+        assert_eq!(c.embedding.model_id, "NomicEmbedTextV15");
+        assert_eq!(c.embedding.dimensions, 768);
+        assert_eq!(c.embedding.batch_size, 32);
+        // Vector defaults to HnswSq / Cosine
+        assert_eq!(
+            c.vector_algorithm,
+            VectorAlgorithm::HnswSq {
+                m: 16,
+                ef_construction: 100
+            }
+        );
+        assert_eq!(c.vector_metric, VectorMetricChoice::Cosine);
+        // Pipeline defaults
         assert_eq!(c.ingest_queue_capacity, 200);
         assert_eq!(c.consolidation_queue_capacity, 32);
         assert_eq!(c.consolidation_threshold, 20);
@@ -164,6 +371,19 @@ mod tests {
     }
 
     #[test]
+    fn test_embedding_presets() {
+        let nomic = EmbeddingConfig::nomic_v15();
+        assert_eq!(nomic.dimensions, 768);
+
+        let minilm = EmbeddingConfig::minilm_l6_v2();
+        assert_eq!(minilm.dimensions, 384);
+
+        let nomic_q = EmbeddingConfig::nomic_v15_quantized();
+        assert_eq!(nomic_q.dimensions, 768);
+        assert_eq!(nomic_q.model_id, "NomicEmbedTextV15Q");
+    }
+
+    #[test]
     fn test_config_validation_ok() {
         UnikoConfig::default()
             .validate()
@@ -173,33 +393,45 @@ mod tests {
     #[test]
     fn test_config_validation_fails() {
         // min >= max chunk tokens
-        let mut c = UnikoConfig::default();
-        c.min_chunk_tokens = 600;
+        let c = UnikoConfig {
+            min_chunk_tokens: 600,
+            ..UnikoConfig::default()
+        };
         assert!(c.validate().is_err());
 
         // half_life_days <= 0
-        let mut c = UnikoConfig::default();
-        c.half_life_days = 0.0;
+        let c = UnikoConfig {
+            half_life_days: 0.0,
+            ..UnikoConfig::default()
+        };
         assert!(c.validate().is_err());
 
         // prune_below out of range
-        let mut c = UnikoConfig::default();
-        c.prune_below = 1.0;
+        let c = UnikoConfig {
+            prune_below: 1.0,
+            ..UnikoConfig::default()
+        };
         assert!(c.validate().is_err());
 
         // phase1 threshold out of range
-        let mut c = UnikoConfig::default();
-        c.phase1_coverage_threshold = 0.0;
+        let c = UnikoConfig {
+            phase1_coverage_threshold: 0.0,
+            ..UnikoConfig::default()
+        };
         assert!(c.validate().is_err());
 
         // phase2 threshold out of range
-        let mut c = UnikoConfig::default();
-        c.phase2_coverage_threshold = 1.5;
+        let c = UnikoConfig {
+            phase2_coverage_threshold: 1.5,
+            ..UnikoConfig::default()
+        };
         assert!(c.validate().is_err());
 
         // retry initial > max
-        let mut c = UnikoConfig::default();
-        c.retry_initial_delay_ms = 50_000;
+        let c = UnikoConfig {
+            retry_initial_delay_ms: 50_000,
+            ..UnikoConfig::default()
+        };
         assert!(c.validate().is_err());
     }
 
@@ -225,9 +457,16 @@ mod proptests {
             max_chunk in 100usize..2000,
             // Use integer-derived f64 to avoid JSON float precision drift
             half_life_tenths in 1u32..3650,
+            dims in proptest::prop_oneof![Just(384usize), Just(768usize)],
         ) {
             let half_life = f64::from(half_life_tenths) / 10.0;
+            let embedding = if dims == 384 {
+                EmbeddingConfig::minilm_l6_v2()
+            } else {
+                EmbeddingConfig::nomic_v15()
+            };
             let config = UnikoConfig {
+                embedding,
                 ingest_queue_capacity: ingest_cap,
                 consolidation_queue_capacity: consol_cap,
                 max_chunk_tokens: max_chunk,

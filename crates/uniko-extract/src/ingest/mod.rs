@@ -14,7 +14,7 @@ pub mod overflow;
 pub mod session;
 
 pub use artifact::ArtifactIngestResult;
-pub use chunking::{count_tokens, select_chunker, ChunkConfig, ChunkData, Chunker};
+pub use chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, select_chunker};
 pub use message::MessageIngestResult;
 
 use async_trait::async_trait;

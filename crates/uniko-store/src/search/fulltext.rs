@@ -4,7 +4,7 @@
 
 use crate::error::{Result, UnikoError};
 use crate::search::SearchResult;
-use crate::storage::{validate_label, KnowledgeBase};
+use crate::storage::{KnowledgeBase, validate_label};
 
 impl KnowledgeBase {
     /// Search by fulltext (BM25) on a single field.
@@ -86,7 +86,8 @@ impl KnowledgeBase {
         }
 
         // Deduplicate by node_id, keeping the highest score.
-        let mut best: std::collections::HashMap<i64, SearchResult> = std::collections::HashMap::new();
+        let mut best: std::collections::HashMap<i64, SearchResult> =
+            std::collections::HashMap::new();
         for hit in all_hits {
             best.entry(hit.node_id)
                 .and_modify(|existing| {

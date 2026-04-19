@@ -73,10 +73,7 @@ pub async fn upsert_entities(
         let (node_id, was_existing) = match existing {
             Some((nid, props)) => {
                 // Update existing entity.
-                let old_freq = props
-                    .get("frequency")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
+                let old_freq = props.get("frequency").and_then(|v| v.as_i64()).unwrap_or(0);
                 let mut update = HashMap::new();
                 update.insert(
                     "frequency".into(),
@@ -130,10 +127,7 @@ pub async fn upsert_entities(
                     // Step 3: create new entity with embedding.
                     let mut props = HashMap::new();
                     props.insert("entity_id".into(), Value::String(entity_id));
-                    props.insert(
-                        "name".into(),
-                        Value::String(entity.canonical_name.clone()),
-                    );
+                    props.insert("name".into(), Value::String(entity.canonical_name.clone()));
                     props.insert(
                         "entity_type".into(),
                         Value::String(entity_type_str.to_string()),
@@ -144,10 +138,10 @@ pub async fn upsert_entities(
                     props.insert("confidence".into(), Value::Float(entity.confidence));
 
                     // Compute and store embedding for future similarity searches.
-                    if let Ok(vec) = crate::embedding::embed_text(kb, &format_embed_text(
-                        &entity.canonical_name,
-                        entity_type_str,
-                    ))
+                    if let Ok(vec) = crate::embedding::embed_text(
+                        kb,
+                        &format_embed_text(&entity.canonical_name, entity_type_str),
+                    )
                     .await
                     {
                         props.insert("embedding".into(), Value::Vector(vec));
@@ -259,8 +253,9 @@ fn types_compatible(a: &str, b: &str) -> bool {
     let pair = if a < b { (a, b) } else { (b, a) };
     !matches!(
         pair,
-        ("org", "person")
-            | ("person", "place")
+        ("organization", "person")
+            | ("location", "person")
+            | ("location", "organization")
             | ("code_import", "code_symbol")
     )
 }

@@ -10,8 +10,8 @@ use uniko_pipes::circuit_breaker::CircuitBreaker;
 use uniko_pipes::step::PipelineContext;
 use uniko_pipes::types::StepOutcome;
 use uniko_store::config::UnikoConfig;
-use uniko_store::storage::edges::Direction;
 use uniko_store::storage::KnowledgeBase;
+use uniko_store::storage::edges::Direction;
 
 async fn test_kb() -> Arc<KnowledgeBase> {
     Arc::new(
@@ -65,7 +65,10 @@ async fn test_entity_extraction_prose() {
 
     let outcome = uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
     assert!(matches!(outcome, StepOutcome::Completed));
-    assert!(!ctx.extracted_entities.is_empty(), "should extract entities");
+    assert!(
+        !ctx.extracted_entities.is_empty(),
+        "should extract entities"
+    );
 
     let edges = kb
         .get_edges(node_id, "MENTIONS", Direction::Outgoing)
@@ -82,8 +85,10 @@ async fn test_entity_extraction_code() {
 
     let step = EntityExtractionStep;
     let mut ctx = make_ctx(kb.clone(), node_id, code, "code");
-    ctx.metadata
-        .insert("language".into(), serde_json::Value::String("python".into()));
+    ctx.metadata.insert(
+        "language".into(),
+        serde_json::Value::String("python".into()),
+    );
 
     let outcome = uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
     assert!(matches!(outcome, StepOutcome::Completed));
@@ -117,7 +122,10 @@ async fn test_entity_dedup_existing() {
             let name = props.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if name == "caroline smith" {
                 let freq = props.get("frequency").and_then(|v| v.as_i64()).unwrap_or(0);
-                assert!(freq >= 2, "caroline smith frequency should be >= 2, got {freq}");
+                assert!(
+                    freq >= 2,
+                    "caroline smith frequency should be >= 2, got {freq}"
+                );
                 return; // Test passed.
             }
         }

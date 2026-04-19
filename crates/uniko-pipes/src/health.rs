@@ -134,10 +134,11 @@ fn classify(
     if circuit_open {
         return WorkerStatus::Degraded;
     }
-    if let Some(last) = last_processed_at {
-        if last.elapsed().as_secs() > STALL_THRESHOLD_SECS && queue_depth > 0 {
-            return WorkerStatus::Stalled;
-        }
+    if let Some(last) = last_processed_at
+        && last.elapsed().as_secs() > STALL_THRESHOLD_SECS
+        && queue_depth > 0
+    {
+        return WorkerStatus::Stalled;
     }
     let ratio = if queue_capacity > 0 {
         queue_depth as f64 / queue_capacity as f64

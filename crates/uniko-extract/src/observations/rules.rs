@@ -163,12 +163,69 @@ fn has_svo_structure(sentence: &str) -> bool {
 /// starts with one.
 fn make_self_contained(sentence: &str, subject: &str) -> String {
     static PRONOUN_START: OnceLock<Regex> = OnceLock::new();
-    let re = PRONOUN_START.get_or_init(|| {
-        Regex::new(r"(?i)^(She|He|They|It|I)\b").unwrap()
-    });
+    let re = PRONOUN_START.get_or_init(|| Regex::new(r"(?i)^(She|He|They|It|I)\b").unwrap());
 
     let result = re.replace(sentence, subject);
     result.trim().to_string()
+}
+
+/// Extract observations using NLP dependency tree.
+///
+/// Finds SVO triples in the dependency parse and creates observations
+/// with higher confidence (0.85) than regex-based extraction (0.6).
+/// Only triples whose subject matches a known entity are included.
+#[cfg(feature = "onnx")]
+pub fn extract_observations_from_dep_tree(
+    nlp_result: &crate::nlp::types::NlpResult,
+    entities: &[EntityRef],
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> Vec<RawObservation> {
+    use crate::nlp::assets;
+    use crate::nlp::decode;
+
+    let labels = assets::label_maps();
+    let triples = decode::extract_svo_triples(
+        &nlp_result.words,
+        &nlp_result.pos_indices,
+        &nlp_result.dep_arcs,
+        &labels.pos_labels,
+    );
+
+    let mut observations = Vec::new();
+    for triple in &triples {
+        // Check if the subject matches a known entity.
+        let entity_name = match find_entity_match(&triple.subject, entities) {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let content = if triple.object.is_empty() {
+            format!("{} {}", entity_name, triple.verb)
+        } else {
+            format!("{} {} {}", entity_name, triple.verb, triple.object)
+        };
+
+        observations.push(RawObservation {
+            content,
+            subject: entity_name,
+            observed_at: timestamp,
+            confidence: 0.85, // dep-tree extraction is more reliable than regex
+        });
+    }
+
+    observations
+}
+
+/// Find an entity whose name matches (case-insensitive) part of a text.
+#[cfg(feature = "onnx")]
+fn find_entity_match(text: &str, entities: &[EntityRef]) -> Option<String> {
+    let lower = text.to_lowercase();
+    for (_, name) in entities {
+        if lower.contains(&name.to_lowercase()) || name.to_lowercase().contains(&lower) {
+            return Some(name.clone());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -210,11 +267,7 @@ mod tests {
     #[test]
     fn test_no_entity_no_observation() {
         let entities = vec![entity("Caroline")];
-        let obs = extract_observations_rule_based(
-            "The weather is nice today.",
-            &entities,
-            ts(),
-        );
+        let obs = extract_observations_rule_based("The weather is nice today.", &entities, ts());
         assert!(obs.is_empty());
     }
 
@@ -223,7 +276,7 @@ mod tests {
         let entities = vec![entity("Caroline"), entity("Paris")];
         let text = "Caroline went to Paris last year. She loved the Eiffel Tower.";
         let obs = extract_observations_rule_based(text, &entities, ts());
-        assert!(obs.len() >= 1);
+        assert!(!obs.is_empty());
         assert!(obs[0].content.contains("Caroline"));
     }
 
@@ -235,7 +288,9 @@ mod tests {
 
     #[test]
     fn test_svo_detection() {
-        assert!(has_svo_structure("Caroline works at the hospital every day."));
+        assert!(has_svo_structure(
+            "Caroline works at the hospital every day."
+        ));
         assert!(!has_svo_structure("Hi."));
     }
 

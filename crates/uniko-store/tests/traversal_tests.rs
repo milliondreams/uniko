@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use uni_db::Value;
 use uniko_store::config::UnikoConfig;
-use uniko_store::storage::edges::Direction;
 use uniko_store::storage::KnowledgeBase;
+use uniko_store::storage::edges::Direction;
 
 async fn test_kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -17,14 +17,8 @@ async fn create_chain(kb: &KnowledgeBase) -> Vec<i64> {
     let mut ids = Vec::new();
     for i in 0..4u8 {
         let mut props = HashMap::new();
-        props.insert(
-            "message_id".into(),
-            Value::String(format!("trav-{i}")),
-        );
-        props.insert(
-            "content".into(),
-            Value::String(format!("msg {i}")),
-        );
+        props.insert("message_id".into(), Value::String(format!("trav-{i}")));
+        props.insert("content".into(), Value::String(format!("msg {i}")));
         props.insert(
             "timestamp".into(),
             Value::String("2024-01-01T00:00:00Z".into()),
@@ -170,10 +164,7 @@ async fn test_ppr_basic() {
 async fn test_ppr_empty_seeds() {
     let kb = test_kb().await;
 
-    let result = kb
-        .personalized_pagerank(&[], 0.85, 20, 10)
-        .await
-        .unwrap();
+    let result = kb.personalized_pagerank(&[], 0.85, 20, 10).await.unwrap();
 
     assert!(result.scores.is_empty());
     assert!(result.converged);

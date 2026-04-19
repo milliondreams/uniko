@@ -10,12 +10,12 @@
 
 // Rust guideline compliant
 
-pub mod types;
+pub mod contradiction;
 pub mod filter;
+pub mod llm;
 pub mod rules;
 pub mod temporal;
-pub mod llm;
-pub mod contradiction;
+pub mod types;
 
 pub use types::{ContradictionFlag, RawObservation};
 
@@ -53,11 +53,28 @@ impl uniko_pipes::Step for ObservationExtractionStep {
 
     async fn execute(&self, ctx: &mut PipelineContext) -> Result<StepOutcome, UnikoError> {
         // 1. Filter non-informative content.
-        let content_type = ctx.metadata
+        //    Prefer NLP model's CLS classification when available;
+        //    fall back to rule-based heuristics otherwise.
+        let content_type = ctx
+            .metadata
             .get("content_type")
             .and_then(|v| v.as_str())
             .or(Some(ctx.content_type.as_str()));
-        if !filter::is_informative(&ctx.content, content_type) {
+
+        let informative = if let Some(cls_label) = ctx
+            .metadata
+            .get("nlp_result")
+            .and_then(|v| v.get("sentence_class"))
+            .and_then(|v| v.as_str())
+        {
+            // CLS model available — use it.
+            filter::is_informative_by_cls(cls_label)
+        } else {
+            // No NLP result — use rule-based filter.
+            filter::is_informative(&ctx.content, content_type)
+        };
+
+        if !informative {
             return Ok(StepOutcome::Skipped {
                 reason: "content not informative".into(),
             });
@@ -74,10 +91,28 @@ impl uniko_pipes::Step for ObservationExtractionStep {
         // 3. Resolve the message timestamp.
         let timestamp = resolve_timestamp(ctx);
 
-        // 4. Rule-based extraction.
-        let mut all_obs =
+        // 4. Dep-tree SVO extraction (when NLP result is available).
+        //    Falls back to rule-based extraction otherwise.
+        let mut all_obs = Vec::new();
+
+        #[cfg(feature = "onnx")]
+        if let Some(nlp_val) = ctx.metadata.get("nlp_result") {
+            if let Ok(nlp_result) =
+                serde_json::from_value::<crate::nlp::types::NlpResult>(nlp_val.clone())
+            {
+                let dep_obs =
+                    rules::extract_observations_from_dep_tree(&nlp_result, &entity_refs, timestamp);
+                tracing::debug!(count = dep_obs.len(), "dep-tree observations");
+                all_obs.extend(dep_obs);
+            }
+        }
+
+        // Rule-based extraction always runs to catch patterns the
+        // model might miss (preferences, temporal expressions).
+        let rule_obs =
             rules::extract_observations_rule_based(&ctx.content, &entity_refs, timestamp);
-        tracing::debug!(count = all_obs.len(), "rule-based observations");
+        tracing::debug!(count = rule_obs.len(), "rule-based observations");
+        all_obs.extend(rule_obs);
 
         // 5. LLM enhancement (stub — returns empty).
         let llm_obs = llm::enhance_observations_llm(&ctx.content, &entity_refs).await;
@@ -101,7 +136,10 @@ impl uniko_pipes::Step for ObservationExtractionStep {
 
             // ABOUT: Observation → each entity whose name appears in content.
             for &(entity_nid, ref entity_name) in &entity_refs {
-                if raw.content.to_lowercase().contains(&entity_name.to_lowercase())
+                if raw
+                    .content
+                    .to_lowercase()
+                    .contains(&entity_name.to_lowercase())
                     || raw.subject.to_lowercase() == entity_name.to_lowercase()
                 {
                     ctx.kb

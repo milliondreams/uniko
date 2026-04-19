@@ -6,8 +6,8 @@ use chrono::Utc;
 
 use uniko_pipes::types::{IngestArtifact, IngestMessage};
 use uniko_store::config::UnikoConfig;
-use uniko_store::storage::edges::Direction;
 use uniko_store::storage::KnowledgeBase;
+use uniko_store::storage::edges::Direction;
 
 async fn test_kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -197,7 +197,7 @@ async fn test_ingest_artifact_creates_node_and_chunks() {
         .unwrap()
         .expect("artifact node must exist");
     assert_eq!(label, "Artifact");
-    assert!(props.get("hash").is_some());
+    assert!(props.contains_key("hash"));
 
     // Should have at least one chunk.
     assert!(

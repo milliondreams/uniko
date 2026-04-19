@@ -27,13 +27,15 @@ tree-sitter-rust = { workspace = true, optional = true }
 tree-sitter-javascript = { workspace = true, optional = true }
 tree-sitter-typescript = { workspace = true, optional = true }
 ort = { workspace = true, optional = true }
+ndarray = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-util = { workspace = true }
 
 [features]
 default = ["code-parse"]
-onnx = ["dep:ort"]
+onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
 code-parse = [
     "dep:tree-sitter",
     "dep:tree-sitter-python",

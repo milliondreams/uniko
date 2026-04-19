@@ -25,10 +25,7 @@ pub struct IntentProfile {
 ///
 /// Returns [`UnikoError::Embedding`] if the embedding runtime is
 /// unavailable.
-pub async fn build_intent(
-    kb: &KnowledgeBase,
-    query: &str,
-) -> Result<IntentProfile, UnikoError> {
+pub async fn build_intent(kb: &KnowledgeBase, query: &str) -> Result<IntentProfile, UnikoError> {
     // Embed the full query.
     let intent_vec = uniko_extract::embedding::embed_text(kb, query)
         .await
@@ -36,10 +33,7 @@ pub async fn build_intent(
 
     // Extract entity references via rule-based NER.
     let raw_entities = extract_entities_rule_based(query);
-    let entity_refs: Vec<String> = raw_entities
-        .into_iter()
-        .map(|e| e.canonical_name)
-        .collect();
+    let entity_refs: Vec<String> = raw_entities.into_iter().map(|e| e.canonical_name).collect();
 
     let facet_count = entity_refs.len().max(1);
 

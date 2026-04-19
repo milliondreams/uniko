@@ -36,6 +36,10 @@ pub enum EntityType {
     Preference,
     /// Text in quotation marks.
     QuotedString,
+    /// Named organization (company, institution, team).
+    Organization,
+    /// Geographic location (city, country, region).
+    Location,
     /// Code symbol: function, class, struct, enum, trait.
     CodeSymbol,
     /// Import or dependency reference from code.
@@ -49,6 +53,8 @@ impl EntityType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Person => "person",
+            Self::Organization => "organization",
+            Self::Location => "location",
             Self::Url => "url",
             Self::Email => "email",
             Self::Date => "date",

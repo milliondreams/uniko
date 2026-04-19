@@ -8,7 +8,7 @@
 use crate::error::{Result, UnikoError};
 use crate::search::SearchResult;
 use crate::storage::filter::Filter;
-use crate::storage::{validate_label, KnowledgeBase};
+use crate::storage::{KnowledgeBase, validate_label};
 
 impl KnowledgeBase {
     /// Search for nodes by cosine similarity.

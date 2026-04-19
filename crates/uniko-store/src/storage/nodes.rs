@@ -12,8 +12,8 @@ use uni_db::Value;
 
 use super::{build_inline_props, build_set_clause, validate_label, validate_property_name};
 use crate::error::{Result, UnikoError};
-use crate::storage::filter::Filter;
 use crate::storage::KnowledgeBase;
+use crate::storage::filter::Filter;
 use crate::types::NodeId;
 
 impl KnowledgeBase {
@@ -222,8 +222,7 @@ impl KnowledgeBase {
         // Two-step upsert to avoid NOT NULL constraint violations during
         // MERGE's internal CREATE (uni-db evaluates constraints before
         // ON CREATE SET runs).
-        if let Some((existing_id, _)) =
-            self.get_node_by_ext_id(label, ext_id_field, ext_id).await?
+        if let Some((existing_id, _)) = self.get_node_by_ext_id(label, ext_id_field, ext_id).await?
         {
             if !properties.is_empty() {
                 self.update_node(existing_id, properties).await?;

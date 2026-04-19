@@ -167,10 +167,7 @@ async fn test_pipeline_health_reports() {
     let ps = PipelineSystem::new(PipelineConfig::default(), kb, vec![]);
 
     let health = ps.health();
-    assert_eq!(
-        health.llm_circuit,
-        uniko_pipes::CircuitState::Closed
-    );
+    assert_eq!(health.llm_circuit, uniko_pipes::CircuitState::Closed);
     assert_eq!(health.ingest.queue_depth, 0);
     assert_eq!(health.consolidation.queue_depth, 0);
 

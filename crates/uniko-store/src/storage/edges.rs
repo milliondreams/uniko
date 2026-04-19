@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use uni_db::Value;
 
-use super::{build_set_clause, validate_edge_type, KnowledgeBase};
+use super::{KnowledgeBase, build_set_clause, validate_edge_type};
 use crate::error::{Result, UnikoError};
 use crate::types::{EdgeId, NodeId};
 
@@ -210,9 +210,8 @@ impl KnowledgeBase {
         to: NodeId,
     ) -> Result<u64> {
         validate_edge_type(edge_type)?;
-        let cypher = format!(
-            "MATCH (a)-[r:{edge_type}]->(b) WHERE id(a) = $src AND id(b) = $dst DELETE r"
-        );
+        let cypher =
+            format!("MATCH (a)-[r:{edge_type}]->(b) WHERE id(a) = $src AND id(b) = $dst DELETE r");
         let session = self.db.session();
         let tx = session
             .tx()

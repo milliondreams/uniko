@@ -10,8 +10,8 @@ use uniko_pipes::circuit_breaker::CircuitBreaker;
 use uniko_pipes::step::PipelineContext;
 use uniko_pipes::types::StepOutcome;
 use uniko_store::config::UnikoConfig;
-use uniko_store::storage::edges::Direction;
 use uniko_store::storage::KnowledgeBase;
+use uniko_store::storage::edges::Direction;
 
 async fn test_kb() -> Arc<KnowledgeBase> {
     Arc::new(
@@ -21,11 +21,7 @@ async fn test_kb() -> Arc<KnowledgeBase> {
     )
 }
 
-fn make_ctx(
-    kb: Arc<KnowledgeBase>,
-    node_id: i64,
-    content: &str,
-) -> PipelineContext {
+fn make_ctx(kb: Arc<KnowledgeBase>, node_id: i64, content: &str) -> PipelineContext {
     PipelineContext::new(
         node_id,
         content.to_string(),

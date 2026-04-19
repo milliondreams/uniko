@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use uni_db::Value;
 use uniko_store::config::UnikoConfig;
+use uniko_store::storage::KnowledgeBase;
 use uniko_store::storage::edges::Direction;
 use uniko_store::storage::filter::Filter;
-use uniko_store::storage::KnowledgeBase;
 
 async fn test_kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -55,11 +55,12 @@ async fn test_get_node_by_ext_id() {
     );
 
     // Non-existent ext_id returns None.
-    assert!(kb
-        .get_node_by_ext_id("Message", "message_id", "m-999")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        kb.get_node_by_ext_id("Message", "message_id", "m-999")
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     kb.shutdown().await.unwrap();
 }
@@ -79,10 +80,7 @@ async fn test_update_node() {
     kb.update_node(nid, &updates).await.unwrap();
 
     let (_, got) = kb.get_node(nid).await.unwrap().unwrap();
-    assert_eq!(
-        got.get("name").and_then(|v| v.as_str()),
-        Some("UpdatedBot")
-    );
+    assert_eq!(got.get("name").and_then(|v| v.as_str()), Some("UpdatedBot"));
     // kind is preserved.
     assert_eq!(got.get("kind").and_then(|v| v.as_str()), Some("agent"));
 
@@ -115,10 +113,7 @@ async fn test_merge_node_creates() {
         .await
         .unwrap();
     let (_, got) = kb.get_node(nid).await.unwrap().unwrap();
-    assert_eq!(
-        got.get("name").and_then(|v| v.as_str()),
-        Some("MergeBot")
-    );
+    assert_eq!(got.get("name").and_then(|v| v.as_str()), Some("MergeBot"));
 
     kb.shutdown().await.unwrap();
 }
@@ -183,10 +178,7 @@ async fn test_query_nodes_no_filter() {
     let kb = test_kb().await;
     for i in 0..5 {
         let mut props = HashMap::new();
-        props.insert(
-            "entity_id".into(),
-            Value::String(format!("ent-q-{i}")),
-        );
+        props.insert("entity_id".into(), Value::String(format!("ent-q-{i}")));
         props.insert("name".into(), Value::String(format!("Entity{i}")));
         props.insert("entity_type".into(), Value::String("concept".into()));
         kb.create_node("Entity", &props).await.unwrap();
@@ -206,10 +198,7 @@ async fn test_query_nodes_with_eq_filter() {
         .enumerate()
     {
         let mut props = HashMap::new();
-        props.insert(
-            "participant_id".into(),
-            Value::String(format!("pf-{i}")),
-        );
+        props.insert("participant_id".into(), Value::String(format!("pf-{i}")));
         props.insert("kind".into(), Value::String(kind.to_string()));
         kb.create_node("Participant", &props).await.unwrap();
     }
@@ -254,10 +243,7 @@ async fn test_create_and_get_edge() {
 
     let mut ep = HashMap::new();
     ep.insert("role".into(), Value::String("user".into()));
-    let eid = kb
-        .create_edge("SENT_BY", m_id, p_id, &ep)
-        .await
-        .unwrap();
+    let eid = kb.create_edge("SENT_BY", m_id, p_id, &ep).await.unwrap();
 
     let edges = kb
         .get_edges(m_id, "SENT_BY", Direction::Outgoing)
@@ -377,7 +363,10 @@ async fn test_update_edge() {
         .get_edges(id1, "NEXT", Direction::Outgoing)
         .await
         .unwrap();
-    assert_eq!(edges[0].properties.get("gap_ms").and_then(|v| v.as_i64()), Some(500));
+    assert_eq!(
+        edges[0].properties.get("gap_ms").and_then(|v| v.as_i64()),
+        Some(500)
+    );
 
     kb.shutdown().await.unwrap();
 }

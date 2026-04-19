@@ -78,8 +78,7 @@ pub fn btic_upgrade_certainty(interval: &Btic) -> Btic {
         Certainty::Definite,
         interval.hi_certainty(),
     );
-    Btic::new(interval.lo(), interval.hi(), meta)
-        .expect("certainty upgrade must preserve validity")
+    Btic::new(interval.lo(), interval.hi(), meta).expect("certainty upgrade must preserve validity")
 }
 
 /// Get the granularity of both bounds `(lo, hi)`.
@@ -187,9 +186,8 @@ mod proptests {
 
     fn arb_datetime() -> impl Strategy<Value = DateTime<Utc>> {
         // 2000-01-01 to 2030-12-31 in epoch millis
-        (946_684_800_000i64..1_924_991_999_000i64).prop_map(|ms| {
-            DateTime::from_timestamp_millis(ms).unwrap()
-        })
+        (946_684_800_000i64..1_924_991_999_000i64)
+            .prop_map(|ms| DateTime::from_timestamp_millis(ms).unwrap())
     }
 
     proptest! {

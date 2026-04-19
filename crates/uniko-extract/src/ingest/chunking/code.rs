@@ -11,7 +11,7 @@
 use tree_sitter::Parser;
 
 use super::text::TextChunker;
-use super::{count_tokens, ChunkConfig, ChunkData, Chunker};
+use super::{ChunkConfig, ChunkData, Chunker, count_tokens};
 
 /// AST-aware chunker for source code.
 pub struct CodeChunker {
@@ -253,8 +253,16 @@ def world():
         };
         let chunks = chunk_code(code, "python", &config).unwrap();
         assert!(chunks.len() >= 2, "should have at least 2 function chunks");
-        assert!(chunks.iter().any(|c| c.symbol_name.as_deref() == Some("hello")));
-        assert!(chunks.iter().any(|c| c.symbol_name.as_deref() == Some("world")));
+        assert!(
+            chunks
+                .iter()
+                .any(|c| c.symbol_name.as_deref() == Some("hello"))
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|c| c.symbol_name.as_deref() == Some("world"))
+        );
     }
 
     #[test]

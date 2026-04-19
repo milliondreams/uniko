@@ -5,7 +5,7 @@
 
 // Rust guideline compliant
 
-use super::{count_tokens, ChunkConfig, ChunkData, Chunker};
+use super::{ChunkConfig, ChunkData, Chunker, count_tokens};
 
 /// Recursive paragraph/sentence splitter for plain text and markdown.
 pub struct TextChunker;

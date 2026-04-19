@@ -227,7 +227,10 @@ mod tests {
     #[test]
     fn test_measurement() {
         let ents = extract_entities_rule_based("The file is 5 GB in size.");
-        assert!(ents.iter().any(|e| e.entity_type == EntityType::Measurement));
+        assert!(
+            ents.iter()
+                .any(|e| e.entity_type == EntityType::Measurement)
+        );
     }
 
     #[test]
@@ -244,18 +247,20 @@ mod tests {
     #[test]
     fn test_proper_noun() {
         let ents = extract_entities_rule_based("I met Caroline Smith yesterday.");
-        assert!(ents
-            .iter()
-            .any(|e| e.entity_type == EntityType::Person
-                && e.canonical_name == "caroline smith"));
+        assert!(
+            ents.iter().any(
+                |e| e.entity_type == EntityType::Person && e.canonical_name == "caroline smith"
+            )
+        );
     }
 
     #[test]
     fn test_quoted_string() {
         let ents = extract_entities_rule_based("She researched \"adoption agencies\" online.");
-        assert!(ents
-            .iter()
-            .any(|e| e.entity_type == EntityType::QuotedString));
+        assert!(
+            ents.iter()
+                .any(|e| e.entity_type == EntityType::QuotedString)
+        );
     }
 
     #[test]

@@ -64,11 +64,7 @@ fn walk_node(
 
 /// Classify a single AST node, returning a [`RawEntity`] if it is a
 /// named declaration or import.
-fn classify_node(
-    node: tree_sitter::Node<'_>,
-    source: &str,
-    language: &str,
-) -> Option<RawEntity> {
+fn classify_node(node: tree_sitter::Node<'_>, source: &str, language: &str) -> Option<RawEntity> {
     let kind = node.kind();
     let (entity_type, name) = match (language, kind) {
         // Python
@@ -133,7 +129,13 @@ fn extract_import_name(node: tree_sitter::Node<'_>, source: &str) -> Option<Stri
             "dotted_name" | "aliased_import" | "module_name" => {
                 let text = source[child.start_byte()..child.end_byte()].to_string();
                 // For "from os.path import join", get "os.path".
-                return Some(text.split(" as ").next().unwrap_or(&text).trim().to_string());
+                return Some(
+                    text.split(" as ")
+                        .next()
+                        .unwrap_or(&text)
+                        .trim()
+                        .to_string(),
+                );
             }
             _ => {}
         }
@@ -149,10 +151,7 @@ fn extract_import_name(node: tree_sitter::Node<'_>, source: &str) -> Option<Stri
 fn extract_use_path(node: tree_sitter::Node<'_>, source: &str) -> Option<String> {
     let text = &source[node.start_byte()..node.end_byte()];
     // "use tokio::sync::mpsc;" → "tokio"
-    let path = text
-        .strip_prefix("use ")?
-        .trim_end_matches(';')
-        .trim();
+    let path = text.strip_prefix("use ")?.trim_end_matches(';').trim();
     let root = path.split("::").next()?;
     Some(root.to_string())
 }
@@ -190,10 +189,11 @@ mod tests {
     fn test_python_class() {
         let code = "class AuthService:\n    def login(self):\n        pass\n";
         let ents = extract_code_entities(code, "python");
-        assert!(ents
-            .iter()
-            .any(|e| e.canonical_name == "AuthService"
-                && e.entity_type == EntityType::CodeSymbol));
+        assert!(
+            ents.iter()
+                .any(|e| e.canonical_name == "AuthService"
+                    && e.entity_type == EntityType::CodeSymbol)
+        );
     }
 
     #[test]
@@ -220,10 +220,10 @@ mod tests {
     fn test_rust_use() {
         let code = "use tokio::sync::mpsc;\n";
         let ents = extract_code_entities(code, "rust");
-        assert!(ents
-            .iter()
-            .any(|e| e.canonical_name == "tokio"
-                && e.entity_type == EntityType::CodeImport));
+        assert!(
+            ents.iter()
+                .any(|e| e.canonical_name == "tokio" && e.entity_type == EntityType::CodeImport)
+        );
     }
 
     #[test]

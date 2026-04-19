@@ -109,13 +109,7 @@ impl Filter {
     }
 }
 
-fn scalar_op(
-    var: &str,
-    prop: &str,
-    op: &str,
-    val: &Value,
-    offset: usize,
-) -> Result<CypherFilter> {
+fn scalar_op(var: &str, prop: &str, op: &str, val: &Value, offset: usize) -> Result<CypherFilter> {
     validate_property_name(prop)?;
     let param = format!("p{offset}");
     let fragment = format!("{var}.{prop} {op} ${param}");

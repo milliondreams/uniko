@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use uniko_pipes::config::PipelineConfig;
@@ -19,7 +19,10 @@ use uniko_store::KnowledgeBase;
 /// counters and multi-trigger consolidation logic.
 pub(crate) struct ConsolidationWorker {
     rx: mpsc::Receiver<ConsolidationTask>,
-    #[expect(dead_code, reason = "concurrency limiting not yet wired to cycle execution")]
+    #[expect(
+        dead_code,
+        reason = "concurrency limiting not yet wired to cycle execution"
+    )]
     semaphore: Arc<Semaphore>,
     cancel: CancellationToken,
     #[expect(dead_code, reason = "used by consolidation cycle steps in Phase 2")]

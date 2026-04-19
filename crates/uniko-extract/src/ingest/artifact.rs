@@ -10,7 +10,7 @@ use uni_db::Value;
 use uniko_pipes::types::IngestArtifact;
 use uniko_store::{KnowledgeBase, NodeId};
 
-use super::chunking::{select_chunker, ChunkConfig};
+use super::chunking::{ChunkConfig, select_chunker};
 use super::message::create_chunks;
 
 /// Result of ingesting a single artifact.
@@ -42,10 +42,7 @@ pub async fn ingest_artifact(
     let hash = hex::encode(Sha256::digest(artifact.content.as_bytes()));
 
     // 2. Dedup: check if an artifact with this hash already exists.
-    if let Some((existing_id, _)) = kb
-        .get_node_by_ext_id("Artifact", "hash", &hash)
-        .await?
-    {
+    if let Some((existing_id, _)) = kb.get_node_by_ext_id("Artifact", "hash", &hash).await? {
         return Ok(ArtifactIngestResult {
             artifact_node_id: existing_id,
             chunk_node_ids: Vec::new(),
@@ -80,10 +77,7 @@ pub async fn ingest_artifact(
     }
     props.insert("content".into(), Value::String(artifact.content.clone()));
     props.insert("hash".into(), Value::String(hash));
-    props.insert(
-        "size".into(),
-        Value::Int(artifact.content.len() as i64),
-    );
+    props.insert("size".into(), Value::Int(artifact.content.len() as i64));
     if let Some(ref lang) = language {
         props.insert("language".into(), Value::String(lang.clone()));
     }

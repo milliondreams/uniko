@@ -2,18 +2,29 @@
 
 use uni_db::{DataType, IndexType, SchemaBuilder};
 
-use super::constants::{edges, labels, DEFAULT_VECTOR_DIM};
-use super::hnsw_auto_embed_index;
+use super::constants::{edges, labels};
+use crate::config::UnikoConfig;
 
-pub(crate) fn register_labels(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
+pub(crate) fn register_labels<'a>(
+    builder: SchemaBuilder<'a>,
+    config: &UnikoConfig,
+) -> SchemaBuilder<'a> {
     builder
         .label(labels::SUMMARY)
-            .property("summary_id", DataType::String)
-            .property("text", DataType::String)
-            .property_nullable("level", DataType::String)
-            .property_nullable("generated_at", DataType::DateTime)
-            .property_nullable("embedding", DataType::Vector { dimensions: DEFAULT_VECTOR_DIM })
-            .index("embedding", IndexType::Vector(hnsw_auto_embed_index("text")))
+        .property("summary_id", DataType::String)
+        .property("text", DataType::String)
+        .property_nullable("level", DataType::String)
+        .property_nullable("generated_at", DataType::DateTime)
+        .property_nullable(
+            "embedding",
+            DataType::Vector {
+                dimensions: config.embedding.dimensions,
+            },
+        )
+        .index(
+            "embedding",
+            IndexType::Vector(super::auto_embed_vector_index("text", config)),
+        )
         .done()
 }
 

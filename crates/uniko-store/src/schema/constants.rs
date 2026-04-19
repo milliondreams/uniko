@@ -2,15 +2,9 @@
 //!
 //! Centralising names here prevents typos and enables programmatic
 //! completeness checks in tests.
-
-/// Default embedding vector dimensions (fastembed all-MiniLM-L6-v2).
-pub const DEFAULT_VECTOR_DIM: usize = 384;
-
-/// HNSW `m` parameter — max bi-directional links per node.
-pub const HNSW_M: u32 = 16;
-
-/// HNSW `ef_construction` parameter — search width during build.
-pub const HNSW_EF_CONSTRUCTION: u32 = 100;
+//!
+//! Embedding dimensions and vector index parameters are now configurable
+//! via [`UnikoConfig`](crate::config::UnikoConfig) rather than hardcoded here.
 
 /// All 20 node labels, ordered by schema layer.
 pub mod labels {

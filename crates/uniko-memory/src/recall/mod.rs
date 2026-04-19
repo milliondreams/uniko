@@ -10,7 +10,7 @@
 
 pub mod intent;
 
-pub use intent::{build_intent, IntentProfile};
+pub use intent::{IntentProfile, build_intent};
 
 use std::collections::HashMap;
 
@@ -189,11 +189,7 @@ pub async fn recall(
     // ── Graph traversal (entity MENTIONS) ───────────────────────
     for entity_name in &intent.entity_refs {
         if let Ok(Some((entity_nid, _))) = kb
-            .get_node_by_ext_id(
-                labels::ENTITY,
-                "name",
-                entity_name,
-            )
+            .get_node_by_ext_id(labels::ENTITY, "name", entity_name)
             .await
         {
             // Follow MENTIONS edges to find connected Messages/Chunks.

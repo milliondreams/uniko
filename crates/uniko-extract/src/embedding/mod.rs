@@ -49,10 +49,7 @@ pub async fn embed_text(kb: &KnowledgeBase, text: &str) -> Result<Vec<f32>, Unik
 /// # Errors
 ///
 /// Returns [`UnikoError::Embedding`] if the runtime is unavailable.
-pub async fn embed_batch(
-    kb: &KnowledgeBase,
-    texts: &[&str],
-) -> Result<Vec<Vec<f32>>, UnikoError> {
+pub async fn embed_batch(kb: &KnowledgeBase, texts: &[&str]) -> Result<Vec<Vec<f32>>, UnikoError> {
     let xervo = kb.db().xervo();
     if !xervo.is_available() {
         return Err(UnikoError::Embedding(

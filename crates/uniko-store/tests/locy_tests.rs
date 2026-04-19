@@ -20,7 +20,7 @@ async fn test_create_and_list_rules() {
         "CREATE RULE test_rule AS \
          MATCH (p:Participant) \
          WHERE p.kind = 'agent' \
-         YIELD KEY p.participant_id AS pid"
+         YIELD KEY p.participant_id AS pid",
     )
     .expect("rule registration");
 
@@ -40,7 +40,7 @@ async fn test_delete_rule() {
     kb.create_rule(
         "CREATE RULE del_rule AS \
          MATCH (p:Participant) \
-         YIELD KEY p.participant_id AS pid"
+         YIELD KEY p.participant_id AS pid",
     )
     .unwrap();
 
@@ -75,10 +75,7 @@ async fn test_execute_cypher_query() {
         .unwrap();
 
     assert_eq!(result.len(), 1);
-    assert_eq!(
-        result.rows()[0].get::<String>("name").unwrap(),
-        "LocyBot"
-    );
+    assert_eq!(result.rows()[0].get::<String>("name").unwrap(), "LocyBot");
 
     kb.shutdown().await.unwrap();
 }

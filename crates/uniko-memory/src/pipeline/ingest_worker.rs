@@ -5,17 +5,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use uniko_pipes::circuit_breaker::CircuitBreaker;
 use uniko_pipes::dead_letter::DeadLetterQueue;
 use uniko_pipes::health::HealthTracker;
-use uniko_pipes::step::{PipelineContext, Step};
-use uniko_pipes::types::{
-    ConsolidationTask, IngestTask, ItemResult, StepErrorPolicy, StepOutcome,
-};
 use uniko_pipes::metrics;
+use uniko_pipes::step::{PipelineContext, Step};
+use uniko_pipes::types::{ConsolidationTask, IngestTask, ItemResult, StepErrorPolicy, StepOutcome};
 use uniko_store::KnowledgeBase;
 
 /// Long-running ingest worker receiving tasks via a bounded channel.
@@ -28,12 +26,19 @@ pub(crate) struct IngestWorker {
     llm_breaker: Arc<CircuitBreaker>,
     dlq: Arc<DeadLetterQueue>,
     health: Arc<Mutex<HealthTracker>>,
-    #[expect(dead_code, reason = "used when P3 notifies consolidation of new observations")]
+    #[expect(
+        dead_code,
+        reason = "used when P3 notifies consolidation of new observations"
+    )]
     consolidation_tx: mpsc::Sender<ConsolidationTask>,
     dlq_max_retries: u32,
 }
 
 impl IngestWorker {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "constructor assembles all worker dependencies"
+    )]
     pub(crate) fn new(
         rx: mpsc::Receiver<IngestTask>,
         steps: Vec<Box<dyn Step>>,
@@ -175,13 +180,33 @@ pub(crate) async fn run_step_chain(
                 result.steps_skipped.push(step.name().to_owned());
             }
             Ok(StepOutcome::Failed { error, policy }) => {
-                if handle_failure(step.name(), &error, policy, ctx, dlq, dlq_max_retries, &mut result).await {
+                if handle_failure(
+                    step.name(),
+                    &error,
+                    policy,
+                    ctx,
+                    dlq,
+                    dlq_max_retries,
+                    &mut result,
+                )
+                .await
+                {
                     break;
                 }
             }
             Err(e) => {
                 let policy = step.error_policy();
-                if handle_failure(step.name(), &e.to_string(), policy, ctx, dlq, dlq_max_retries, &mut result).await {
+                if handle_failure(
+                    step.name(),
+                    &e.to_string(),
+                    policy,
+                    ctx,
+                    dlq,
+                    dlq_max_retries,
+                    &mut result,
+                )
+                .await
+                {
                     break;
                 }
             }

@@ -19,7 +19,7 @@ use uni_db::{ModelAliasSpec, ModelTask, Uni, WarmupPolicy};
 use crate::config::UnikoConfig;
 use crate::error::{Result, UnikoError};
 use crate::schema::constants::{edges as edge_consts, labels};
-use crate::schema::{register_schema, EMBED_ALIAS};
+use crate::schema::{EMBED_ALIAS, NLP_ALIAS, register_schema};
 use crate::types::{EdgeId, NodeId};
 
 pub use edges::{Direction, EdgeRecord};
@@ -62,11 +62,11 @@ impl KnowledgeBase {
     pub async fn in_memory(config: UnikoConfig) -> Result<Self> {
         config.validate()?;
         let db = Uni::in_memory()
-            .xervo_catalog(embed_catalog())
+            .xervo_catalog(embed_catalog(&config))
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        register_schema(&db).await?;
+        register_schema(&db, &config).await?;
         Ok(Self {
             db: Arc::new(db),
             config,
@@ -84,11 +84,11 @@ impl KnowledgeBase {
     pub async fn open(path: impl AsRef<Path>, config: UnikoConfig) -> Result<Self> {
         config.validate()?;
         let db = Uni::open(path.as_ref().to_string_lossy())
-            .xervo_catalog(embed_catalog())
+            .xervo_catalog(embed_catalog(&config))
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        register_schema(&db).await?;
+        register_schema(&db, &config).await?;
         Ok(Self {
             db: Arc::new(db),
             config,
@@ -126,44 +126,74 @@ impl KnowledgeBase {
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-/// Build the Xervo model catalog for the fastembed embedding provider.
+/// Build the Xervo model catalog for embedding and NLP inference.
 ///
-/// Configures all-MiniLM-L6-v2 (384 dimensions) as `"embed/default"`.
-/// `WarmupPolicy::Lazy` defers model loading until the first embed call.
-/// `required: false` allows startup even if fastembed is unavailable.
+/// Registers two models:
+/// - `"embed/default"` — fastembed model specified by config (Nomic 768d default).
+/// - `"nlp/distilroberta"` — multi-task NER/POS/Dep/CLS via ONNX from HuggingFace.
+///
+/// Both use `WarmupPolicy::Lazy` (loaded on first call) and `required: false`
+/// (startup succeeds even if providers are unavailable).
 ///
 /// Exposed publicly so tests and downstream crates that create raw
 /// `Uni` instances can configure the same catalog.
-pub fn embed_catalog() -> Vec<ModelAliasSpec> {
-    vec![ModelAliasSpec {
-        alias: EMBED_ALIAS.to_string(),
-        task: ModelTask::Embed,
-        provider_id: "local/fastembed".to_string(),
-        model_id: "AllMiniLML6V2".to_string(),
-        revision: None,
-        warmup: WarmupPolicy::Lazy,
-        required: false,
-        timeout: None,
-        load_timeout: None,
-        retry: None,
-        options: serde_json::json!({}),
-    }]
+pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
+    vec![
+        ModelAliasSpec {
+            alias: EMBED_ALIAS.to_string(),
+            task: ModelTask::Embed,
+            provider_id: "local/fastembed".to_string(),
+            model_id: config.embedding.model_id.clone(),
+            revision: None,
+            warmup: WarmupPolicy::Lazy,
+            required: false,
+            timeout: None,
+            load_timeout: None,
+            retry: None,
+            options: serde_json::json!({}),
+        },
+        ModelAliasSpec {
+            alias: NLP_ALIAS.to_string(),
+            task: ModelTask::Raw,
+            provider_id: "local/onnx".to_string(),
+            model_id: "dragonscale-ai/kniv-distilroberta-nlp-en".to_string(),
+            revision: None,
+            warmup: WarmupPolicy::Lazy,
+            required: false,
+            timeout: None,
+            load_timeout: None,
+            retry: None,
+            options: serde_json::json!({
+                "artifact": "model-int8.onnx",
+                "max_batch_size": 16
+            }),
+        },
+    ]
 }
 
 /// Convert a uni-db `Vid` to our `NodeId` (`i64`).
-#[expect(dead_code, reason = "will be used when higher layers operate on Vid directly")]
+#[expect(
+    dead_code,
+    reason = "will be used when higher layers operate on Vid directly"
+)]
 pub(crate) fn vid_to_node_id(vid: uni_db::Vid) -> NodeId {
     vid.as_u64() as i64
 }
 
 /// Convert our `NodeId` to a uni-db `Vid`.
-#[expect(dead_code, reason = "will be used when higher layers operate on Vid directly")]
+#[expect(
+    dead_code,
+    reason = "will be used when higher layers operate on Vid directly"
+)]
 pub(crate) fn node_id_to_vid(id: NodeId) -> uni_db::Vid {
     uni_db::Vid::new(id as u64)
 }
 
 /// Convert a uni-db `Eid` to our `EdgeId` (`i64`).
-#[expect(dead_code, reason = "will be used when higher layers operate on Eid directly")]
+#[expect(
+    dead_code,
+    reason = "will be used when higher layers operate on Eid directly"
+)]
 pub(crate) fn eid_to_edge_id(eid: uni_db::Eid) -> EdgeId {
     eid.as_u64() as i64
 }
@@ -196,15 +226,11 @@ pub(crate) fn validate_property_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let first = chars.next().unwrap();
     if !first.is_ascii_alphabetic() && first != '_' {
-        return Err(UnikoError::Schema(format!(
-            "invalid property name: {name}"
-        )));
+        return Err(UnikoError::Schema(format!("invalid property name: {name}")));
     }
     for ch in chars {
         if !ch.is_ascii_alphanumeric() && ch != '_' {
-            return Err(UnikoError::Schema(format!(
-                "invalid property name: {name}"
-            )));
+            return Err(UnikoError::Schema(format!("invalid property name: {name}")));
         }
     }
     Ok(())

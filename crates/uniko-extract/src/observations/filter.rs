@@ -35,18 +35,58 @@ fn fillers() -> &'static HashSet<&'static str> {
     static SET: OnceLock<HashSet<&str>> = OnceLock::new();
     SET.get_or_init(|| {
         [
-            "hey", "hi", "hello", "hi there", "hey there", "howdy",
-            "thanks", "thank you", "thx", "ty",
-            "wow", "oh wow", "whoa", "omg",
-            "lol", "haha", "hehe", "lmao", "rofl",
-            "ok", "okay", "k", "sure", "sure thing",
-            "yes", "yeah", "yep", "yup", "nope", "no",
-            "right", "exactly", "agreed", "absolutely",
-            "no worries", "no problem", "np",
-            "you're welcome", "yw",
-            "sounds good", "sounds great", "cool", "nice",
-            "got it", "understood", "roger", "copy that",
-            "bye", "goodbye", "see you", "later", "ttyl",
+            "hey",
+            "hi",
+            "hello",
+            "hi there",
+            "hey there",
+            "howdy",
+            "thanks",
+            "thank you",
+            "thx",
+            "ty",
+            "wow",
+            "oh wow",
+            "whoa",
+            "omg",
+            "lol",
+            "haha",
+            "hehe",
+            "lmao",
+            "rofl",
+            "ok",
+            "okay",
+            "k",
+            "sure",
+            "sure thing",
+            "yes",
+            "yeah",
+            "yep",
+            "yup",
+            "nope",
+            "no",
+            "right",
+            "exactly",
+            "agreed",
+            "absolutely",
+            "no worries",
+            "no problem",
+            "np",
+            "you're welcome",
+            "yw",
+            "sounds good",
+            "sounds great",
+            "cool",
+            "nice",
+            "got it",
+            "understood",
+            "roger",
+            "copy that",
+            "bye",
+            "goodbye",
+            "see you",
+            "later",
+            "ttyl",
         ]
         .into_iter()
         .collect()
@@ -93,6 +133,15 @@ fn is_too_short(text: &str) -> bool {
     word_count < 5
 }
 
+/// Classify informativeness using the NLP model's sentence class.
+///
+/// Returns `true` for Statement, QuestionFact, and Command — these
+/// contain factual content worth extracting observations from.
+/// Returns `false` for Question, Greeting, Filler, Acknowledgment.
+pub fn is_informative_by_cls(cls_label: &str) -> bool {
+    matches!(cls_label, "statement" | "question_fact" | "command")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,10 +163,7 @@ mod tests {
 
     #[test]
     fn test_question_with_fact_kept() {
-        assert!(is_informative(
-            "Did you know Caroline went to Paris?",
-            None
-        ));
+        assert!(is_informative("Did you know Caroline went to Paris?", None));
     }
 
     #[test]
@@ -128,10 +174,7 @@ mod tests {
 
     #[test]
     fn test_system_messages_rejected() {
-        assert!(!is_informative(
-            "Connection reset by peer",
-            Some("system")
-        ));
+        assert!(!is_informative("Connection reset by peer", Some("system")));
         assert!(!is_informative("404 Not Found", Some("error")));
     }
 

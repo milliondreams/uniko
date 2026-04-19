@@ -1,17 +1,21 @@
 //! Integration tests for schema registration, CRUD operations, and edge creation.
 
 use uni_db::Uni;
+use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::schema::register_schema;
 use uniko_store::storage::embed_catalog;
 
 async fn test_db() -> Uni {
+    let config = UnikoConfig::default();
     let db = Uni::in_memory()
-        .xervo_catalog(embed_catalog())
+        .xervo_catalog(embed_catalog(&config))
         .build()
         .await
         .expect("in-memory db");
-    register_schema(&db).await.expect("schema registration");
+    register_schema(&db, &config)
+        .await
+        .expect("schema registration");
     db
 }
 
@@ -19,16 +23,30 @@ async fn test_db() -> Uni {
 
 #[tokio::test]
 async fn test_register_schema_succeeds() {
-    let db = Uni::in_memory().xervo_catalog(embed_catalog()).build().await.expect("in-memory db");
-    register_schema(&db).await.expect("schema registration");
+    let config = UnikoConfig::default();
+    let db = Uni::in_memory()
+        .xervo_catalog(embed_catalog(&config))
+        .build()
+        .await
+        .expect("in-memory db");
+    register_schema(&db, &config)
+        .await
+        .expect("schema registration");
     db.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn test_register_schema_idempotent() {
-    let db = Uni::in_memory().xervo_catalog(embed_catalog()).build().await.expect("in-memory db");
-    register_schema(&db).await.expect("first call");
-    register_schema(&db).await.expect("second call must not error");
+    let config = UnikoConfig::default();
+    let db = Uni::in_memory()
+        .xervo_catalog(embed_catalog(&config))
+        .build()
+        .await
+        .expect("in-memory db");
+    register_schema(&db, &config).await.expect("first call");
+    register_schema(&db, &config)
+        .await
+        .expect("second call must not error");
     db.shutdown().await.unwrap();
 }
 
@@ -69,11 +87,9 @@ async fn test_participant_crud() {
 
     // Create
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Participant {participant_id: 'p-1', kind: 'agent', name: 'TestBot'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Participant {participant_id: 'p-1', kind: 'agent', name: 'TestBot'})")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     // Read
@@ -88,11 +104,9 @@ async fn test_participant_crud() {
 
     // Update
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "MATCH (p:Participant {participant_id: 'p-1'}) SET p.name = 'UpdatedBot'",
-    )
-    .await
-    .unwrap();
+    tx.execute("MATCH (p:Participant {participant_id: 'p-1'}) SET p.name = 'UpdatedBot'")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let result = session
@@ -128,11 +142,9 @@ async fn test_goal_crud() {
     let session = db.session();
 
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Goal {goal_id: 'g-1', title: 'Reduce latency', status: 'active'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Goal {goal_id: 'g-1', title: 'Reduce latency', status: 'active'})")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let result = session
@@ -156,11 +168,9 @@ async fn test_task_crud() {
     let session = db.session();
 
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Task {task_id: 't-1', title: 'Profile endpoints', status: 'pending'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Task {task_id: 't-1', title: 'Profile endpoints', status: 'pending'})")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let result = session
@@ -180,11 +190,9 @@ async fn test_session_crud() {
     let session = db.session();
 
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Session {session_id: 's-1', started_at: datetime(), topic: 'debugging'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Session {session_id: 's-1', started_at: datetime(), topic: 'debugging'})")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let result = session
@@ -231,11 +239,9 @@ async fn test_action_crud() {
     let session = db.session();
 
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Action {action_id: 'a-1', action_type: 'tool_call', status: 'success'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Action {action_id: 'a-1', action_type: 'tool_call', status: 'success'})")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let result = session
@@ -328,11 +334,9 @@ async fn test_entity_crud() {
     let session = db.session();
 
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Entity {entity_id: 'ent-1', name: 'Rust', entity_type: 'concept'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Entity {entity_id: 'ent-1', name: 'Rust', entity_type: 'concept'})")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let result = session
@@ -565,11 +569,9 @@ async fn test_team_crud() {
     let session = db.session();
 
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Team {team_id: 'team-1', name: 'Backend', purpose: 'API development'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Team {team_id: 'team-1', name: 'Backend', purpose: 'API development'})")
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let result = session
@@ -752,9 +754,11 @@ async fn test_edge_mentions() {
     tx.execute("CREATE (:Entity {entity_id: 'ent-1', name: 'Rust'})")
         .await
         .unwrap();
-    tx.execute("CREATE (:Message {message_id: 'm-1', content: 'I love Rust', timestamp: datetime()})")
-        .await
-        .unwrap();
+    tx.execute(
+        "CREATE (:Message {message_id: 'm-1', content: 'I love Rust', timestamp: datetime()})",
+    )
+    .await
+    .unwrap();
     tx.execute(
         "MATCH (m:Message {message_id: 'm-1'}), (e:Entity {entity_id: 'ent-1'}) CREATE (m)-[:MENTIONS {count: 3}]->(e)",
     )
@@ -810,11 +814,9 @@ async fn test_fact_supported_by_observation() {
     let session = db.session();
 
     let tx = session.tx().await.unwrap();
-    tx.execute(
-        "CREATE (:Observation {observation_id: 'obs-1', content: 'User uses Rust daily'})",
-    )
-    .await
-    .unwrap();
+    tx.execute("CREATE (:Observation {observation_id: 'obs-1', content: 'User uses Rust daily'})")
+        .await
+        .unwrap();
     tx.execute(
         "CREATE (:Fact {fact_id: 'f-1', subject: 'user', predicate: 'uses', object: 'Rust'})",
     )
