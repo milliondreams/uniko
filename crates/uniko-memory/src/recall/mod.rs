@@ -187,7 +187,7 @@ pub async fn recall(
             builder = builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
         }
         if params_needed.1 {
-            builder = builder.param("qtxt", query);
+            builder = builder.param("qtxt", intent.keywords.as_str());
         }
 
         match builder.fetch_all().await {

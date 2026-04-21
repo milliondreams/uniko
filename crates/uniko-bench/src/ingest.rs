@@ -35,9 +35,9 @@ use crate::data::{Conversation, LocomoSample, ParsedSession};
 /// Open an existing persistent KB without ingesting.
 pub async fn open_kb(
     ingest_dir: &Path,
+    config: UnikoConfig,
     extra_catalog: &[ModelAliasSpec],
 ) -> Result<Arc<KnowledgeBase>> {
-    let config = UnikoConfig::default();
     let kb = KnowledgeBase::open_with_xervo(ingest_dir, config, extra_catalog.to_vec())
         .await
         .context("opening KB")?;
@@ -49,9 +49,9 @@ pub async fn ingest_conversation(
     sample: &LocomoSample,
     sessions: &[ParsedSession],
     ingest_dir: &Path,
+    config: UnikoConfig,
     extra_catalog: &[ModelAliasSpec],
 ) -> Result<Arc<KnowledgeBase>> {
-    let config = UnikoConfig::default();
     let kb = KnowledgeBase::open_with_xervo(ingest_dir, config, extra_catalog.to_vec())
         .await
         .context("creating KB")?;

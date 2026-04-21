@@ -77,6 +77,14 @@ struct Cli {
     /// Reuse existing KB from --ingest-dir (skip ingestion).
     #[arg(long)]
     reuse: bool,
+
+    /// Path to xervo model catalog JSON file.
+    #[arg(long)]
+    catalog: Option<PathBuf>,
+
+    /// Path to schema JSON file.
+    #[arg(long)]
+    schema: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -114,6 +122,11 @@ async fn main() -> Result<()> {
         .categories
         .as_ref()
         .map(|c| c.split(',').filter_map(|s| s.trim().parse().ok()).collect());
+
+    // Build config with optional catalog/schema paths.
+    let mut config = uniko_store::config::UnikoConfig::default();
+    config.catalog_path = cli.catalog.clone();
+    config.schema_path = cli.schema.clone();
 
     // Build extra catalog for LLM.
     let extra_catalog = build_llm_catalog(&cli);
@@ -155,11 +168,17 @@ async fn main() -> Result<()> {
         let kb_dir = cli.ingest_dir.join(&sample.sample_id);
         let kb = if cli.reuse && kb_dir.exists() {
             tracing::info!(path = %kb_dir.display(), "reusing existing KB");
-            ingest::open_kb(&kb_dir, &extra_catalog).await?
+            ingest::open_kb(&kb_dir, config.clone(), &extra_catalog).await?
         } else {
             let ingest_start = Instant::now();
-            let kb =
-                ingest::ingest_conversation(sample, &sessions, &kb_dir, &extra_catalog).await?;
+            let kb = ingest::ingest_conversation(
+                sample,
+                &sessions,
+                &kb_dir,
+                config.clone(),
+                &extra_catalog,
+            )
+            .await?;
             tracing::info!(
                 elapsed_ms = ingest_start.elapsed().as_millis(),
                 "ingestion complete"

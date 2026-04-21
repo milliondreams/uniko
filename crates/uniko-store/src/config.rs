@@ -2,6 +2,8 @@
 ///
 /// All fields have spec-mandated defaults. Use `UnikoConfig::default()` and override
 /// individual fields as needed. Call `validate()` before use to catch constraint violations.
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UnikoError};
@@ -178,6 +180,16 @@ impl VectorMetricChoice {
 /// Default values match the uniko specification v6.0 exactly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnikoConfig {
+    // External configuration files
+    /// Path to xervo model catalog JSON. When set, models are loaded from
+    /// this file instead of the built-in catalog. Use `None` for defaults.
+    #[serde(default)]
+    pub catalog_path: Option<PathBuf>,
+    /// Path to schema JSON. When set, schema is loaded from this file
+    /// instead of the builder-based registration. Use `None` for defaults.
+    #[serde(default)]
+    pub schema_path: Option<PathBuf>,
+
     // Embedding + vector index
     /// Embedding model selection (controls dimensions and model ID).
     pub embedding: EmbeddingConfig,
@@ -240,6 +252,8 @@ pub struct UnikoConfig {
 impl Default for UnikoConfig {
     fn default() -> Self {
         Self {
+            catalog_path: None,
+            schema_path: None,
             embedding: EmbeddingConfig::nomic_v15(),
             vector_algorithm: VectorAlgorithm::HnswSq {
                 m: 16,

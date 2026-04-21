@@ -5,11 +5,18 @@
 use uniko_extract::ner::rules::extract_entities_rule_based;
 use uniko_store::{KnowledgeBase, UnikoError};
 
+/// Content POS tags to keep for keyword extraction.
+/// NOUN, VERB, PROPN, ADJ, NUM — drop function words.
+const CONTENT_POS: &[&str] = &["NOUN", "VERB", "PROPN", "ADJ", "NUM"];
+
 /// Structured representation of a recall query.
 #[derive(Debug, Clone)]
 pub struct IntentProfile {
     /// Embedding of the full query text.
     pub intent_vec: Vec<f32>,
+    /// Content keywords extracted from query via POS filtering.
+    /// Used as the fulltext search query instead of the raw question.
+    pub keywords: String,
     /// Entity names extracted from the query.
     pub entity_refs: Vec<String>,
     /// Number of facets: `max(entity_refs.len(), 1)`.
@@ -18,8 +25,8 @@ pub struct IntentProfile {
 
 /// Build an [`IntentProfile`] from a query string.
 ///
-/// Embeds the query via Xervo and extracts entity references using the
-/// ONNX NLP pipeline (when available) with rule-based NER as fallback.
+/// Embeds the query via Xervo and extracts entity references + keywords
+/// using the ONNX NLP pipeline (when available) with rule-based fallback.
 ///
 /// # Errors
 ///
@@ -31,36 +38,67 @@ pub async fn build_intent(kb: &KnowledgeBase, query: &str) -> Result<IntentProfi
         .await
         .unwrap_or_default();
 
-    // Extract entity references — prefer ONNX NLP model, fall back to rules.
-    let entity_refs = extract_entity_refs(kb, query).await;
+    // Extract entities and keywords via NLP.
+    let (entity_refs, keywords) = analyze_query(kb, query).await;
 
     let facet_count = entity_refs.len().max(1);
 
     Ok(IntentProfile {
         intent_vec,
+        keywords,
         entity_refs,
         facet_count,
     })
 }
 
-/// Extract entity names from query text.
+/// Analyze query with NLP pipeline to extract entities and content keywords.
 ///
-/// Uses the ONNX NLP pipeline if available (finds single-word names
-/// like "Jon", "Gina"), falls back to rule-based regex NER.
-async fn extract_entity_refs(kb: &KnowledgeBase, query: &str) -> Vec<String> {
-    // Try ONNX NLP pipeline first.
+/// Returns `(entity_refs, keywords)`. Keywords are content words (NOUN,
+/// VERB, PROPN, ADJ) joined by spaces — suitable for BM25 fulltext search.
+async fn analyze_query(kb: &KnowledgeBase, query: &str) -> (Vec<String>, String) {
     #[cfg(feature = "onnx")]
-    if let Some(pipeline) = uniko_extract::nlp::NlpPipeline::try_new(kb).await
-        && let Ok(result) = pipeline.analyze(query).await
     {
-        let refs: Vec<String> = result.entities.iter().map(|e| e.text.clone()).collect();
-        if !refs.is_empty() {
-            tracing::debug!(entities = ?refs, "ONNX NER on query");
-            return refs;
+        if let Some(pipeline) = uniko_extract::nlp::NlpPipeline::try_new(kb).await
+            && let Ok(result) = pipeline.analyze(query).await
+        {
+            let labels = uniko_extract::nlp::assets::label_maps();
+
+            // Extract entity names.
+            let entity_refs: Vec<String> = result.entities.iter().map(|e| e.text.clone()).collect();
+
+            // Extract content keywords by POS tag.
+            let keywords: Vec<&str> = result
+                .words
+                .iter()
+                .zip(result.pos_indices.iter())
+                .filter_map(|(word, &pos_idx)| {
+                    let pos = labels
+                        .pos_labels
+                        .get(pos_idx)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    if CONTENT_POS.contains(&pos) {
+                        Some(word.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !keywords.is_empty() {
+                let kw_str = keywords.join(" ");
+                tracing::info!(
+                    entities = ?entity_refs,
+                    keywords = %kw_str,
+                    "NLP query analysis",
+                );
+                return (entity_refs, kw_str);
+            }
         }
     }
 
-    // Fallback: rule-based NER.
+    // Fallback: rule-based NER, raw query as keywords.
     let raw = extract_entities_rule_based(query);
-    raw.into_iter().map(|e| e.canonical_name).collect()
+    let entity_refs: Vec<String> = raw.into_iter().map(|e| e.canonical_name).collect();
+    (entity_refs, query.to_string())
 }

@@ -61,12 +61,13 @@ impl KnowledgeBase {
     /// [`UnikoError::Storage`] if the database cannot be created.
     pub async fn in_memory(config: UnikoConfig) -> Result<Self> {
         config.validate()?;
+        let catalog = load_catalog(&config, &[])?;
         let db = Uni::in_memory()
-            .xervo_catalog(embed_catalog(&config))
+            .xervo_catalog(catalog)
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        register_schema(&db, &config).await?;
+        apply_schema(&db, &config).await?;
         Ok(Self {
             db: Arc::new(db),
             config,
@@ -75,7 +76,7 @@ impl KnowledgeBase {
 
     /// Create an in-memory knowledge base with extra xervo model aliases.
     ///
-    /// Merges the default embed + NLP catalog with `extra_catalog` entries.
+    /// Merges the catalog (from file or built-in) with `extra_catalog`.
     /// Use this to add LLM generation models (e.g., for benchmarks or
     /// answer synthesis).
     ///
@@ -88,14 +89,13 @@ impl KnowledgeBase {
         extra_catalog: Vec<ModelAliasSpec>,
     ) -> Result<Self> {
         config.validate()?;
-        let mut catalog = embed_catalog(&config);
-        catalog.extend(extra_catalog);
+        let catalog = load_catalog(&config, &extra_catalog)?;
         let db = Uni::in_memory()
             .xervo_catalog(catalog)
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        register_schema(&db, &config).await?;
+        apply_schema(&db, &config).await?;
         Ok(Self {
             db: Arc::new(db),
             config,
@@ -112,12 +112,13 @@ impl KnowledgeBase {
     /// [`UnikoError::Storage`] if the database cannot be opened.
     pub async fn open(path: impl AsRef<Path>, config: UnikoConfig) -> Result<Self> {
         config.validate()?;
+        let catalog = load_catalog(&config, &[])?;
         let db = Uni::open(path.as_ref().to_string_lossy())
-            .xervo_catalog(embed_catalog(&config))
+            .xervo_catalog(catalog)
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        register_schema(&db, &config).await?;
+        apply_schema(&db, &config).await?;
         Ok(Self {
             db: Arc::new(db),
             config,
@@ -126,7 +127,7 @@ impl KnowledgeBase {
 
     /// Open a persistent knowledge base with extra xervo model aliases.
     ///
-    /// Merges the default embed + NLP catalog with `extra_catalog` entries.
+    /// Merges the catalog (from file or built-in) with `extra_catalog`.
     ///
     /// # Errors
     ///
@@ -138,14 +139,13 @@ impl KnowledgeBase {
         extra_catalog: Vec<ModelAliasSpec>,
     ) -> Result<Self> {
         config.validate()?;
-        let mut catalog = embed_catalog(&config);
-        catalog.extend(extra_catalog);
+        let catalog = load_catalog(&config, &extra_catalog)?;
         let db = Uni::open(path.as_ref().to_string_lossy())
             .xervo_catalog(catalog)
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        register_schema(&db, &config).await?;
+        apply_schema(&db, &config).await?;
         Ok(Self {
             db: Arc::new(db),
             config,
@@ -182,6 +182,32 @@ impl KnowledgeBase {
 }
 
 // ── Internal helpers ────────────────────────────────────────────────
+
+/// Load the xervo model catalog from a JSON file or build the default.
+///
+/// When `config.catalog_path` is set, reads from that file and appends
+/// `extra`. Otherwise builds the default catalog from config + `extra`.
+fn load_catalog(config: &UnikoConfig, extra: &[ModelAliasSpec]) -> Result<Vec<ModelAliasSpec>> {
+    let mut catalog = if let Some(path) = &config.catalog_path {
+        uni_db::xervo_catalog_from_file(path)
+            .map_err(|e| UnikoError::Config(format!("catalog {}: {e}", path.display())))?
+    } else {
+        embed_catalog(config)
+    };
+    catalog.extend_from_slice(extra);
+    Ok(catalog)
+}
+
+/// Apply the schema from a JSON file or the builder-based registration.
+async fn apply_schema(db: &Uni, config: &UnikoConfig) -> Result<()> {
+    if let Some(path) = &config.schema_path {
+        db.load_schema(path)
+            .await
+            .map_err(|e| UnikoError::Schema(e.to_string()))
+    } else {
+        register_schema(db, config).await
+    }
+}
 
 /// Build the Xervo model catalog for embedding and NLP inference.
 ///

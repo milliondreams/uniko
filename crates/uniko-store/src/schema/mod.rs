@@ -38,7 +38,7 @@ pub use constants::{edges, labels};
 pub const EMBED_ALIAS: &str = "embed/default";
 
 /// NLP ONNX model alias for multi-task inference (NER, POS, dep, CLS).
-pub const NLP_ALIAS: &str = "nlp/distilroberta";
+pub const NLP_ALIAS: &str = "nlp/default";
 
 /// Build a vector index from config (no auto-embed).
 ///
