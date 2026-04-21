@@ -61,18 +61,12 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             .and_then(|v| v.as_str())
             .or(Some(ctx.content_type.as_str()));
 
-        let informative = if let Some(cls_label) = ctx
-            .metadata
-            .get("nlp_result")
-            .and_then(|v| v.get("sentence_class"))
-            .and_then(|v| v.as_str())
-        {
-            // CLS model available — use it.
-            filter::is_informative_by_cls(cls_label)
-        } else {
-            // No NLP result — use rule-based filter.
-            filter::is_informative(&ctx.content, content_type)
-        };
+        // Use rule-based filtering — the CLS model classifies dialogue
+        // acts (inform/agreement/social) which doesn't align with "contains
+        // extractable facts." Many informative statements are casual
+        // ("Yeah, I started a dance studio") and get classified as
+        // "agreement" or "social" by the CLS model.
+        let informative = filter::is_informative(&ctx.content, content_type);
 
         if !informative {
             return Ok(StepOutcome::Skipped {
@@ -80,8 +74,15 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             });
         }
 
-        // 2. Load entity names from context (populated by P2).
-        let entity_refs = load_entity_refs(ctx).await;
+        // 2. Load entity names from context (populated by P2) + sender.
+        let mut entity_refs = load_entity_refs(ctx).await;
+        // Also add the message sender as an entity ref — many messages
+        // contain facts about the speaker without naming them explicitly.
+        if let Some(sender_ref) = load_sender_ref(ctx).await {
+            if !entity_refs.iter().any(|(_, name)| name == &sender_ref.1) {
+                entity_refs.push(sender_ref);
+            }
+        }
         if entity_refs.is_empty() {
             return Ok(StepOutcome::Skipped {
                 reason: "no entities from P2 to anchor observations".into(),
@@ -182,6 +183,23 @@ async fn create_observation_node(
     );
     props.insert("confidence".into(), Value::Float(raw.confidence));
     kb.create_node(labels::OBSERVATION, &props).await
+}
+
+/// Load the message sender as an entity reference via SENT_BY edge.
+///
+/// Returns the Participant's (node_id, name) if available.
+async fn load_sender_ref(ctx: &PipelineContext) -> Option<(NodeId, String)> {
+    use uniko_store::storage::edges::Direction;
+
+    let edges = ctx
+        .kb
+        .get_edges(ctx.node_id, "SENT_BY", Direction::Outgoing)
+        .await
+        .ok()?;
+    let edge = edges.first()?;
+    let (_, props) = ctx.kb.get_node(edge.to).await.ok()??;
+    let name = props.get("name").and_then(|v| v.as_str())?.to_string();
+    Some((edge.to, name))
 }
 
 /// Load entity (NodeId, name) pairs from the pipeline context.

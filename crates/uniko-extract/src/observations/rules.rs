@@ -106,9 +106,21 @@ fn sentence_split(text: &str) -> Vec<&str> {
 /// Find the first entity name that appears in the sentence.
 fn find_entity_in_sentence(sentence: &str, entities: &[EntityRef]) -> Option<String> {
     let lower = sentence.to_lowercase();
+    // Direct name mention.
     for (_, name) in entities {
         if lower.contains(&name.to_lowercase()) {
             return Some(name.clone());
+        }
+    }
+    // First-person pronoun — attribute to the first entity (the speaker).
+    // This handles "I'm starting a dance studio" → attributed to the speaker.
+    if !entities.is_empty() {
+        let first_word = lower.split_whitespace().next().unwrap_or("");
+        if matches!(
+            first_word,
+            "i" | "i'm" | "i've" | "i'll" | "i'd" | "my" | "me" | "we" | "we're" | "we've" | "our"
+        ) {
+            return Some(entities[0].1.clone());
         }
     }
     None
@@ -163,9 +175,26 @@ fn has_svo_structure(sentence: &str) -> bool {
 /// starts with one.
 fn make_self_contained(sentence: &str, subject: &str) -> String {
     static PRONOUN_START: OnceLock<Regex> = OnceLock::new();
-    let re = PRONOUN_START.get_or_init(|| Regex::new(r"(?i)^(She|He|They|It|I)\b").unwrap());
+    let re = PRONOUN_START.get_or_init(|| {
+        // Match leading pronouns including contractions.
+        // "I'm starting" → "Jon is starting"
+        // "I've been" → "Jon has been"
+        // "She went" → "Caroline went"
+        Regex::new(r"(?i)^(I'm|I've|I'll|I'd|She's|He's|They're|She|He|They|It|I)\b").unwrap()
+    });
 
-    let result = re.replace(sentence, subject);
+    let result = re.replace(sentence, |caps: &regex::Captures| {
+        let matched = &caps[1];
+        match matched.to_lowercase().as_str() {
+            "i'm" => format!("{subject} is"),
+            "i've" => format!("{subject} has"),
+            "i'll" => format!("{subject} will"),
+            "i'd" => format!("{subject} would"),
+            "she's" | "he's" => format!("{subject} is"),
+            "they're" => format!("{subject} are"),
+            _ => subject.to_string(),
+        }
+    });
     result.trim().to_string()
 }
 
