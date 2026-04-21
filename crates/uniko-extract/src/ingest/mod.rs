@@ -12,6 +12,7 @@ pub mod chunking;
 pub mod message;
 pub mod overflow;
 pub mod session;
+pub mod session_chunk;
 
 pub use artifact::ArtifactIngestResult;
 pub use chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, select_chunker};

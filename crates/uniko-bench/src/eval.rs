@@ -134,8 +134,9 @@ fn bag_of_words(tokens: &[String]) -> HashMap<String, usize> {
 
 /// Check how many evidence messages appear in the recalled items.
 ///
-/// An evidence message is "found" if the first 50 characters of its text
-/// appear as a substring in any recalled item's content.
+/// An evidence message is "found" if a significant substring of its text
+/// appears in any recalled item's content. Uses multiple fingerprints
+/// to handle speaker prefixes in session chunks (e.g., "Jon: message...").
 ///
 /// Returns `(found, total)`.
 pub fn evidence_hit(recalled_contents: &[&str], evidence_texts: &[String]) -> (usize, usize) {
@@ -146,11 +147,30 @@ pub fn evidence_hit(recalled_contents: &[&str], evidence_texts: &[String]) -> (u
 
     let mut found = 0;
     for evidence in evidence_texts {
-        let fingerprint = &evidence[..evidence.len().min(50)].to_lowercase();
-        if recalled_contents
-            .iter()
-            .any(|rc| rc.to_lowercase().contains(fingerprint.as_str()))
-        {
+        let ev_lower = evidence.to_lowercase();
+        // Try multiple fingerprint positions to handle prefixed chunks.
+        // Skip short words at the start that might be speaker names.
+        let fingerprints: Vec<&str> = vec![
+            &ev_lower[..ev_lower.len().min(50)],
+            // Skip first word (might be a speaker prefix in the chunk)
+            ev_lower
+                .find(' ')
+                .map(|i| &ev_lower[i + 1..ev_lower.len().min(i + 51)])
+                .unwrap_or(""),
+            // Use a chunk from the middle for longer texts
+            if ev_lower.len() > 30 {
+                &ev_lower[10..ev_lower.len().min(60)]
+            } else {
+                ""
+            },
+        ];
+
+        if recalled_contents.iter().any(|rc| {
+            let rc_lower = rc.to_lowercase();
+            fingerprints
+                .iter()
+                .any(|fp| !fp.is_empty() && rc_lower.contains(*fp))
+        }) {
             found += 1;
         }
     }

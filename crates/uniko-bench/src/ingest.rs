@@ -65,6 +65,7 @@ pub async fn ingest_conversation(
     let mut total_turns = 0u32;
     let mut total_entities = 0usize;
     let mut total_observations = 0usize;
+    let mut total_session_chunks = 0usize;
 
     for session in sessions {
         let base_ts = parse_session_datetime(&session.date_time);
@@ -113,6 +114,13 @@ pub async fn ingest_conversation(
 
             total_turns += 1;
         }
+
+        // Chunk the session for retrieval (concatenates turns with speaker prefixes).
+        let chunk_ids =
+            uniko_extract::ingest::session_chunk::chunk_session(&kb, &session.session_id)
+                .await
+                .with_context(|| format!("chunking session {}", session.session_id))?;
+        total_session_chunks += chunk_ids.len();
     }
 
     tracing::info!(
@@ -120,6 +128,7 @@ pub async fn ingest_conversation(
         turns = total_turns,
         entities = total_entities,
         observations = total_observations,
+        session_chunks = total_session_chunks,
         "conversation ingested",
     );
 

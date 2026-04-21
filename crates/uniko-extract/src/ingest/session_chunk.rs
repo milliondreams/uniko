@@ -1,0 +1,143 @@
+//! Session-level chunking for retrieval.
+//!
+//! Concatenates all messages in a session with speaker prefixes, then
+//! chunks the result into 400-512 token segments. This gives the
+//! embedding model and BM25 much more semantic signal per searchable
+//! unit compared to individual short chat messages.
+
+// Rust guideline compliant
+
+use std::collections::HashSet;
+
+use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+
+use super::chunking::text::TextChunker;
+use super::chunking::{ChunkConfig, ChunkData, Chunker};
+use super::message::create_chunks;
+
+/// Chunk all messages in a session into searchable Chunk nodes.
+///
+/// Queries messages in the session ordered by timestamp, concatenates
+/// them with `"speaker: content\n"` prefixes, then runs the text
+/// chunker. Creates Chunk nodes linked to the Session via HAS_CHUNK.
+///
+/// Idempotent: skips if chunks already exist for this session.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Storage`] on graph query or write failure.
+pub async fn chunk_session(
+    kb: &KnowledgeBase,
+    session_id: &str,
+) -> uniko_store::Result<Vec<NodeId>> {
+    // Look up the session node.
+    let session_nid = match kb
+        .get_node_by_ext_id("Session", "session_id", session_id)
+        .await?
+    {
+        Some((nid, _)) => nid,
+        None => {
+            tracing::debug!(session_id, "session not found, skipping chunking");
+            return Ok(Vec::new());
+        }
+    };
+
+    // Check if chunks already exist (idempotent).
+    let existing = kb
+        .get_edges(
+            session_nid,
+            "HAS_CHUNK",
+            uniko_store::storage::edges::Direction::Outgoing,
+        )
+        .await?;
+    if !existing.is_empty() {
+        tracing::debug!(
+            session_id,
+            chunks = existing.len(),
+            "session already chunked"
+        );
+        return Ok(existing.iter().map(|e| e.to).collect());
+    }
+
+    // Query all messages in this session with their sender names,
+    // ordered by timestamp.
+    let cypher = "\
+        MATCH (m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
+        OPTIONAL MATCH (m)-[:SENT_BY]->(p:Participant) \
+        RETURN m.content AS content, p.name AS speaker, m.timestamp AS ts \
+        ORDER BY m.timestamp";
+
+    let session = kb.db().session();
+    let result = session
+        .query_with(cypher)
+        .param("sid", session_id)
+        .fetch_all()
+        .await
+        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+
+    if result.is_empty() {
+        tracing::debug!(session_id, "no messages in session");
+        return Ok(Vec::new());
+    }
+
+    // Concatenate messages with speaker prefixes.
+    let mut transcript = String::new();
+    let mut speakers = HashSet::new();
+
+    for row in result.rows() {
+        let content: String = row.get("content").unwrap_or_default();
+        let speaker: String = row.get("speaker").unwrap_or_else(|_| "unknown".to_string());
+
+        if !content.is_empty() {
+            speakers.insert(speaker.clone());
+            transcript.push_str(&speaker);
+            transcript.push_str(": ");
+            transcript.push_str(&content);
+            transcript.push('\n');
+        }
+    }
+
+    if transcript.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Chunk the transcript.
+    let chunk_cfg = ChunkConfig::from_uniko_config(kb.config());
+    let chunker = TextChunker;
+    let mut chunks: Vec<ChunkData> = Chunker::chunk(&chunker, &transcript, &chunk_cfg);
+
+    // Set metadata on each chunk.
+    let speaker_list = {
+        let mut sorted: Vec<&str> = speakers.iter().map(String::as_str).collect();
+        sorted.sort_unstable();
+        sorted.join(", ")
+    };
+
+    // Get session topic if available.
+    let topic = kb.get_node(session_nid).await?.and_then(|(_, props)| {
+        props
+            .get("topic")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    });
+
+    for chunk in &mut chunks {
+        chunk.chunk_type = "session".to_string();
+        chunk.heading = topic.clone();
+        // Store speakers in symbol_name field (reusing existing schema field).
+        chunk.symbol_name = Some(speaker_list.clone());
+    }
+
+    // Create chunk nodes and HAS_CHUNK edges.
+    let chunk_nids = create_chunks(kb, session_id, session_nid, &chunks, "Session").await?;
+
+    tracing::info!(
+        session_id,
+        messages = result.len(),
+        chunks = chunk_nids.len(),
+        transcript_len = transcript.len(),
+        "session chunked",
+    );
+
+    Ok(chunk_nids)
+}

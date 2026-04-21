@@ -43,10 +43,10 @@ pub(crate) fn register_labels<'a>(
 
 pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
     builder
-        // HAS_CHUNK: multi-source (Artifact, Message → Chunk)
+        // HAS_CHUNK: multi-source (Artifact, Message, Session → Chunk)
         .edge_type(
             edges::HAS_CHUNK,
-            &[labels::ARTIFACT, labels::MESSAGE],
+            &[labels::ARTIFACT, labels::MESSAGE, labels::SESSION],
             &[labels::CHUNK],
         )
         .property_nullable("index", DataType::Int64)
