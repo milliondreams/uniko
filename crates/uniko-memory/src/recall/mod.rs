@@ -162,22 +162,36 @@ pub async fn recall(
     for &(label, embed_field, fts_field, content_field) in hybrid_targets {
         // Build the multi-source similar_to with proper RRF fusion.
         // similar_to([sources], [queries]) handles normalization and fusion.
-        let (sources, queries, params_needed) = match (embed_field.filter(|_| has_vec), fts_field) {
-            (Some(ef), Some(ff)) => (
-                format!("[m.{ef}, m.{ff}]"),
-                "[$qvec, $qtxt]".to_string(),
-                (true, true),
-            ),
-            (Some(ef), None) => (format!("m.{ef}"), "$qvec".to_string(), (true, false)),
-            (None, Some(ff)) => (format!("m.{ff}"), "$qtxt".to_string(), (false, true)),
-            (None, None) => continue,
-        };
+        // Weighted fusion: boost BM25 (0.7) over vector (0.3) since
+        // keyword-extracted queries match better on exact terms.
+        let (sources, queries, fusion, params_needed) =
+            match (embed_field.filter(|_| has_vec), fts_field) {
+                (Some(ef), Some(ff)) => (
+                    format!("[m.{ef}, m.{ff}]"),
+                    "[$qvec, $qtxt]".to_string(),
+                    ", {method: 'weighted', weights: [0.2, 0.8]}".to_string(),
+                    (true, true),
+                ),
+                (Some(ef), None) => (
+                    format!("m.{ef}"),
+                    "$qvec".to_string(),
+                    String::new(),
+                    (true, false),
+                ),
+                (None, Some(ff)) => (
+                    format!("m.{ff}"),
+                    "$qtxt".to_string(),
+                    String::new(),
+                    (false, true),
+                ),
+                (None, None) => continue,
+            };
 
         let cypher = format!(
             "MATCH (m:{label}) \
              RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                     m.{content_field} AS content, \
-                    similar_to({sources}, {queries}) AS score \
+                    similar_to({sources}, {queries}{fusion}) AS score \
              ORDER BY score DESC LIMIT $lim"
         );
 
