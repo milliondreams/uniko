@@ -58,7 +58,11 @@ pub async fn build_intent(kb: &KnowledgeBase, query: &str) -> Result<IntentProfi
 async fn analyze_query(kb: &KnowledgeBase, query: &str) -> (Vec<String>, String) {
     #[cfg(feature = "onnx")]
     {
-        if let Some(pipeline) = uniko_extract::nlp::NlpPipeline::try_new(kb).await
+        let pipeline_opt = uniko_extract::nlp::NlpPipeline::try_new(kb).await;
+        if pipeline_opt.is_none() {
+            tracing::warn!("NLP pipeline unavailable for query analysis");
+        }
+        if let Some(pipeline) = pipeline_opt
             && let Ok(result) = pipeline.analyze(query).await
         {
             let labels = uniko_extract::nlp::assets::label_maps();

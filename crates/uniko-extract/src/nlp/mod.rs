@@ -51,7 +51,13 @@ impl NlpPipeline {
     /// Returns `None` if the ONNX provider is unavailable (no runtime,
     /// alias not registered, or model download fails).
     pub async fn try_new(kb: &KnowledgeBase) -> Option<Self> {
-        let runner = kb.db().xervo().onnx_runner(NLP_ALIAS).await.ok()?;
+        let runner = match kb.db().xervo().onnx_runner(NLP_ALIAS).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(error = %e, alias = NLP_ALIAS, "ONNX runner unavailable");
+                return None;
+            }
+        };
         Some(Self { runner })
     }
 
