@@ -57,15 +57,27 @@ pub struct NerSpan {
     pub confidence: f32,
 }
 
-/// Entity types produced by the NER head.
+/// Entity types produced by the NER head (OntoNotes + CoNLL scheme).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NerEntityType {
     /// Named person.
     Person,
     /// Named organization (company, institution, team).
     Organization,
-    /// Geographic location (city, country, region).
+    /// Geographic location (city, country, region, facility, GPE).
     Location,
+    /// Date or time expression.
+    Date,
+    /// Numeric value (money, percent, quantity, cardinal, ordinal).
+    Numeric,
+    /// Named event.
+    Event,
+    /// Product name.
+    Product,
+    /// Work of art (book, song, etc.).
+    WorkOfArt,
+    /// Nationality, religious, or political group.
+    Group,
     /// Miscellaneous named entity.
     Misc,
 }
@@ -104,16 +116,29 @@ pub enum SentenceClass {
 
 impl SentenceClass {
     /// Parse from the label string in `label_maps.json`.
+    ///
+    /// Handles both the DistilRoBERTa labels (statement, question, etc.)
+    /// and the DeBERTa labels (inform, correction, agreement, etc.).
     pub fn from_label(label: &str) -> Self {
         match label {
+            // DistilRoBERTa scheme
             "statement" => Self::Statement,
-            "question" => Self::Question,
             "question_fact" => Self::QuestionFact,
             "command" => Self::Command,
             "greeting" => Self::Greeting,
-            "filler" => Self::Filler,
             "acknowledgment" => Self::Acknowledgment,
-            _ => Self::Statement, // conservative fallback
+            // DeBERTa scheme (ISO 24617-2 inspired)
+            "inform" => Self::Statement,
+            "correction" => Self::Statement,
+            "plan_commit" => Self::Command,
+            "request" => Self::Command,
+            "agreement" => Self::Acknowledgment,
+            "feedback" => Self::Acknowledgment,
+            "social" => Self::Greeting,
+            // Shared
+            "question" => Self::Question,
+            "filler" => Self::Filler,
+            _ => Self::Statement,
         }
     }
 

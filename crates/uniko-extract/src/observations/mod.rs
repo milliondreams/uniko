@@ -96,15 +96,14 @@ impl uniko_pipes::Step for ObservationExtractionStep {
         let mut all_obs = Vec::new();
 
         #[cfg(feature = "onnx")]
-        if let Some(nlp_val) = ctx.metadata.get("nlp_result") {
-            if let Ok(nlp_result) =
+        if let Some(nlp_val) = ctx.metadata.get("nlp_result")
+            && let Ok(nlp_result) =
                 serde_json::from_value::<crate::nlp::types::NlpResult>(nlp_val.clone())
-            {
-                let dep_obs =
-                    rules::extract_observations_from_dep_tree(&nlp_result, &entity_refs, timestamp);
-                tracing::debug!(count = dep_obs.len(), "dep-tree observations");
-                all_obs.extend(dep_obs);
-            }
+        {
+            let dep_obs =
+                rules::extract_observations_from_dep_tree(&nlp_result, &entity_refs, timestamp);
+            tracing::debug!(count = dep_obs.len(), "dep-tree observations");
+            all_obs.extend(dep_obs);
         }
 
         // Rule-based extraction always runs to catch patterns the

@@ -73,6 +73,35 @@ impl KnowledgeBase {
         })
     }
 
+    /// Create an in-memory knowledge base with extra xervo model aliases.
+    ///
+    /// Merges the default embed + NLP catalog with `extra_catalog` entries.
+    /// Use this to add LLM generation models (e.g., for benchmarks or
+    /// answer synthesis).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Config`] if validation fails, or
+    /// [`UnikoError::Storage`] if the database cannot be created.
+    pub async fn in_memory_with_xervo(
+        config: UnikoConfig,
+        extra_catalog: Vec<ModelAliasSpec>,
+    ) -> Result<Self> {
+        config.validate()?;
+        let mut catalog = embed_catalog(&config);
+        catalog.extend(extra_catalog);
+        let db = Uni::in_memory()
+            .xervo_catalog(catalog)
+            .build()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        register_schema(&db, &config).await?;
+        Ok(Self {
+            db: Arc::new(db),
+            config,
+        })
+    }
+
     /// Open or create a persistent knowledge base at `path`.
     ///
     /// Registers the full schema on open (idempotent).
@@ -85,6 +114,34 @@ impl KnowledgeBase {
         config.validate()?;
         let db = Uni::open(path.as_ref().to_string_lossy())
             .xervo_catalog(embed_catalog(&config))
+            .build()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        register_schema(&db, &config).await?;
+        Ok(Self {
+            db: Arc::new(db),
+            config,
+        })
+    }
+
+    /// Open a persistent knowledge base with extra xervo model aliases.
+    ///
+    /// Merges the default embed + NLP catalog with `extra_catalog` entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Config`] if validation fails, or
+    /// [`UnikoError::Storage`] if the database cannot be opened.
+    pub async fn open_with_xervo(
+        path: impl AsRef<Path>,
+        config: UnikoConfig,
+        extra_catalog: Vec<ModelAliasSpec>,
+    ) -> Result<Self> {
+        config.validate()?;
+        let mut catalog = embed_catalog(&config);
+        catalog.extend(extra_catalog);
+        let db = Uni::open(path.as_ref().to_string_lossy())
+            .xervo_catalog(catalog)
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
@@ -156,7 +213,7 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
             alias: NLP_ALIAS.to_string(),
             task: ModelTask::Raw,
             provider_id: "local/onnx".to_string(),
-            model_id: "dragonscale-ai/kniv-distilroberta-nlp-en".to_string(),
+            model_id: "dragonscale-ai/kniv-deberta-v3-nlp-en".to_string(),
             revision: None,
             warmup: WarmupPolicy::Lazy,
             required: false,

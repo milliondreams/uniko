@@ -5,3 +5,4 @@ target/
 *.swo
 .DS_Store
 proptest-regressions/
+*.uni_cache*

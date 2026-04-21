@@ -10,6 +10,7 @@ members = [
     "crates/uniko-fs",
     "crates/uniko-shell",
     "crates/uniko-mcp",
+    "crates/uniko-bench",
     "bindings/uniko-py",
 ]
 
@@ -81,6 +82,12 @@ tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 
 # Python binding
 pyo3 = { version = "0.23", features = ["extension-module"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# NLP evaluation
+rust-stemmers = "1"
 
 # Text processing
 regex = "1"

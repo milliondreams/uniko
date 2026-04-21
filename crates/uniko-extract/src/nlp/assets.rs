@@ -66,12 +66,12 @@ mod tests {
     #[test]
     fn label_maps_parse_correctly() {
         let maps = label_maps();
-        assert_eq!(maps.ner_labels.len(), 9);
+        assert_eq!(maps.ner_labels.len(), 37);
         assert_eq!(maps.pos_labels.len(), 17);
-        assert_eq!(maps.cls_labels.len(), 7);
+        assert_eq!(maps.cls_labels.len(), 9);
         assert!(maps.dep_labels.len() > 1000);
         assert_eq!(maps.ner_labels[0], "O");
-        assert_eq!(maps.cls_labels[0], "statement");
+        assert_eq!(maps.cls_labels[0], "inform");
     }
 
     #[test]

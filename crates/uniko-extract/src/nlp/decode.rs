@@ -64,12 +64,11 @@ pub fn align_to_words(subword_preds: &[usize], word_ids: &[Option<u32>]) -> Vec<
     let mut last_word_id: Option<u32> = None;
 
     for (&pred, &wid) in subword_preds.iter().zip(word_ids.iter()) {
-        if let Some(w) = wid {
-            if last_word_id != Some(w) {
-                result.push(pred);
-                last_word_id = Some(w);
-            }
-            // Subsequent subwords of the same word are ignored.
+        if let Some(w) = wid
+            && last_word_id != Some(w)
+        {
+            result.push(pred);
+            last_word_id = Some(w);
         }
         // None = special token ([CLS], [SEP], padding) — skip.
     }
@@ -80,15 +79,19 @@ pub fn align_to_words(subword_preds: &[usize], word_ids: &[Option<u32>]) -> Vec<
 /// Extract aligned word strings from the tokenizer encoding.
 ///
 /// Groups subword tokens by word_id and joins them, stripping the
-/// leading `\u{0120}` (Ġ) that RoBERTa uses for word-initial tokens.
+/// leading space markers used by different tokenizers:
+/// - RoBERTa: `\u{0120}` (Ġ)
+/// - DeBERTa/SentencePiece: `\u{2581}` (▁)
 pub fn extract_words(tokens: &[String], word_ids: &[Option<u32>]) -> Vec<String> {
     let mut words: Vec<String> = Vec::new();
     let mut last_word_id: Option<u32> = None;
 
     for (token, &wid) in tokens.iter().zip(word_ids.iter()) {
         if let Some(w) = wid {
-            // Strip RoBERTa's leading Ġ (space marker, U+0120).
-            let clean = token.trim_start_matches('\u{0120}');
+            // Strip space markers from both RoBERTa (Ġ) and DeBERTa (▁).
+            let clean = token
+                .trim_start_matches('\u{0120}')
+                .trim_start_matches('\u{2581}');
             if last_word_id == Some(w) {
                 // Continuation subword — append to current word.
                 if let Some(word) = words.last_mut() {
@@ -175,9 +178,21 @@ fn build_span(words: &[String], start: usize, end: usize, entity_type: NerEntity
 
 fn parse_ner_type(suffix: &str) -> NerEntityType {
     match suffix {
+        // CoNLL scheme (distilroberta model)
         "PER" => NerEntityType::Person,
+        // OntoNotes scheme (deberta model)
+        "PERSON" => NerEntityType::Person,
         "ORG" => NerEntityType::Organization,
+        "GPE" => NerEntityType::Location, // geopolitical entity → location
         "LOC" => NerEntityType::Location,
+        "FAC" => NerEntityType::Location, // facility → location
+        "DATE" | "TIME" => NerEntityType::Date,
+        "MONEY" | "PERCENT" | "QUANTITY" | "CARDINAL" | "ORDINAL" => NerEntityType::Numeric,
+        "EVENT" => NerEntityType::Event,
+        "PRODUCT" => NerEntityType::Product,
+        "WORK_OF_ART" => NerEntityType::WorkOfArt,
+        "NORP" => NerEntityType::Group, // nationality/religious/political group
+        "LAW" | "LANGUAGE" => NerEntityType::Misc,
         _ => NerEntityType::Misc,
     }
 }
@@ -199,9 +214,9 @@ pub fn decode_dep_tree(
     let n = dep_indices.len();
     let mut arcs = Vec::with_capacity(n);
 
-    for i in 0..n {
+    for (i, &dep_idx) in dep_indices.iter().enumerate() {
         let label = dep_labels
-            .get(dep_indices[i])
+            .get(dep_idx)
             .map(String::as_str)
             .unwrap_or("0@root@ROOT");
 
@@ -248,6 +263,10 @@ pub fn decode_dep_tree(
 /// `token_idx`, counting tokens whose POS label matches `target_pos`.
 /// Returns the absolute index when the count reaches `|offset|`, or
 /// `usize::MAX` if the boundary is reached first.
+#[expect(
+    clippy::needless_range_loop,
+    reason = "positional scanning with early return is clearer than enumerate+skip"
+)]
 fn resolve_offset(
     token_idx: usize,
     offset: i32,

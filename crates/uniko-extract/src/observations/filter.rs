@@ -139,7 +139,13 @@ fn is_too_short(text: &str) -> bool {
 /// contain factual content worth extracting observations from.
 /// Returns `false` for Question, Greeting, Filler, Acknowledgment.
 pub fn is_informative_by_cls(cls_label: &str) -> bool {
-    matches!(cls_label, "statement" | "question_fact" | "command")
+    matches!(
+        cls_label,
+        // DistilRoBERTa labels
+        "statement" | "question_fact" | "command"
+        // DeBERTa labels
+        | "inform" | "correction" | "plan_commit" | "request"
+    )
 }
 
 #[cfg(test)]

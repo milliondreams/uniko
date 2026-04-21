@@ -16,9 +16,6 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use uniko_store::schema::constants::{edges, labels};
-use uniko_store::search::SearchResult;
-use uniko_store::storage::edges::Direction;
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -106,15 +103,14 @@ impl Default for RecallConfig {
         Self {
             limit: 15,
             token_budget: 8192,
-            min_score: 0.1,
+            // RRF scores are naturally low: 1/(k+rank) with k=60.
+            // A result in 3 lists scores ~0.05 * tier_weight.
+            min_score: 0.001,
         }
     }
 }
 
 // ── RRF constant ────────────────────────────────────────────────────
-
-/// Reciprocal Rank Fusion dampening constant.
-const RRF_K: f64 = 60.0;
 
 /// Estimated tokens per recall item.
 const TOKENS_PER_ITEM: usize = 50;
@@ -141,146 +137,111 @@ pub async fn recall(
     }
 
     let intent = build_intent(kb, query).await?;
-    let mut all_results: Vec<(SearchResult, usize)> = Vec::new(); // (result, list_index)
-    let mut list_count = 0usize;
+    tracing::debug!(
+        intent_vec_len = intent.intent_vec.len(),
+        entity_refs = ?intent.entity_refs,
+        "recall intent built",
+    );
 
-    // ── Fulltext BM25 searches ──────────────────────────────────
-    let ft_targets = [
-        ("Message", "content", 20usize),
-        ("Chunk", "text", 20),
-        ("Observation", "content", 10),
+    let session = kb.db().session();
+    let mut scored: HashMap<NodeId, (String, String, f64)> = HashMap::new(); // (label, content, combined_score)
+
+    // ── Hybrid similar_to: vector + fulltext per node type ─────
+    // For node types with both embedding and fulltext indexes,
+    // combine both scores so items matching on both signals rank highest.
+
+    let has_vec = !intent.intent_vec.is_empty();
+
+    // (label, embed_field, fts_field, content_field)
+    let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str)] = &[
+        ("Message", Some("embedding"), Some("content"), "content"),
+        ("Chunk", Some("embedding"), Some("text"), "text"),
+        ("Observation", Some("embedding"), Some("content"), "content"),
     ];
-    for (label, field, top_k) in ft_targets {
-        match kb.fulltext_search(query, label, field, top_k).await {
-            Ok(results) => {
-                for r in results {
-                    all_results.push((r, list_count));
+
+    for &(label, embed_field, fts_field, content_field) in hybrid_targets {
+        // Build the multi-source similar_to with proper RRF fusion.
+        // similar_to([sources], [queries]) handles normalization and fusion.
+        let (sources, queries, params_needed) = match (embed_field.filter(|_| has_vec), fts_field) {
+            (Some(ef), Some(ff)) => (
+                format!("[m.{ef}, m.{ff}]"),
+                "[$qvec, $qtxt]".to_string(),
+                (true, true),
+            ),
+            (Some(ef), None) => (format!("m.{ef}"), "$qvec".to_string(), (true, false)),
+            (None, Some(ff)) => (format!("m.{ff}"), "$qtxt".to_string(), (false, true)),
+            (None, None) => continue,
+        };
+
+        let cypher = format!(
+            "MATCH (m:{label}) \
+             RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                    m.{content_field} AS content, \
+                    similar_to({sources}, {queries}) AS score \
+             ORDER BY score DESC LIMIT $lim"
+        );
+
+        let mut builder = session.query_with(&cypher);
+        builder = builder.param("lim", config.limit as i64);
+        if params_needed.0 {
+            builder = builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
+        }
+        if params_needed.1 {
+            builder = builder.param("qtxt", query);
+        }
+
+        match builder.fetch_all().await {
+            Ok(result) => {
+                for row in result.rows() {
+                    let nid: i64 = row.get("nid").unwrap_or(0);
+                    let lbl: String = row.get("lbl").unwrap_or_default();
+                    let content: String = row.get("content").unwrap_or_default();
+                    let score: f64 = row.get("score").unwrap_or(0.0);
+                    scored
+                        .entry(nid)
+                        .and_modify(|(_, _, s)| *s = s.max(score))
+                        .or_insert((lbl, content, score));
                 }
-                list_count += 1;
             }
-            Err(e) => tracing::debug!(label, error = %e, "fulltext search failed"),
+            Err(e) => tracing::debug!(label, error = %e, "hybrid similar_to failed"),
         }
     }
 
-    // ── Vector searches (only if embedding available) ───────────
-    if !intent.intent_vec.is_empty() {
-        let vec_targets = [
-            ("Message", "embedding", 10usize),
-            ("Chunk", "embedding", 10),
-            ("Observation", "embedding", 10),
-            ("Entity", "embedding", 10),
-        ];
-        for (label, field, top_k) in vec_targets {
-            match kb
-                .vector_search(&intent.intent_vec, label, field, top_k, None)
-                .await
-            {
-                Ok(results) => {
-                    for r in results {
-                        all_results.push((r, list_count));
-                    }
-                    list_count += 1;
-                }
-                Err(e) => tracing::debug!(label, error = %e, "vector search failed"),
-            }
-        }
-    }
+    // Entity-scoped search disabled pending uni-db#41 (pattern matching
+    // in WHERE is ~95x slower than unscoped). Entity refs are available
+    // in intent.entity_refs for future use when the performance issue
+    // is resolved.
+    let _ = &intent.entity_refs;
 
-    // ── Graph traversal (entity MENTIONS) ───────────────────────
-    for entity_name in &intent.entity_refs {
-        if let Ok(Some((entity_nid, _))) = kb
-            .get_node_by_ext_id(labels::ENTITY, "name", entity_name)
-            .await
-        {
-            // Follow MENTIONS edges to find connected Messages/Chunks.
-            if let Ok(mention_edges) = kb
-                .get_edges(entity_nid, edges::MENTIONS, Direction::Incoming)
-                .await
-            {
-                for edge in mention_edges {
-                    if let Ok(Some((label, props))) = kb.get_node(edge.from).await {
-                        all_results.push((
-                            SearchResult {
-                                node_id: edge.from,
-                                node_type: label,
-                                score: 0.5, // Graph traversal base score.
-                                properties: props,
-                            },
-                            list_count,
-                        ));
-                    }
-                }
-                list_count += 1;
-            }
-        }
-    }
+    tracing::debug!(candidates = scored.len(), "recall candidates");
 
-    if all_results.is_empty() {
+    if scored.is_empty() {
         return Ok(empty_bundle());
     }
 
-    // ── RRF fusion ──────────────────────────────────────────────
-    // Group results by list and assign ranks.
-    let mut ranked_lists: HashMap<usize, Vec<(NodeId, usize)>> = HashMap::new();
-    let mut node_info: HashMap<NodeId, (String, String, String)> = HashMap::new(); // (node_type, content, label)
-
-    for (result, list_idx) in &all_results {
-        let rank = ranked_lists.get(list_idx).map_or(0, |v| v.len());
-        ranked_lists
-            .entry(*list_idx)
-            .or_default()
-            .push((result.node_id, rank));
-
-        node_info.entry(result.node_id).or_insert_with(|| {
-            let content = result
-                .properties
-                .get("content")
-                .or_else(|| result.properties.get("text"))
-                .or_else(|| result.properties.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            (result.node_type.clone(), content, result.node_type.clone())
-        });
-    }
-
-    // Compute RRF scores.
-    let mut rrf_scores: HashMap<NodeId, f64> = HashMap::new();
-    for entries in ranked_lists.values() {
-        for &(nid, rank) in entries {
-            *rrf_scores.entry(nid).or_insert(0.0) += 1.0 / (RRF_K + (rank + 1) as f64);
-        }
-    }
-
-    // Apply tier weights and build items.
-    let mut items: Vec<RecallItem> = rrf_scores
+    // ── Build items with tier weights ──────────────────────────
+    let mut items: Vec<RecallItem> = scored
         .into_iter()
-        .filter_map(|(nid, rrf)| {
-            let (node_type, content, _) = node_info.get(&nid)?;
-            let tier = RecallTier::from_label(node_type);
-            let score = rrf * tier.weight();
-            if score < config.min_score {
-                return None;
-            }
-            Some(RecallItem {
+        .filter(|(_, (_, content, _))| !content.is_empty())
+        .map(|(nid, (label, content, score))| {
+            let tier = RecallTier::from_label(&label);
+            RecallItem {
                 node_id: nid,
-                node_type: node_type.clone(),
-                score,
-                content: content.clone(),
+                node_type: label,
+                score: score * tier.weight(),
+                content,
                 tier,
-            })
+            }
         })
         .collect();
 
-    // Sort by score descending.
     items.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-
-    // Truncate to limit and token budget.
     items.truncate(config.limit);
+
     let mut total_tokens = 0;
     let mut final_items = Vec::new();
     for item in items {

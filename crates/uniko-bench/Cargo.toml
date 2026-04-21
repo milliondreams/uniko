@@ -1,0 +1,28 @@
+[package]
+name = "uniko-bench"
+description = "LoCoMo benchmark harness for uniko cognitive memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "uniko-bench"
+path = "src/main.rs"
+
+[dependencies]
+uniko-memory = { workspace = true, features = ["onnx"] }
+uniko-extract = { workspace = true, features = ["onnx"] }
+uniko-pipes = { workspace = true }
+uniko-store = { workspace = true }
+uni-db = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+rust-stemmers = { workspace = true }
+regex = { workspace = true }

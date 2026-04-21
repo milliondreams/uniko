@@ -34,7 +34,13 @@ pub fn entities_from_nlp_result(
                 NerEntityType::Person => EntityType::Person,
                 NerEntityType::Organization => EntityType::Organization,
                 NerEntityType::Location => EntityType::Location,
-                NerEntityType::Misc => EntityType::Other,
+                NerEntityType::Date => EntityType::Date,
+                NerEntityType::Numeric => EntityType::Measurement,
+                NerEntityType::Event
+                | NerEntityType::Product
+                | NerEntityType::WorkOfArt
+                | NerEntityType::Group
+                | NerEntityType::Misc => EntityType::Other,
             };
 
             // Find byte offsets in source text.
