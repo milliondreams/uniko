@@ -85,6 +85,10 @@ struct Cli {
     /// Path to schema JSON file.
     #[arg(long)]
     schema: Option<PathBuf>,
+
+    /// Override embedding dimensions (default 768 for Nomic, use 384 for MiniLM).
+    #[arg(long)]
+    embedding_dim: Option<usize>,
 }
 
 #[tokio::main]
@@ -123,10 +127,15 @@ async fn main() -> Result<()> {
         .as_ref()
         .map(|c| c.split(',').filter_map(|s| s.trim().parse().ok()).collect());
 
-    // Build config with optional catalog/schema paths.
-    let mut config = uniko_store::config::UnikoConfig::default();
-    config.catalog_path = cli.catalog.clone();
-    config.schema_path = cli.schema.clone();
+    // Build config with optional catalog/schema/embedding overrides.
+    let mut config = uniko_store::config::UnikoConfig {
+        catalog_path: cli.catalog.clone(),
+        schema_path: cli.schema.clone(),
+        ..Default::default()
+    };
+    if let Some(dim) = cli.embedding_dim {
+        config.embedding.dimensions = dim;
+    }
 
     // Build extra catalog for LLM.
     let extra_catalog = build_llm_catalog(&cli);

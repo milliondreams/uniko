@@ -33,13 +33,15 @@ pub struct IntentProfile {
 /// Returns [`UnikoError::Embedding`] if the embedding runtime is
 /// unavailable.
 pub async fn build_intent(kb: &KnowledgeBase, query: &str) -> Result<IntentProfile, UnikoError> {
-    // Embed the full query.
-    let intent_vec = uniko_extract::embedding::embed_text(kb, query)
+    // Extract entities and keywords via NLP first.
+    let (entity_refs, keywords) = analyze_query(kb, query).await;
+
+    // Embed the keywords (not the raw question) — keyword-stripped text
+    // embeds closer to statement-form content in the index.
+    let embed_text = if keywords != query { &keywords } else { query };
+    let intent_vec = uniko_extract::embedding::embed_text(kb, embed_text)
         .await
         .unwrap_or_default();
-
-    // Extract entities and keywords via NLP.
-    let (entity_refs, keywords) = analyze_query(kb, query).await;
 
     let facet_count = entity_refs.len().max(1);
 
