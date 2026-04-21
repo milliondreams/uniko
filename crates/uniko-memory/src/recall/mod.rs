@@ -207,11 +207,56 @@ pub async fn recall(
         }
     }
 
-    // Entity-scoped search disabled pending uni-db#41 (pattern matching
-    // in WHERE is ~95x slower than unscoped). Entity refs are available
-    // in intent.entity_refs for future use when the performance issue
-    // is resolved.
-    let _ = &intent.entity_refs;
+    // ── Entity-scoped search ─────────────────────────────────────
+    // For each entity in the query, find messages connected via
+    // SENT_BY, ADDRESSED_TO, or MENTIONS, then rank by similar_to
+    // within that scoped set.
+    for entity_name in &intent.entity_refs {
+        let cypher = if has_vec {
+            "MATCH (m:Message) \
+             WHERE (m)-[:SENT_BY]->(:Participant {name: $ename}) \
+                OR (m)-[:ADDRESSED_TO]->(:Participant {name: $ename}) \
+                OR (m)-[:MENTIONS]->(:Entity {name: $ename}) \
+             RETURN id(m) AS nid, labels(m)[0] AS lbl, m.content AS content, \
+                    similar_to([m.embedding, m.content], [$qvec, $qtxt]) AS score \
+             ORDER BY score DESC LIMIT $lim"
+        } else {
+            "MATCH (m:Message) \
+             WHERE (m)-[:SENT_BY]->(:Participant {name: $ename}) \
+                OR (m)-[:ADDRESSED_TO]->(:Participant {name: $ename}) \
+                OR (m)-[:MENTIONS]->(:Entity {name: $ename}) \
+             RETURN id(m) AS nid, labels(m)[0] AS lbl, m.content AS content, \
+                    similar_to(m.content, $qtxt) AS score \
+             ORDER BY score DESC LIMIT $lim"
+        };
+
+        let mut builder = session.query_with(cypher);
+        builder = builder
+            .param("ename", entity_name.as_str())
+            .param("qtxt", intent.keywords.as_str())
+            .param("lim", config.limit as i64);
+        if has_vec {
+            builder = builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
+        }
+
+        match builder.fetch_all().await {
+            Ok(result) => {
+                for row in result.rows() {
+                    let nid: i64 = row.get("nid").unwrap_or(0);
+                    let lbl: String = row.get("lbl").unwrap_or_default();
+                    let content: String = row.get("content").unwrap_or_default();
+                    let score: f64 = row.get("score").unwrap_or(0.0);
+                    scored
+                        .entry(nid)
+                        .and_modify(|(_, _, s)| *s = s.max(score))
+                        .or_insert((lbl, content, score));
+                }
+            }
+            Err(e) => {
+                tracing::debug!(entity = entity_name, error = %e, "entity-scoped search failed")
+            }
+        }
+    }
 
     tracing::debug!(candidates = scored.len(), "recall candidates");
 
