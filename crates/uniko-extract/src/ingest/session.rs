@@ -63,6 +63,7 @@ pub(crate) async fn ensure_participant(
     timestamp: &str,
 ) -> uniko_store::Result<NodeId> {
     let mut props = HashMap::new();
+    props.insert("name".into(), Value::String(participant_id.to_string()));
     props.insert("kind".into(), Value::String("unknown".to_string()));
     props.insert("last_seen".into(), Value::String(timestamp.to_string()));
     kb.merge_node("Participant", "participant_id", participant_id, &props)
