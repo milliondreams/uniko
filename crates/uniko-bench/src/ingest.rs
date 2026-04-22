@@ -143,6 +143,18 @@ pub async fn ingest_conversation(
                 .await
                 .with_context(|| format!("chunking session {}", session.session_id))?;
         total_session_chunks += chunk_ids.len();
+
+        // Aggregate per-message observations into searchable session-level chunks.
+        let obs_chunk_ids =
+            uniko_extract::ingest::session_chunk::chunk_session_observations(
+                &kb,
+                &session.session_id,
+            )
+            .await
+            .with_context(|| {
+                format!("chunking session observations {}", session.session_id)
+            })?;
+        total_session_chunks += obs_chunk_ids.len();
     }
 
     tracing::info!(

@@ -153,10 +153,12 @@ pub async fn recall(
     let has_vec = !intent.intent_vec.is_empty();
 
     // (label, embed_field, fts_field, content_field)
+    // Observation nodes are trace-only (no indexes); session-level
+    // observation Chunks (chunk_type="observation") are searchable
+    // via the Chunk target below.
     let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str)] = &[
         ("Message", Some("embedding"), Some("content"), "content"),
         ("Chunk", Some("embedding"), Some("text"), "text"),
-        ("Observation", Some("embedding"), Some("content"), "content"),
     ];
 
     for &(label, embed_field, fts_field, content_field) in hybrid_targets {
@@ -169,7 +171,7 @@ pub async fn recall(
                 (Some(ef), Some(ff)) => (
                     format!("[m.{ef}, m.{ff}]"),
                     "[$qvec, $qtxt]".to_string(),
-                    ", {method: 'weighted', weights: [0.2, 0.8]}".to_string(),
+                    ", {method: 'weighted', weights: [0.5, 0.5]}".to_string(),
                     (true, true),
                 ),
                 (Some(ef), None) => (
@@ -222,52 +224,84 @@ pub async fn recall(
     }
 
     // ── Entity-scoped search ─────────────────────────────────────
-    // For each entity in the query, find messages connected via
-    // SENT_BY, ADDRESSED_TO, or MENTIONS, then rank by similar_to
-    // within that scoped set.
+    // For each entity in the query, find Messages, session Chunks,
+    // and observation Chunks connected to that entity, then rank
+    // by similar_to within the scoped set.
+
+    // (label, content_field, embed_field, entity_pattern)
+    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
+        // Messages: sent by, addressed to, or mentioning the entity.
+        (
+            "Message",
+            "content",
+            "embedding",
+            "(m)-[:SENT_BY]->(:Participant {name: $ename}) \
+                OR (m)-[:ADDRESSED_TO]->(:Participant {name: $ename}) \
+                OR (m)-[:MENTIONS]->(:Entity {name: $ename})",
+        ),
+        // Chunks: in sessions where the entity participated (covers
+        // both session transcript chunks and observation chunks).
+        (
+            "Chunk",
+            "text",
+            "embedding",
+            "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
+        ),
+    ];
+
     for entity_name in &intent.entity_refs {
-        let cypher = if has_vec {
-            "MATCH (m:Message) \
-             WHERE (m)-[:SENT_BY]->(:Participant {name: $ename}) \
-                OR (m)-[:ADDRESSED_TO]->(:Participant {name: $ename}) \
-                OR (m)-[:MENTIONS]->(:Entity {name: $ename}) \
-             RETURN id(m) AS nid, labels(m)[0] AS lbl, m.content AS content, \
-                    similar_to([m.embedding, m.content], [$qvec, $qtxt]) AS score \
-             ORDER BY score DESC LIMIT $lim"
-        } else {
-            "MATCH (m:Message) \
-             WHERE (m)-[:SENT_BY]->(:Participant {name: $ename}) \
-                OR (m)-[:ADDRESSED_TO]->(:Participant {name: $ename}) \
-                OR (m)-[:MENTIONS]->(:Entity {name: $ename}) \
-             RETURN id(m) AS nid, labels(m)[0] AS lbl, m.content AS content, \
-                    similar_to(m.content, $qtxt) AS score \
-             ORDER BY score DESC LIMIT $lim"
-        };
+        for &(label, content_field, embed_field, pattern) in entity_scoped_targets {
+            let cypher = if has_vec {
+                format!(
+                    "MATCH (m:{label}) \
+                     WHERE {pattern} \
+                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                            m.{content_field} AS content, \
+                            similar_to([m.{embed_field}, m.{content_field}], [$qvec, $qtxt]) AS score \
+                     ORDER BY score DESC LIMIT $lim"
+                )
+            } else {
+                format!(
+                    "MATCH (m:{label}) \
+                     WHERE {pattern} \
+                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                            m.{content_field} AS content, \
+                            similar_to(m.{content_field}, $qtxt) AS score \
+                     ORDER BY score DESC LIMIT $lim"
+                )
+            };
 
-        let mut builder = session.query_with(cypher);
-        builder = builder
-            .param("ename", entity_name.as_str())
-            .param("qtxt", intent.keywords.as_str())
-            .param("lim", config.limit as i64);
-        if has_vec {
-            builder = builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
-        }
-
-        match builder.fetch_all().await {
-            Ok(result) => {
-                for row in result.rows() {
-                    let nid: i64 = row.get("nid").unwrap_or(0);
-                    let lbl: String = row.get("lbl").unwrap_or_default();
-                    let content: String = row.get("content").unwrap_or_default();
-                    let score: f64 = row.get("score").unwrap_or(0.0);
-                    scored
-                        .entry(nid)
-                        .and_modify(|(_, _, s)| *s = s.max(score))
-                        .or_insert((lbl, content, score));
-                }
+            let mut builder = session.query_with(&cypher);
+            builder = builder
+                .param("ename", entity_name.as_str())
+                .param("qtxt", intent.keywords.as_str())
+                .param("lim", config.limit as i64);
+            if has_vec {
+                builder =
+                    builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
             }
-            Err(e) => {
-                tracing::debug!(entity = entity_name, error = %e, "entity-scoped search failed")
+
+            match builder.fetch_all().await {
+                Ok(result) => {
+                    for row in result.rows() {
+                        let nid: i64 = row.get("nid").unwrap_or(0);
+                        let lbl: String = row.get("lbl").unwrap_or_default();
+                        let content: String = row.get("content").unwrap_or_default();
+                        let score: f64 = row.get("score").unwrap_or(0.0);
+                        scored
+                            .entry(nid)
+                            .and_modify(|(_, _, s)| *s = s.max(score))
+                            .or_insert((lbl, content, score));
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        entity = entity_name,
+                        label,
+                        error = %e,
+                        "entity-scoped search failed"
+                    )
+                }
             }
         }
     }

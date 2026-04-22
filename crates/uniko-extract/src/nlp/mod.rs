@@ -156,6 +156,83 @@ impl NlpPipeline {
             sentence_class,
         })
     }
+
+    /// Analyze text by splitting into sentences first.
+    ///
+    /// Returns one [`NlpResult`] per sentence. Each gets its own CLS
+    /// classification, DEP tree, and NER spans — avoiding the problem
+    /// where a greeting prefix causes the whole message to be classified
+    /// as non-informative.
+    ///
+    /// Sentences shorter than 4 words are filtered out to skip noise
+    /// like "Wow!" or "Yeah!".
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Pipeline`] if any sentence fails analysis.
+    pub async fn analyze_sentences(&self, text: &str) -> Result<Vec<NlpResult>, UnikoError> {
+        let sentences = split_sentences(text);
+        let mut results = Vec::with_capacity(sentences.len());
+        for sentence in &sentences {
+            results.push(self.analyze(sentence).await?);
+        }
+        Ok(results)
+    }
+}
+
+/// Split text into sentences for per-sentence NLP analysis.
+///
+/// Splits on sentence-ending punctuation (`.` `!` `?`) followed by
+/// whitespace or end-of-string. Filters fragments under 4 words.
+/// If no sentences survive filtering, returns the original text
+/// (provided it has >= 4 words).
+fn split_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut start = 0;
+
+    for (byte_pos, ch) in text.char_indices() {
+        if ch != '.' && ch != '!' && ch != '?' {
+            continue;
+        }
+        let end = byte_pos + ch.len_utf8();
+        // Must be followed by whitespace or end-of-string.
+        let at_boundary = end >= text.len()
+            || text[end..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_whitespace());
+        if !at_boundary {
+            continue;
+        }
+
+        let sentence = text[start..end].trim();
+        if sentence.split_whitespace().count() >= 4 {
+            sentences.push(sentence.to_string());
+        }
+        // Advance past punctuation + whitespace.
+        start = end;
+        while start < text.len() {
+            match text[start..].chars().next() {
+                Some(ws) if ws.is_whitespace() => start += ws.len_utf8(),
+                _ => break,
+            }
+        }
+    }
+
+    // Trailing text without terminal punctuation.
+    if start < text.len() {
+        let remainder = text[start..].trim();
+        if remainder.split_whitespace().count() >= 4 {
+            sentences.push(remainder.to_string());
+        }
+    }
+
+    // Fallback: if nothing survived, use the original text.
+    if sentences.is_empty() && text.split_whitespace().count() >= 4 {
+        sentences.push(text.trim().to_string());
+    }
+
+    sentences
 }
 
 /// Extract a 2D f32 tensor from outputs, squeezing the batch dimension.

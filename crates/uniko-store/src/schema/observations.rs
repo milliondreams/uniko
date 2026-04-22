@@ -7,8 +7,11 @@ use crate::config::UnikoConfig;
 
 pub(crate) fn register_labels<'a>(
     builder: SchemaBuilder<'a>,
-    config: &UnikoConfig,
+    _config: &UnikoConfig,
 ) -> SchemaBuilder<'a> {
+    // Observation nodes are trace-only: stored in the graph for debugging
+    // but NOT indexed for search. Session-level observation Chunks
+    // (chunk_type="observation") handle retrieval instead.
     builder
         .label(labels::OBSERVATION)
         .property("observation_id", DataType::String)
@@ -16,20 +19,8 @@ pub(crate) fn register_labels<'a>(
         .property_nullable("subject", DataType::String)
         .property_nullable("observed_at", DataType::DateTime)
         .property_nullable("confidence", DataType::Float64)
-        .property_nullable(
-            "embedding",
-            DataType::Vector {
-                dimensions: config.embedding.dimensions,
-            },
-        )
         .index("observation_id", IndexType::Scalar(ScalarType::Hash))
-        .index("content", IndexType::FullText)
         .index("subject", IndexType::Scalar(ScalarType::Hash))
-        .index("subject", IndexType::FullText)
-        .index(
-            "embedding",
-            IndexType::Vector(super::auto_embed_vector_index("content", config)),
-        )
         .done()
 }
 
@@ -48,10 +39,11 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
             &[labels::EPISODE],
         )
         .done()
-        // ABOUT: multi-source (Observation, Fact → Entity)
+        // ABOUT: multi-source (Observation, Fact, Chunk → Entity)
+        // Chunk included for observation chunks (chunk_type="observation").
         .edge_type(
             edges::ABOUT,
-            &[labels::OBSERVATION, labels::FACT],
+            &[labels::OBSERVATION, labels::FACT, labels::CHUNK],
             &[labels::ENTITY],
         )
         .done()

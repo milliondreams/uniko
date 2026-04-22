@@ -52,77 +52,78 @@ impl uniko_pipes::Step for ObservationExtractionStep {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> Result<StepOutcome, UnikoError> {
+        let step_start = std::time::Instant::now();
+
         // Resolve sender name early — needed for both CLS check and DEP extraction.
         let sender_ref = load_sender_ref(ctx).await;
+        let sender_ms = step_start.elapsed().as_millis();
+
+        #[allow(unused_variables)]
         let sender_name = sender_ref.as_ref().map(|(_, name)| name.as_str());
 
-        // 1. CLS gate: prefer model classification, fall back to rules.
-        let content_type = ctx
-            .metadata
-            .get("content_type")
-            .and_then(|v| v.as_str())
-            .or(Some(ctx.content_type.as_str()));
-
-        let informative = {
-            #[cfg(feature = "onnx")]
-            {
-                if let Some(cls_str) = ctx
-                    .metadata
-                    .get("nlp_result")
-                    .and_then(|v| v.get("sentence_class"))
-                    .and_then(|v| v.as_str())
-                {
-                    crate::nlp::types::SentenceClass::from_label(cls_str).is_informative()
-                } else {
-                    filter::is_informative(&ctx.content, content_type)
-                }
+        // 1. CLS gate.
+        //    When per-sentence NLP results are available (step 3a), CLS
+        //    filtering happens per-sentence inside the extraction loop.
+        //    Otherwise (no ONNX, or NLP unavailable), apply the rule-based
+        //    filter upfront to reject greetings, short filler, etc.
+        let has_nlp = cfg!(feature = "onnx") && ctx.metadata.contains_key("nlp_results");
+        if !has_nlp {
+            let content_type = ctx
+                .metadata
+                .get("content_type")
+                .and_then(|v| v.as_str())
+                .or(Some(ctx.content_type.as_str()));
+            if !filter::is_informative(&ctx.content, content_type) {
+                return Ok(StepOutcome::Skipped {
+                    reason: "content not informative".into(),
+                });
             }
-            #[cfg(not(feature = "onnx"))]
-            {
-                filter::is_informative(&ctx.content, content_type)
-            }
-        };
-
-        if !informative {
-            return Ok(StepOutcome::Skipped {
-                reason: "content not informative".into(),
-            });
         }
 
         // 2. Resolve timestamp.
         let timestamp = resolve_timestamp(ctx);
 
         // 3. Extract observations.
+        let extract_start = std::time::Instant::now();
         let mut all_obs = Vec::new();
+        #[allow(unused_mut)]
         let mut used_model = false;
 
-        // 3a. Model-driven extraction from DEP tree (primary path).
+        // 3a. Model-driven extraction from per-sentence DEP trees.
+        //     Each sentence has its own CLS label — only informative
+        //     sentences produce observations.
         #[cfg(feature = "onnx")]
-        if let Some(nlp_val) = ctx.metadata.get("nlp_result")
-            && let Ok(nlp_result) =
-                serde_json::from_value::<crate::nlp::types::NlpResult>(nlp_val.clone())
+        if let Some(nlp_val) = ctx.metadata.get("nlp_results")
+            && let Ok(nlp_results) =
+                serde_json::from_value::<Vec<crate::nlp::types::NlpResult>>(nlp_val.clone())
         {
             let labels = crate::nlp::assets::label_maps();
             let speaker = sender_name.unwrap_or("unknown");
 
-            let dep_obs = crate::nlp::decode::extract_dep_observations(
-                &nlp_result.words,
-                &nlp_result.pos_indices,
-                &nlp_result.dep_arcs,
-                &labels.pos_labels,
-                speaker,
-            );
+            for nlp_result in &nlp_results {
+                // Per-sentence CLS gate.
+                if !nlp_result.sentence_class.is_informative() {
+                    continue;
+                }
 
-            for obs in dep_obs {
-                all_obs.push(RawObservation {
-                    content: obs.content,
-                    subject: obs.subject,
-                    observed_at: timestamp,
-                    confidence: obs.confidence,
-                });
+                let dep_obs = crate::nlp::decode::extract_dep_observations(
+                    &nlp_result.words,
+                    &nlp_result.pos_indices,
+                    &nlp_result.dep_arcs,
+                    &labels.pos_labels,
+                    speaker,
+                );
+
+                for obs in dep_obs {
+                    all_obs.push(RawObservation {
+                        content: obs.content,
+                        subject: obs.subject,
+                        observed_at: timestamp,
+                        confidence: obs.confidence,
+                    });
+                }
             }
             used_model = true;
-            tracing::debug!(count = all_obs.len(), "dep-tree observations");
         }
 
         // 3b. Rule-based fallback (only when model unavailable).
@@ -131,10 +132,10 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             if !entity_refs.is_empty() {
                 let rule_obs =
                     rules::extract_observations_rule_based(&ctx.content, &entity_refs, timestamp);
-                tracing::debug!(count = rule_obs.len(), "rule-based observations");
                 all_obs.extend(rule_obs);
             }
         }
+        let extract_ms = extract_start.elapsed().as_millis();
 
         if all_obs.is_empty() {
             return Ok(StepOutcome::Skipped {
@@ -143,7 +144,11 @@ impl uniko_pipes::Step for ObservationExtractionStep {
         }
 
         // 4. Create nodes and wire edges.
+        let persist_start = std::time::Instant::now();
         let entity_refs = load_all_entity_refs(ctx, &sender_ref).await;
+        let entity_ref_ms = persist_start.elapsed().as_millis();
+
+        let nodes_start = std::time::Instant::now();
         let mut obs_node_ids = Vec::with_capacity(all_obs.len());
 
         for raw in &all_obs {
@@ -178,6 +183,7 @@ impl uniko_pipes::Step for ObservationExtractionStep {
 
             obs_node_ids.push(obs_nid);
         }
+        let nodes_ms = nodes_start.elapsed().as_millis();
 
         // 5. Populate context for downstream steps.
         ctx.extracted_observations = obs_node_ids.clone();
@@ -185,7 +191,12 @@ impl uniko_pipes::Step for ObservationExtractionStep {
         tracing::info!(
             count = obs_node_ids.len(),
             model = used_model,
-            "observation extraction completed",
+            sender_ms,
+            extract_ms,
+            entity_ref_ms,
+            nodes_ms,
+            total_ms = step_start.elapsed().as_millis(),
+            "observation step",
         );
 
         Ok(StepOutcome::Completed)

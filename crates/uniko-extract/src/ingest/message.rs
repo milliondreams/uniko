@@ -67,13 +67,17 @@ pub async fn ingest_message(
         });
     }
 
+    let ingest_start = std::time::Instant::now();
+
     // 2. Ensure Participant exists.
     let participant_nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
 
     // 3. Ensure Session exists.
-    let session_nid = get_or_create_session(kb, &msg.session_id, &ts).await?;
+    let session_nid = get_or_create_session(kb, &msg.session_id, &msg.timestamp).await?;
+    let setup_ms = ingest_start.elapsed().as_millis();
 
-    // 4. Create Message node.
+    // 4. Create Message node (triggers auto-embed on content).
+    let create_start = std::time::Instant::now();
     let mut props = HashMap::new();
     props.insert("message_id".into(), Value::String(msg.message_id.clone()));
     props.insert("content".into(), Value::String(msg.content.clone()));
@@ -83,27 +87,28 @@ pub async fn ingest_message(
     );
     props.insert("timestamp".into(), ts_value.clone());
     let message_nid = kb.create_node("Message", &props).await?;
+    let create_ms = create_start.elapsed().as_millis();
 
-    // 5. Create SENT_BY edge (Message → Participant).
+    // 5-6. Create edges.
+    let edges_start = std::time::Instant::now();
     let mut sent_by_props = HashMap::new();
     sent_by_props.insert("role".into(), Value::String("user".to_string()));
     kb.create_edge("SENT_BY", message_nid, participant_nid, &sent_by_props)
         .await?;
 
-    // 6. Create IN_SESSION edge (Message → Session).
     kb.create_edge("IN_SESSION", message_nid, session_nid, &HashMap::new())
         .await?;
 
-    // 6a. Create PARTICIPATED_IN edge (Participant → Session) if not exists.
     ensure_participated_in(kb, participant_nid, session_nid).await?;
 
-    // 6b. Create ADDRESSED_TO edges (Message → Participant recipients).
     create_addressed_to_edges(kb, message_nid, msg, participant_nid, session_nid).await?;
 
     // 7. Find previous message in session and create NEXT edge.
     find_and_link_previous(kb, &msg.session_id, &ts_value, message_nid).await?;
+    let edges_ms = edges_start.elapsed().as_millis();
 
     // 8. Chunk long messages.
+    let chunk_start = std::time::Instant::now();
     let chunk_threshold = kb.config().message_chunk_threshold;
     let chunk_node_ids = if count_tokens(&msg.content) > chunk_threshold {
         let chunk_cfg = ChunkConfig::from_uniko_config(kb.config());
@@ -113,6 +118,17 @@ pub async fn ingest_message(
     } else {
         Vec::new()
     };
+    let chunk_ms = chunk_start.elapsed().as_millis();
+
+    tracing::info!(
+        message_id = %msg.message_id,
+        setup_ms,
+        create_ms,
+        edges_ms,
+        chunk_ms,
+        total_ms = ingest_start.elapsed().as_millis(),
+        "message ingest",
+    );
 
     Ok(MessageIngestResult {
         message_node_id: message_nid,

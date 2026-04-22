@@ -418,10 +418,11 @@ pub struct DepObservation {
 
 /// Extract clean declarative observations from DEP tree + speaker.
 ///
-/// For each verb in the sentence, reconstruct `subject verb objects`
-/// from the dependency structure. First-person subjects ("I") are
-/// replaced with the speaker name. Only produces observations for
-/// verbs with at least a subject or object.
+/// For each predicate (VERB or copular ADJ/NOUN with `nsubj`),
+/// reconstruct `subject predicate objects` from the dependency
+/// structure. First-person subjects ("I", "I'm", "we", etc.) are
+/// replaced with the speaker name. Only produces observations with
+/// at least 3 content words.
 pub fn extract_dep_observations(
     words: &[String],
     pos_indices: &[usize],
@@ -432,34 +433,38 @@ pub fn extract_dep_observations(
     let n = words.len();
     let mut observations = Vec::new();
 
-    for verb_idx in 0..n {
+    for pred_idx in 0..n {
         let pos = pos_labels
-            .get(*pos_indices.get(verb_idx).unwrap_or(&0))
+            .get(*pos_indices.get(pred_idx).unwrap_or(&0))
             .map(String::as_str)
             .unwrap_or("");
-        if pos != "VERB" {
+
+        // Accept VERB tokens, and ADJ/NOUN tokens that act as copular
+        // predicates (e.g., "stories were inspiring", "mom has been supportive").
+        let is_verb = pos == "VERB";
+        let is_copular_pred = (pos == "ADJ" || pos == "NOUN")
+            && dep_arcs
+                .iter()
+                .any(|a| a.head == pred_idx && a.relation == "cop");
+
+        if !is_verb && !is_copular_pred {
             continue;
         }
 
         let mut subject: Option<String> = None;
         let mut objects: Vec<String> = Vec::new();
         let mut modifiers: Vec<String> = Vec::new();
+        let mut has_cop = false;
 
         for arc in dep_arcs {
-            if arc.head != verb_idx {
+            if arc.head != pred_idx {
                 continue;
             }
 
             match arc.relation.as_str() {
                 "nsubj" | "nsubj:pass" | "csubj" => {
                     let subj_text = collect_subtree(arc.dependent, words, dep_arcs);
-                    // Replace first-person pronouns with speaker name.
-                    let subj_lower = subj_text.to_lowercase();
-                    if subj_lower == "i" || subj_lower == "we" {
-                        subject = Some(speaker.to_string());
-                    } else {
-                        subject = Some(subj_text);
-                    }
+                    subject = Some(resolve_first_person(&subj_text, speaker));
                 }
                 "obj" | "dobj" | "iobj" => {
                     objects.push(collect_subtree(arc.dependent, words, dep_arcs));
@@ -467,6 +472,7 @@ pub fn extract_dep_observations(
                 "obl" | "advmod" | "xcomp" | "advcl" => {
                     modifiers.push(collect_subtree(arc.dependent, words, dep_arcs));
                 }
+                "cop" => has_cop = true,
                 _ => {}
             }
         }
@@ -477,16 +483,27 @@ pub fn extract_dep_observations(
         }
 
         let subj = subject.unwrap_or_else(|| speaker.to_string());
-        let verb = &words[verb_idx];
+        let pred_word = strip_trailing_punct(&words[pred_idx]);
 
-        let mut content = format!("{subj} {verb}");
+        // Build content: for copular predicates include "is/was" + adjective.
+        let mut content = if is_copular_pred && has_cop {
+            format!("{subj} is {pred_word}")
+        } else {
+            format!("{subj} {pred_word}")
+        };
         for obj in &objects {
             content.push(' ');
-            content.push_str(obj);
+            content.push_str(&strip_trailing_punct(obj));
         }
         for m in &modifiers {
             content.push(' ');
-            content.push_str(m);
+            content.push_str(&strip_trailing_punct(m));
+        }
+
+        // Quality gate: skip observations shorter than 3 content words.
+        let content_words = content.split_whitespace().count();
+        if content_words < 3 {
+            continue;
         }
 
         observations.push(DepObservation {
@@ -497,6 +514,30 @@ pub fn extract_dep_observations(
     }
 
     observations
+}
+
+/// Check if text is a first-person pronoun (including contractions)
+/// and return the speaker name if so.
+fn resolve_first_person(text: &str, speaker: &str) -> String {
+    let lower = text.to_lowercase();
+    // Exact first-person pronouns.
+    if lower == "i" || lower == "we" || lower == "me" || lower == "my" || lower == "myself" {
+        return speaker.to_string();
+    }
+    // First-person contractions: I'm, I've, I'll, I'd, we're, we've, we'll, we'd.
+    if lower.starts_with("i'") || lower.starts_with("i\u{2019}") {
+        return speaker.to_string();
+    }
+    if lower.starts_with("we'") || lower.starts_with("we\u{2019}") {
+        return speaker.to_string();
+    }
+    text.to_string()
+}
+
+/// Strip trailing punctuation from a word or phrase.
+fn strip_trailing_punct(s: &str) -> String {
+    s.trim_end_matches(|c: char| c.is_ascii_punctuation() && c != '\'')
+        .to_string()
 }
 
 /// Map CLS index to sentence class.
