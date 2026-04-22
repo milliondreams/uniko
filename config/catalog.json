@@ -16,7 +16,9 @@
     "required": false,
     "options": {
       "artifact": "model-int8.onnx",
-      "max_batch_size": 16
+      "max_batch_size": 16,
+      "graph_optimization_level": "all",
+      "intra_op_num_threads": 4
     }
   }
 ]

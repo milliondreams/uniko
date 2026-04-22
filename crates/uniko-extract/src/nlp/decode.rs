@@ -405,6 +405,100 @@ fn collect_subtree(root_idx: usize, words: &[String], dep_arcs: &[DepArc]) -> St
         .join(" ")
 }
 
+/// A clean declarative observation reconstructed from the DEP tree.
+#[derive(Debug, Clone)]
+pub struct DepObservation {
+    /// Clean declarative sentence (e.g., "Jon got a temp job").
+    pub content: String,
+    /// Subject of the observation (speaker name for first-person).
+    pub subject: String,
+    /// Confidence score.
+    pub confidence: f64,
+}
+
+/// Extract clean declarative observations from DEP tree + speaker.
+///
+/// For each verb in the sentence, reconstruct `subject verb objects`
+/// from the dependency structure. First-person subjects ("I") are
+/// replaced with the speaker name. Only produces observations for
+/// verbs with at least a subject or object.
+pub fn extract_dep_observations(
+    words: &[String],
+    pos_indices: &[usize],
+    dep_arcs: &[DepArc],
+    pos_labels: &[String],
+    speaker: &str,
+) -> Vec<DepObservation> {
+    let n = words.len();
+    let mut observations = Vec::new();
+
+    for verb_idx in 0..n {
+        let pos = pos_labels
+            .get(*pos_indices.get(verb_idx).unwrap_or(&0))
+            .map(String::as_str)
+            .unwrap_or("");
+        if pos != "VERB" {
+            continue;
+        }
+
+        let mut subject: Option<String> = None;
+        let mut objects: Vec<String> = Vec::new();
+        let mut modifiers: Vec<String> = Vec::new();
+
+        for arc in dep_arcs {
+            if arc.head != verb_idx {
+                continue;
+            }
+
+            match arc.relation.as_str() {
+                "nsubj" | "nsubj:pass" | "csubj" => {
+                    let subj_text = collect_subtree(arc.dependent, words, dep_arcs);
+                    // Replace first-person pronouns with speaker name.
+                    let subj_lower = subj_text.to_lowercase();
+                    if subj_lower == "i" || subj_lower == "we" {
+                        subject = Some(speaker.to_string());
+                    } else {
+                        subject = Some(subj_text);
+                    }
+                }
+                "obj" | "dobj" | "iobj" => {
+                    objects.push(collect_subtree(arc.dependent, words, dep_arcs));
+                }
+                "obl" | "advmod" | "xcomp" | "advcl" => {
+                    modifiers.push(collect_subtree(arc.dependent, words, dep_arcs));
+                }
+                _ => {}
+            }
+        }
+
+        // Need at least a subject or object to form an observation.
+        if subject.is_none() && objects.is_empty() {
+            continue;
+        }
+
+        let subj = subject.unwrap_or_else(|| speaker.to_string());
+        let verb = &words[verb_idx];
+
+        let mut content = format!("{subj} {verb}");
+        for obj in &objects {
+            content.push(' ');
+            content.push_str(obj);
+        }
+        for m in &modifiers {
+            content.push(' ');
+            content.push_str(m);
+        }
+
+        observations.push(DepObservation {
+            content,
+            subject: subj.clone(),
+            confidence: 0.85,
+        });
+    }
+
+    observations
+}
+
 /// Map CLS index to sentence class.
 pub fn decode_cls(cls_index: usize, cls_labels: &[String]) -> SentenceClass {
     cls_labels

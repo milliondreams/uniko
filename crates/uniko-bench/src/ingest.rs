@@ -86,10 +86,14 @@ pub async fn ingest_conversation(
                 metadata: HashMap::new(),
             };
 
+            let turn_start = std::time::Instant::now();
+
             // Ingest the message (creates node, edges, chunks).
             let result = ingest_message(&kb, &msg)
                 .await
                 .with_context(|| format!("ingesting {}", turn.dia_id))?;
+
+            let ingest_ms = turn_start.elapsed().as_millis();
 
             // Run entity extraction on the message node.
             let mut ctx = PipelineContext::new(
@@ -105,14 +109,32 @@ pub async fn ingest_conversation(
                 serde_json::Value::String(timestamp.to_rfc3339()),
             );
 
+            let ner_start = std::time::Instant::now();
             let _ = entity_step.execute(&mut ctx).await;
+            let ner_ms = ner_start.elapsed().as_millis();
             total_entities += ctx.extracted_entities.len();
 
             // Run observation extraction on the same context.
+            let obs_start = std::time::Instant::now();
             let _ = obs_step.execute(&mut ctx).await;
+            let obs_ms = obs_start.elapsed().as_millis();
             total_observations += ctx.extracted_observations.len();
 
             total_turns += 1;
+
+            // Progress every 20 turns or on first turn.
+            if total_turns == 1 || total_turns % 20 == 0 {
+                tracing::info!(
+                    turn = total_turns,
+                    dia_id = %turn.dia_id,
+                    ingest_ms,
+                    ner_ms,
+                    obs_ms,
+                    entities = ctx.extracted_entities.len(),
+                    observations = ctx.extracted_observations.len(),
+                    "turn processed",
+                );
+            }
         }
 
         // Chunk the session for retrieval (concatenates turns with speaker prefixes).
