@@ -115,10 +115,47 @@ mod onnx_dump {
         let mut total_informative = 0usize;
         let mut total_filtered = 0usize;
         let mut total_observations = 0usize;
+        let mut total_pronoun_resolved = 0usize;
+
+        // Track SentenceContext per session for pronoun resolution.
+        let mut current_session = String::new();
+        let mut sent_ctx = SentenceContext::default();
+
+        // Build speaker lists for "you" resolution.
+        let all_speakers: Vec<String> = messages
+            .iter()
+            .map(|(_, s, _, _)| s.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
 
         for (msg_idx, (dia_id, speaker, session_id, text)) in messages.iter().enumerate() {
+            // Reset context at session boundary.
+            if *session_id != current_session {
+                current_session = session_id.clone();
+                let others: Vec<String> = all_speakers
+                    .iter()
+                    .filter(|s| s.as_str() != speaker.as_str())
+                    .cloned()
+                    .collect();
+                sent_ctx = SentenceContext::new(speaker, others);
+            } else {
+                // Update speaker within session.
+                sent_ctx.speaker = speaker.clone();
+                sent_ctx.other_speakers = all_speakers
+                    .iter()
+                    .filter(|s| s.as_str() != speaker.as_str())
+                    .cloned()
+                    .collect();
+            }
+
             writeln!(out, "========================================================================").unwrap();
             writeln!(out, "[{dia_id}] {session_id} | {speaker}: \"{text}\"").unwrap();
+            writeln!(
+                out,
+                "  context: subj={:?} obj={:?}",
+                sent_ctx.last_noun_subject, sent_ctx.last_noun_object
+            ).unwrap();
             writeln!(out, "------------------------------------------------------------------------").unwrap();
 
             let results = match pipeline.analyze_sentences(text).await {
@@ -193,24 +230,40 @@ mod onnx_dump {
                     writeln!(out, "       NER: {ner_str}").unwrap();
                 }
 
-                // Observations (only for informative sentences)
                 if informative {
+                    // Extract observations with pronoun resolution.
                     let obs = extract_dep_observations(
                         &result.words,
                         &result.pos_indices,
                         &result.dep_arcs,
                         &labels.pos_labels,
                         speaker,
-                    &mut SentenceContext::default(),
+                        &mut sent_ctx,
                     );
                     if obs.is_empty() {
                         writeln!(out, "       OBS: (none)").unwrap();
                     } else {
                         for o in &obs {
                             total_observations += 1;
-                            writeln!(out, "       OBS: [{}] \"{}\"", o.subject, o.content).unwrap();
+                            // Check if subject was resolved from a pronoun.
+                            let resolved = o.subject != *speaker
+                                && !result.words.iter().any(|w| w == &o.subject);
+                            if resolved {
+                                total_pronoun_resolved += 1;
+                            }
+                            let marker = if resolved { " [resolved]" } else { "" };
+                            writeln!(out, "       OBS: [{}]{} \"{}\"", o.subject, marker, o.content).unwrap();
                         }
                     }
+                } else {
+                    // Still update context from skipped sentences.
+                    uniko_extract::nlp::decode::update_sentence_context(
+                        &mut sent_ctx,
+                        &result.words,
+                        &result.pos_indices,
+                        &result.dep_arcs,
+                        &labels.pos_labels,
+                    );
                 }
             }
 
@@ -226,6 +279,7 @@ mod onnx_dump {
         writeln!(out, "  Informative (EXTRACT): {total_informative}").unwrap();
         writeln!(out, "  Filtered (SKIP): {total_filtered}").unwrap();
         writeln!(out, "  Observations: {total_observations}").unwrap();
+        writeln!(out, "  Pronoun resolved: {total_pronoun_resolved}").unwrap();
 
         eprintln!("\nDone. Written to {}", out_path.display());
         eprintln!("  Messages: {}", messages.len());
@@ -233,5 +287,6 @@ mod onnx_dump {
         eprintln!("  Informative: {total_informative}");
         eprintln!("  Filtered: {total_filtered}");
         eprintln!("  Observations: {total_observations}");
+        eprintln!("  Pronoun resolved: {total_pronoun_resolved}");
     }
 }
