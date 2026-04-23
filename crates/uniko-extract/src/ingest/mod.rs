@@ -55,7 +55,13 @@ impl uniko_pipes::Step for IngestStep {
         match ingest_type {
             "message" => {
                 let msg = deserialize_message(&ctx.metadata)?;
-                let result = message::ingest_message(&ctx.kb, &msg, None).await?;
+                // Use SessionContext from metadata if available, else create a fresh one.
+                let mut session_ctx = ctx
+                    .metadata
+                    .get("session_context")
+                    .and_then(|v| serde_json::from_value::<context::SessionContext>(v.clone()).ok())
+                    .unwrap_or_else(|| context::SessionContext::new(msg.session_id.clone(), 0));
+                let result = message::ingest_message(&ctx.kb, &msg, &mut session_ctx).await?;
                 ctx.node_id = result.message_node_id;
                 // Forward chunk IDs to downstream steps (embedding).
                 ctx.metadata.insert(

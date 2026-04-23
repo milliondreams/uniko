@@ -69,7 +69,6 @@ pub async fn ingest_conversation(
 
     for session in sessions {
         let base_ts = parse_session_datetime(&session.date_time);
-        let mut prev_message_nid: Option<i64> = None;
 
         // Create session-level context for pronoun resolution.
         // session_nid is resolved during the first ingest_message call.
@@ -109,15 +108,9 @@ pub async fn ingest_conversation(
             let turn_start = std::time::Instant::now();
 
             // Ingest the message (creates node, edges, chunks).
-            let result = ingest_message(&kb, &msg, prev_message_nid)
+            let result = ingest_message(&kb, &msg, &mut session_ctx)
                 .await
                 .with_context(|| format!("ingesting {}", turn.dia_id))?;
-            prev_message_nid = Some(result.message_node_id);
-
-            // Update session nid on first message.
-            if session_ctx.session_nid == 0 {
-                session_ctx.session_nid = result.session_node_id;
-            }
 
             let ingest_ms = turn_start.elapsed().as_millis();
 

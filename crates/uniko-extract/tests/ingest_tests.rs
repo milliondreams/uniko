@@ -45,7 +45,7 @@ async fn test_ingest_message_creates_node_and_edges() {
     let kb = test_kb().await;
 
     let msg = test_message("m-1", "Hello world", "s-1", "p-1");
-    let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, None)
+    let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0))
         .await
         .unwrap();
 
@@ -88,10 +88,10 @@ async fn test_ingest_message_idempotent() {
     let kb = test_kb().await;
 
     let msg = test_message("m-idem", "Same message", "s-1", "p-1");
-    let r1 = uniko_extract::ingest::message::ingest_message(&kb, &msg, None)
+    let r1 = uniko_extract::ingest::message::ingest_message(&kb, &msg, &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0))
         .await
         .unwrap();
-    let r2 = uniko_extract::ingest::message::ingest_message(&kb, &msg, None)
+    let r2 = uniko_extract::ingest::message::ingest_message(&kb, &msg, &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0))
         .await
         .unwrap();
 
@@ -102,9 +102,9 @@ async fn test_ingest_message_idempotent() {
 async fn test_ingest_message_next_chain() {
     let kb = test_kb().await;
 
-    // Ingest 5 messages with increasing timestamps, passing prev_nid.
+    // Ingest 5 messages with increasing timestamps via SessionContext.
     let mut node_ids = Vec::new();
-    let mut prev_nid: Option<i64> = None;
+    let mut session_ctx = uniko_extract::ingest::context::SessionContext::new("s-chain".into(), 0);
     for i in 0..5 {
         let mut msg = test_message(
             &format!("m-chain-{i}"),
@@ -113,10 +113,9 @@ async fn test_ingest_message_next_chain() {
             "p-1",
         );
         msg.timestamp = Utc::now() + chrono::Duration::milliseconds(i * 100);
-        let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, prev_nid)
+        let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, &mut session_ctx)
             .await
             .unwrap();
-        prev_nid = Some(result.message_node_id);
         node_ids.push(result.message_node_id);
     }
 
@@ -142,7 +141,7 @@ async fn test_ingest_message_long_content_chunked() {
     // Create content exceeding the 1024-token threshold.
     let long_content = "This is a test sentence for chunking purposes. ".repeat(200);
     let msg = test_message("m-long", &long_content, "s-long", "p-1");
-    let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, None)
+    let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0))
         .await
         .unwrap();
 
@@ -168,7 +167,7 @@ async fn test_ingest_message_short_no_chunks() {
     let kb = test_kb().await;
 
     let msg = test_message("m-short", "Short", "s-short", "p-1");
-    let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, None)
+    let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0))
         .await
         .unwrap();
 

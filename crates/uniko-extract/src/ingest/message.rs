@@ -45,7 +45,7 @@ pub struct MessageIngestResult {
 pub async fn ingest_message(
     kb: &KnowledgeBase,
     msg: &IngestMessage,
-    prev_message_nid: Option<NodeId>,
+    session_ctx: &mut super::context::SessionContext,
 ) -> uniko_store::Result<MessageIngestResult> {
     let ts = msg.timestamp.to_rfc3339();
     let ts_value = datetime_value(msg.timestamp);
@@ -55,26 +55,38 @@ pub async fn ingest_message(
         .get_node_by_ext_id("Message", "message_id", &msg.message_id)
         .await?
     {
-        // Find the session for the existing message.
-        let session_id = kb
-            .get_node_by_ext_id("Session", "session_id", &msg.session_id)
-            .await?
-            .map(|(nid, _)| nid)
-            .unwrap_or(0);
         return Ok(MessageIngestResult {
             message_node_id: existing_id,
             chunk_node_ids: Vec::new(),
-            session_node_id: session_id,
+            session_node_id: session_ctx.session_nid,
         });
     }
 
     let ingest_start = std::time::Instant::now();
 
-    // 2. Ensure Participant exists.
-    let participant_nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
+    // 2. Ensure Participant exists (use cache when available).
+    let participant_nid = if let Some(nid) = session_ctx.participant_nid(&msg.sender_id) {
+        if nid != 0 {
+            nid
+        } else {
+            let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
+            session_ctx.register_participant(&msg.sender_id, nid);
+            nid
+        }
+    } else {
+        let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
+        session_ctx.register_participant(&msg.sender_id, nid);
+        nid
+    };
 
-    // 3. Ensure Session exists.
-    let session_nid = get_or_create_session(kb, &msg.session_id, &msg.timestamp).await?;
+    // 3. Ensure Session exists (use cache when available).
+    let session_nid = if session_ctx.session_nid != 0 {
+        session_ctx.session_nid
+    } else {
+        let nid = get_or_create_session(kb, &msg.session_id, &msg.timestamp).await?;
+        session_ctx.session_nid = nid;
+        nid
+    };
     let setup_ms = ingest_start.elapsed().as_millis();
 
     // 4. Create Message node (triggers auto-embed on content).
@@ -105,12 +117,13 @@ pub async fn ingest_message(
     create_addressed_to_edges(kb, message_nid, msg, participant_nid, session_nid).await?;
 
     // 7. Create NEXT edge to link to previous message.
-    if let Some(prev_nid) = prev_message_nid {
+    if let Some(prev_nid) = session_ctx.prev_message_nid {
         let mut edge_props = HashMap::new();
         edge_props.insert("gap_ms".into(), Value::Int(0));
         kb.create_edge("NEXT", prev_nid, message_nid, &edge_props)
             .await?;
     }
+    session_ctx.prev_message_nid = Some(message_nid);
     let edges_ms = edges_start.elapsed().as_millis();
 
     // 8. Chunk long messages.
