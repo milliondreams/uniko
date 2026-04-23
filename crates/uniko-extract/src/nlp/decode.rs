@@ -420,15 +420,19 @@ pub struct DepObservation {
 ///
 /// For each predicate (VERB or copular ADJ/NOUN with `nsubj`),
 /// reconstruct `subject predicate objects` from the dependency
-/// structure. First-person subjects ("I", "I'm", "we", etc.) are
-/// replaced with the speaker name. Only produces observations with
-/// at least 3 content words.
+/// structure. Pronouns are resolved using the session-level
+/// [`SentenceContext`]: first-person → speaker, second-person →
+/// other speaker, third-person → last noun from context.
+///
+/// After extraction, the context is updated with any new noun
+/// phrases found as subjects or objects.
 pub fn extract_dep_observations(
     words: &[String],
     pos_indices: &[usize],
     dep_arcs: &[DepArc],
     pos_labels: &[String],
     speaker: &str,
+    ctx: &mut crate::ingest::context::SentenceContext,
 ) -> Vec<DepObservation> {
     let n = words.len();
     let mut observations = Vec::new();
@@ -463,11 +467,15 @@ pub fn extract_dep_observations(
 
             match arc.relation.as_str() {
                 "nsubj" | "nsubj:pass" | "csubj" => {
-                    let subj_text = collect_subtree(arc.dependent, words, dep_arcs);
-                    subject = Some(resolve_first_person(&subj_text, speaker));
+                    let subj_pos = pos_labels
+                        .get(*pos_indices.get(arc.dependent).unwrap_or(&0))
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let raw_text = collect_noun_phrase(arc.dependent, words, dep_arcs);
+                    subject = Some(resolve_subject(&raw_text, subj_pos, ctx, speaker));
                 }
                 "obj" | "dobj" | "iobj" => {
-                    objects.push(collect_subtree(arc.dependent, words, dep_arcs));
+                    objects.push(collect_noun_phrase(arc.dependent, words, dep_arcs));
                 }
                 "obl" | "advmod" | "xcomp" | "advcl" => {
                     modifiers.push(collect_subtree(arc.dependent, words, dep_arcs));
@@ -513,25 +521,135 @@ pub fn extract_dep_observations(
         });
     }
 
+    // Update context with noun phrases from this sentence.
+    update_sentence_context(ctx, words, pos_indices, dep_arcs, pos_labels);
+
     observations
 }
 
-/// Check if text is a first-person pronoun (including contractions)
-/// and return the speaker name if so.
-fn resolve_first_person(text: &str, speaker: &str) -> String {
+/// Resolve a subject token to a concrete name using the context window.
+///
+/// Priority: first-person → speaker, second-person → other speaker,
+/// third-person pronoun → last noun from context, not a pronoun → as-is.
+fn resolve_subject(
+    text: &str,
+    pos: &str,
+    ctx: &crate::ingest::context::SentenceContext,
+    speaker: &str,
+) -> String {
     let lower = text.to_lowercase();
-    // Exact first-person pronouns.
+
+    // First person → speaker.
     if lower == "i" || lower == "we" || lower == "me" || lower == "my" || lower == "myself" {
         return speaker.to_string();
     }
-    // First-person contractions: I'm, I've, I'll, I'd, we're, we've, we'll, we'd.
     if lower.starts_with("i'") || lower.starts_with("i\u{2019}") {
         return speaker.to_string();
     }
     if lower.starts_with("we'") || lower.starts_with("we\u{2019}") {
         return speaker.to_string();
     }
+
+    // Second person → other speaker.
+    if lower == "you" || lower.starts_with("you'") || lower.starts_with("you\u{2019}")
+        || lower == "your" || lower == "yours" || lower == "yourself"
+    {
+        if let Some(other) = ctx.other_speakers.first() {
+            return other.clone();
+        }
+    }
+
+    // Third person pronoun → last noun from context.
+    if pos == "PRON"
+        && matches!(
+            lower.as_str(),
+            "it" | "it's" | "it'd" | "it'll" | "this" | "that" | "they" | "there"
+        )
+    {
+        if let Some(ref obj) = ctx.last_noun_object {
+            return obj.clone();
+        }
+        if let Some(ref subj) = ctx.last_noun_subject {
+            return subj.clone();
+        }
+        // No context available — skip this observation by returning
+        // the pronoun (will likely be filtered by quality gate or
+        // won't match any entity).
+    }
+
     text.to_string()
+}
+
+/// Collect a clean noun phrase from a dependency subtree.
+///
+/// Only includes content-bearing modifiers: `compound`, `amod`, `flat`,
+/// `nmod:poss`, `det`. Excludes function words and clausal dependents
+/// (`cc`, `punct`, `mark`, `acl`, `advcl`, `conj`) that cause garbled output.
+fn collect_noun_phrase(root_idx: usize, words: &[String], dep_arcs: &[DepArc]) -> String {
+    let mut indices = vec![root_idx];
+    let mut queue = vec![root_idx];
+    while let Some(head) = queue.pop() {
+        for arc in dep_arcs {
+            if arc.head == head && !indices.contains(&arc.dependent) {
+                // Only include content-bearing noun modifiers.
+                match arc.relation.as_str() {
+                    "compound" | "amod" | "flat" | "flat:name" | "nmod:poss" | "det"
+                    | "nummod" => {
+                        indices.push(arc.dependent);
+                        queue.push(arc.dependent);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    indices.sort_unstable();
+    let phrase = indices
+        .iter()
+        .filter_map(|&i| words.get(i))
+        .map(|w| strip_trailing_punct(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    phrase
+}
+
+/// Update the sentence context with noun phrases from a processed sentence.
+///
+/// Scans DEP arcs for NOUN/PROPN tokens in subject and object positions,
+/// recording them as the latest antecedents for pronoun resolution.
+pub fn update_sentence_context(
+    ctx: &mut crate::ingest::context::SentenceContext,
+    words: &[String],
+    pos_indices: &[usize],
+    dep_arcs: &[DepArc],
+    pos_labels: &[String],
+) {
+    for arc in dep_arcs {
+        let dep_pos = pos_labels
+            .get(*pos_indices.get(arc.dependent).unwrap_or(&0))
+            .map(String::as_str)
+            .unwrap_or("");
+
+        // Only update context from content words, not pronouns.
+        if dep_pos != "NOUN" && dep_pos != "PROPN" {
+            continue;
+        }
+
+        let phrase = collect_noun_phrase(arc.dependent, words, dep_arcs);
+        if phrase.is_empty() {
+            continue;
+        }
+
+        match arc.relation.as_str() {
+            "nsubj" | "nsubj:pass" | "csubj" => {
+                ctx.last_noun_subject = Some(phrase);
+            }
+            "obj" | "dobj" | "iobj" => {
+                ctx.last_noun_object = Some(phrase);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Strip trailing punctuation from a word or phrase.

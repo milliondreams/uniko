@@ -14,6 +14,7 @@ mod onnx_dump {
     use uni_db::ModelAliasSpec;
     use uniko_extract::nlp::assets::label_maps;
     use uniko_extract::nlp::decode::extract_dep_observations;
+    use uniko_extract::ingest::context::SentenceContext;
     use uniko_extract::nlp::NlpPipeline;
     use uniko_store::config::UnikoConfig;
     use uniko_store::KnowledgeBase;
@@ -200,6 +201,7 @@ mod onnx_dump {
                         &result.dep_arcs,
                         &labels.pos_labels,
                         speaker,
+                    &mut SentenceContext::default(),
                     );
                     if obs.is_empty() {
                         writeln!(out, "       OBS: (none)").unwrap();

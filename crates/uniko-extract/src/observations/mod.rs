@@ -100,9 +100,31 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             let labels = crate::nlp::assets::label_maps();
             let speaker = sender_name.unwrap_or("unknown");
 
+            // Load or create sentence context for pronoun resolution.
+            let mut sent_ctx = ctx
+                .metadata
+                .get("session_context")
+                .and_then(|v| v.get("sentence_ctx"))
+                .and_then(|v| {
+                    serde_json::from_value::<crate::ingest::context::SentenceContext>(v.clone())
+                        .ok()
+                })
+                .unwrap_or_else(|| {
+                    crate::ingest::context::SentenceContext::new(speaker, Vec::new())
+                });
+
             for nlp_result in &nlp_results {
                 // Per-sentence CLS gate.
                 if !nlp_result.sentence_class.is_informative() {
+                    // Still update context from skipped sentences —
+                    // nouns in greetings can be useful antecedents.
+                    crate::nlp::decode::update_sentence_context(
+                        &mut sent_ctx,
+                        &nlp_result.words,
+                        &nlp_result.pos_indices,
+                        &nlp_result.dep_arcs,
+                        &labels.pos_labels,
+                    );
                     continue;
                 }
 
@@ -112,6 +134,7 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                     &nlp_result.dep_arcs,
                     &labels.pos_labels,
                     speaker,
+                    &mut sent_ctx,
                 );
 
                 for obs in dep_obs {
@@ -123,6 +146,13 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                     });
                 }
             }
+
+            // Write updated sentence context back to metadata for
+            // the caller to persist in SessionContext.
+            if let Ok(val) = serde_json::to_value(&sent_ctx) {
+                ctx.metadata.insert("sentence_ctx_updated".into(), val);
+            }
+
             used_model = true;
         }
 
@@ -195,7 +225,11 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 {
                     continue;
                 }
-                if raw.subject.to_lowercase() == name.to_lowercase() {
+                // Substring match: "dance studio" matches entity "dance studio",
+                // and "studio" matches "dance studio" (or vice versa).
+                let subj = raw.subject.to_lowercase();
+                let ename = name.to_lowercase();
+                if subj == ename || subj.contains(&ename) || ename.contains(&subj) {
                     about_edges.push((obs_nid, entity_nid, HashMap::new()));
                 }
             }

@@ -14,6 +14,7 @@ mod onnx_tests {
     use uni_db::ModelAliasSpec;
     use uniko_extract::nlp::assets::label_maps;
     use uniko_extract::nlp::decode::extract_dep_observations;
+use uniko_extract::ingest::context::SentenceContext;
     use uniko_extract::nlp::NlpPipeline;
     use uniko_extract::nlp::types::NlpResult;
     use uniko_extract::observations::filter::is_informative;
@@ -150,6 +151,7 @@ mod onnx_tests {
             &result.dep_arcs,
             &labels.pos_labels,
             speaker,
+                    &mut SentenceContext::default(),
         );
         if obs.is_empty() {
             eprintln!("  Observations: (none)");
@@ -316,6 +318,7 @@ mod onnx_tests {
                 &result.dep_arcs,
                 &labels.pos_labels,
                 case.speaker,
+                &mut SentenceContext::default(),
             );
 
             // Validate
@@ -579,6 +582,7 @@ mod onnx_tests {
                 &result.dep_arcs,
                 &labels.pos_labels,
                 speaker,
+                    &mut SentenceContext::default(),
             );
 
             eprintln!("\nSpeaker sub: \"{text}\" (speaker={speaker})");
@@ -646,6 +650,7 @@ mod onnx_tests {
                 &result.dep_arcs,
                 &labels.pos_labels,
                 speaker,
+                    &mut SentenceContext::default(),
             );
 
             eprintln!("\nQuality: \"{text}\"");

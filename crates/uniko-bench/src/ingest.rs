@@ -71,10 +71,29 @@ pub async fn ingest_conversation(
         let base_ts = parse_session_datetime(&session.date_time);
         let mut prev_message_nid: Option<i64> = None;
 
+        // Create session-level context for pronoun resolution.
+        // session_nid is resolved during the first ingest_message call.
+        let mut session_ctx = uniko_extract::ingest::context::SessionContext::new(
+            session.session_id.clone(),
+            0, // will be set after first ingest
+        );
+        // Register both participants.
+        session_ctx.register_participant(
+            &sample.conversation.speaker_a,
+            0, // nid resolved later
+        );
+        session_ctx.register_participant(
+            &sample.conversation.speaker_b,
+            0,
+        );
+
         for (turn_idx, turn) in session.turns.iter().enumerate() {
             let timestamp = base_ts + Duration::seconds(turn_idx as i64 * 30);
 
             let other_speaker = other_speaker_name(&turn.speaker, &sample.conversation);
+
+            // Update session context with current speaker.
+            session_ctx.set_current_speaker(&turn.speaker);
 
             let msg = IngestMessage {
                 message_id: format!("{}-{}", sample.sample_id, turn.dia_id),
@@ -95,6 +114,11 @@ pub async fn ingest_conversation(
                 .with_context(|| format!("ingesting {}", turn.dia_id))?;
             prev_message_nid = Some(result.message_node_id);
 
+            // Update session nid on first message.
+            if session_ctx.session_nid == 0 {
+                session_ctx.session_nid = result.session_node_id;
+            }
+
             let ingest_ms = turn_start.elapsed().as_millis();
 
             // Run entity extraction on the message node.
@@ -110,6 +134,10 @@ pub async fn ingest_conversation(
                 "timestamp".into(),
                 serde_json::Value::String(timestamp.to_rfc3339()),
             );
+            // Pass session context for pronoun resolution.
+            if let Ok(val) = serde_json::to_value(&session_ctx) {
+                ctx.metadata.insert("session_context".into(), val);
+            }
 
             let ner_start = std::time::Instant::now();
             let _ = entity_step.execute(&mut ctx).await;
@@ -121,6 +149,16 @@ pub async fn ingest_conversation(
             let _ = obs_step.execute(&mut ctx).await;
             let obs_ms = obs_start.elapsed().as_millis();
             total_observations += ctx.extracted_observations.len();
+
+            // Read back updated sentence context for pronoun resolution.
+            if let Some(updated) = ctx.metadata.get("sentence_ctx_updated") {
+                if let Ok(sent_ctx) = serde_json::from_value::<
+                    uniko_extract::ingest::context::SentenceContext,
+                >(updated.clone())
+                {
+                    session_ctx.sentence_ctx = sent_ctx;
+                }
+            }
 
             total_turns += 1;
 

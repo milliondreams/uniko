@@ -9,6 +9,7 @@ mod onnx_tests {
     use uni_db::ModelAliasSpec;
     use uniko_extract::nlp::assets::label_maps;
     use uniko_extract::nlp::decode::extract_dep_observations;
+use uniko_extract::ingest::context::SentenceContext;
     use uniko_extract::nlp::NlpPipeline;
     use uniko_store::config::UnikoConfig;
     use uniko_store::KnowledgeBase;
@@ -30,7 +31,7 @@ mod onnx_tests {
         NlpPipeline::try_new(&kb).await.expect("pipeline")
     }
 
-    /// (dia_id, speaker, text, question_it_answers)
+    /// (dia_id, speaker, &mut SentenceContext::default(), text, question_it_answers)
     fn evidence_messages() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
         vec![
             ("D1:6", "Jon", "I've been into dancing since I was a kid and it's been my passion and escape. I wanna start a dance studio so I can teach others the joy that dancing brings me.", "How do Jon and Gina both like to destress?"),
@@ -90,6 +91,7 @@ mod onnx_tests {
                         &result.dep_arcs,
                         &labels.pos_labels,
                         speaker,
+                    &mut SentenceContext::default(),
                     );
                     for o in &obs {
                         eprintln!("      → [{}] \"{}\"", o.subject, o.content);

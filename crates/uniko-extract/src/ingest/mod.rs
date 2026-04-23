@@ -9,6 +9,7 @@
 
 pub mod artifact;
 pub mod chunking;
+pub mod context;
 pub mod message;
 pub mod overflow;
 pub mod session;
