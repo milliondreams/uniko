@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use uni_db::ModelAliasSpec;
-use uniko_store::config::UnikoConfig;
 use uniko_store::KnowledgeBase;
+use uniko_store::config::UnikoConfig;
 
 async fn load_kb() -> Arc<KnowledgeBase> {
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -18,9 +18,13 @@ async fn load_kb() -> Arc<KnowledgeBase> {
         ..Default::default()
     };
     Arc::new(
-        KnowledgeBase::open_with_xervo(ws.join("data/kb/conv-30"), config, Vec::<ModelAliasSpec>::new())
-            .await
-            .expect("open KB"),
+        KnowledgeBase::open_with_xervo(
+            ws.join("data/kb/conv-30"),
+            config,
+            Vec::<ModelAliasSpec>::new(),
+        )
+        .await
+        .expect("open KB"),
     )
 }
 
@@ -35,9 +39,13 @@ async fn load_kb_no_schema_json() -> Arc<KnowledgeBase> {
         ..Default::default()
     };
     Arc::new(
-        KnowledgeBase::open_with_xervo(ws.join("data/kb/conv-30"), config, Vec::<ModelAliasSpec>::new())
-            .await
-            .expect("open KB without schema.json"),
+        KnowledgeBase::open_with_xervo(
+            ws.join("data/kb/conv-30"),
+            config,
+            Vec::<ModelAliasSpec>::new(),
+        )
+        .await
+        .expect("open KB without schema.json"),
     )
 }
 
@@ -72,9 +80,19 @@ async fn run_diagnostics(kb: &KnowledgeBase) {
     }
 
     // 2. Count by label
-    for label in &["Session", "Message", "Chunk", "Observation", "Participant", "Entity"] {
+    for label in &[
+        "Session",
+        "Message",
+        "Chunk",
+        "Observation",
+        "Participant",
+        "Entity",
+    ] {
         let q = format!("MATCH (n:{label}) RETURN count(n) AS cnt");
-        let cnt: i64 = s.query_with(&q).fetch_all().await
+        let cnt: i64 = s
+            .query_with(&q)
+            .fetch_all()
+            .await
             .ok()
             .and_then(|r| r.rows().first().and_then(|row| row.get("cnt").ok()))
             .unwrap_or(-1);
@@ -84,7 +102,9 @@ async fn run_diagnostics(kb: &KnowledgeBase) {
     // 3. Try get_node_by_ext_id for sessions
     for sid in &["session_1", "session_2", "D1"] {
         match kb.get_node_by_ext_id("Session", "session_id", sid).await {
-            Ok(Some((nid, _))) => eprintln!("get_node_by_ext_id(Session, session_id, {sid}) = {nid}"),
+            Ok(Some((nid, _))) => {
+                eprintln!("get_node_by_ext_id(Session, session_id, {sid}) = {nid}")
+            }
             Ok(None) => eprintln!("get_node_by_ext_id(Session, session_id, {sid}) = NOT FOUND"),
             Err(e) => eprintln!("get_node_by_ext_id(Session, session_id, {sid}) = ERROR: {e}"),
         }
@@ -107,9 +127,19 @@ async fn run_diagnostics(kb: &KnowledgeBase) {
     }
 
     // 5. Count all edges by type
-    for etype in &["IN_SESSION", "HAS_CHUNK", "PARTICIPATED_IN", "SENT_BY", "OBSERVED_IN", "ABOUT"] {
+    for etype in &[
+        "IN_SESSION",
+        "HAS_CHUNK",
+        "PARTICIPATED_IN",
+        "SENT_BY",
+        "OBSERVED_IN",
+        "ABOUT",
+    ] {
         let q = format!("MATCH ()-[e:{etype}]->() RETURN count(e) AS cnt");
-        let cnt: i64 = s.query_with(&q).fetch_all().await
+        let cnt: i64 = s
+            .query_with(&q)
+            .fetch_all()
+            .await
             .ok()
             .and_then(|r| r.rows().first().and_then(|row| row.get("cnt").ok()))
             .unwrap_or(-1);

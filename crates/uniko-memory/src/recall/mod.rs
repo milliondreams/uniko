@@ -177,8 +177,20 @@ pub async fn recall(
     //
     // (label, embed_field, fts_field, content_field, where_clause)
     let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str, &str)] = &[
-        ("Chunk", Some("embedding"), Some("text"), "text", "m.chunk_type = 'session'"),
-        ("Chunk", Some("embedding"), Some("text"), "text", "m.chunk_type = 'observation'"),
+        (
+            "Chunk",
+            Some("embedding"),
+            Some("text"),
+            "text",
+            "m.chunk_type = 'session'",
+        ),
+        (
+            "Chunk",
+            Some("embedding"),
+            Some("text"),
+            "text",
+            "m.chunk_type = 'observation'",
+        ),
     ];
 
     for &(label, embed_field, fts_field, content_field, where_clause) in hybrid_targets {
@@ -188,7 +200,10 @@ pub async fn recall(
                 (Some(ef), Some(ff)) => (
                     format!("[m.{ef}, m.{ff}]"),
                     "[$qvec, $qtxt]".to_string(),
-                    format!(", {{method: 'weighted', weights: [{}, {}]}}", config.vector_weight, config.bm25_weight),
+                    format!(
+                        ", {{method: 'weighted', weights: [{}, {}]}}",
+                        config.vector_weight, config.bm25_weight
+                    ),
                     (true, true),
                 ),
                 (Some(ef), None) => (
@@ -253,14 +268,12 @@ pub async fn recall(
 
     // (label, content_field, embed_field, entity_pattern)
     // Entity-scoped: find Chunks in sessions where the entity participated.
-    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
-        (
-            "Chunk",
-            "text",
-            "embedding",
-            "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
-        ),
-    ];
+    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[(
+        "Chunk",
+        "text",
+        "embedding",
+        "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
+    )];
 
     for entity_name in &intent.entity_refs {
         for &(label, content_field, embed_field, pattern) in entity_scoped_targets {
@@ -290,8 +303,7 @@ pub async fn recall(
                 .param("qtxt", intent.keywords.as_str())
                 .param("lim", config.limit as i64);
             if has_vec {
-                builder =
-                    builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
+                builder = builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
             }
 
             match builder.fetch_all().await {

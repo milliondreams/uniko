@@ -12,14 +12,14 @@
 #[cfg(feature = "onnx")]
 mod onnx_tests {
     use uni_db::ModelAliasSpec;
+    use uniko_extract::ingest::context::SentenceContext;
+    use uniko_extract::nlp::NlpPipeline;
     use uniko_extract::nlp::assets::label_maps;
     use uniko_extract::nlp::decode::extract_dep_observations;
-use uniko_extract::ingest::context::SentenceContext;
-    use uniko_extract::nlp::NlpPipeline;
     use uniko_extract::nlp::types::NlpResult;
     use uniko_extract::observations::filter::is_informative;
-    use uniko_store::config::UnikoConfig;
     use uniko_store::KnowledgeBase;
+    use uniko_store::config::UnikoConfig;
 
     /// Create an NLP pipeline backed by the real ONNX model.
     ///
@@ -29,16 +29,16 @@ use uniko_extract::ingest::context::SentenceContext;
     async fn make_pipeline() -> NlpPipeline {
         // Resolve workspace root from CARGO_MANIFEST_DIR.
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let workspace_root = manifest_dir
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
+        let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
         let catalog_path = workspace_root.join("config/catalog.json");
         let schema_path = workspace_root.join("config/schema.json");
 
         eprintln!("Workspace root: {}", workspace_root.display());
-        eprintln!("Catalog: {} (exists: {})", catalog_path.display(), catalog_path.exists());
+        eprintln!(
+            "Catalog: {} (exists: {})",
+            catalog_path.display(),
+            catalog_path.exists()
+        );
 
         // Change CWD to workspace root so .uni_cache is found.
         std::env::set_current_dir(workspace_root).expect("cd to workspace root");
@@ -65,9 +65,7 @@ use uniko_extract::ingest::context::SentenceContext;
             }
         }
 
-        NlpPipeline::try_new(&kb)
-            .await
-            .expect("NLP pipeline")
+        NlpPipeline::try_new(&kb).await.expect("NLP pipeline")
     }
 
     /// Print detailed NLP diagnostics for a single analysis result.
@@ -87,21 +85,13 @@ use uniko_extract::ingest::context::SentenceContext;
         );
         let cls_informative = result.sentence_class.is_informative();
         let rule_informative = is_informative(text, Some("text"));
-        eprintln!(
-            "  CLS informative: {cls_informative} | Rule informative: {rule_informative}"
-        );
+        eprintln!("  CLS informative: {cls_informative} | Rule informative: {rule_informative}");
 
         // Words + POS
         let pos_tags: Vec<&str> = result
             .pos_indices
             .iter()
-            .map(|&i| {
-                labels
-                    .pos_labels
-                    .get(i)
-                    .map(String::as_str)
-                    .unwrap_or("?")
-            })
+            .map(|&i| labels.pos_labels.get(i).map(String::as_str).unwrap_or("?"))
             .collect();
         eprintln!("  Words: {:?}", result.words);
         eprintln!("  POS:   {:?}", pos_tags);
@@ -151,7 +141,7 @@ use uniko_extract::ingest::context::SentenceContext;
             &result.dep_arcs,
             &labels.pos_labels,
             speaker,
-                    &mut SentenceContext::default(),
+            &mut SentenceContext::default(),
         );
         if obs.is_empty() {
             eprintln!("  Observations: (none)");
@@ -479,7 +469,12 @@ use uniko_extract::ingest::context::SentenceContext;
         // Simple SVO sentences where we know the expected structure.
         let cases = [
             ("Caroline lost her job.", "Caroline", "lost", Some("job")),
-            ("Jon started a business.", "Jon", "started", Some("business")),
+            (
+                "Jon started a business.",
+                "Jon",
+                "started",
+                Some("business"),
+            ),
             (
                 "I attended the support group.",
                 "I",
@@ -554,7 +549,9 @@ use uniko_extract::ingest::context::SentenceContext;
                             || arc.relation == "iobj"
                             || arc.relation == "obl")
                 });
-                eprintln!("  Has obj → {expected_verb}: {has_obj} (expected obj contains \"{exp_obj}\")");
+                eprintln!(
+                    "  Has obj → {expected_verb}: {has_obj} (expected obj contains \"{exp_obj}\")"
+                );
             }
         }
     }
@@ -582,7 +579,7 @@ use uniko_extract::ingest::context::SentenceContext;
                 &result.dep_arcs,
                 &labels.pos_labels,
                 speaker,
-                    &mut SentenceContext::default(),
+                &mut SentenceContext::default(),
             );
 
             eprintln!("\nSpeaker sub: \"{text}\" (speaker={speaker})");
@@ -624,7 +621,7 @@ use uniko_extract::ingest::context::SentenceContext;
             (
                 "I lost my job and started a business.",
                 "Jon",
-                vec!["lost", "job"],   // must contain these words
+                vec!["lost", "job"],       // must contain these words
                 vec!["hey", "is awesome"], // must NOT contain these
             ),
             (
@@ -650,7 +647,7 @@ use uniko_extract::ingest::context::SentenceContext;
                 &result.dep_arcs,
                 &labels.pos_labels,
                 speaker,
-                    &mut SentenceContext::default(),
+                &mut SentenceContext::default(),
             );
 
             eprintln!("\nQuality: \"{text}\"");
@@ -662,7 +659,11 @@ use uniko_extract::ingest::context::SentenceContext;
             }
 
             // Combine all observation content for checking
-            let all_content: String = obs.iter().map(|o| o.content.as_str()).collect::<Vec<_>>().join(" ");
+            let all_content: String = obs
+                .iter()
+                .map(|o| o.content.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
             eprintln!("  Combined content: \"{all_content}\"");
 
             for word in must_contain {
@@ -683,15 +684,15 @@ use uniko_extract::ingest::context::SentenceContext;
             for o in &obs {
                 let wc = o.content.split_whitespace().count();
                 if wc < 2 {
-                    eprintln!(
-                        "  FAIL: Single-word observation: \"{}\"",
-                        o.content
-                    );
+                    eprintln!("  FAIL: Single-word observation: \"{}\"", o.content);
                     all_ok = false;
                 }
             }
         }
 
-        assert!(all_ok, "Some observation quality checks failed — see diagnostics above");
+        assert!(
+            all_ok,
+            "Some observation quality checks failed — see diagnostics above"
+        );
     }
 }

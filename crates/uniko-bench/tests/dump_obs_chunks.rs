@@ -4,12 +4,16 @@
 
 use std::sync::Arc;
 use uni_db::ModelAliasSpec;
-use uniko_store::config::UnikoConfig;
 use uniko_store::KnowledgeBase;
+use uniko_store::config::UnikoConfig;
 
 async fn load_kb() -> Arc<KnowledgeBase> {
     let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap().to_path_buf();
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     std::env::set_current_dir(&ws).expect("cd");
     let config = UnikoConfig {
         catalog_path: Some(ws.join("config/catalog.json")),
@@ -17,8 +21,13 @@ async fn load_kb() -> Arc<KnowledgeBase> {
         ..Default::default()
     };
     Arc::new(
-        KnowledgeBase::open_with_xervo(ws.join("data/kb/conv-30"), config, Vec::<ModelAliasSpec>::new())
-            .await.expect("open KB"),
+        KnowledgeBase::open_with_xervo(
+            ws.join("data/kb/conv-30"),
+            config,
+            Vec::<ModelAliasSpec>::new(),
+        )
+        .await
+        .expect("open KB"),
     )
 }
 

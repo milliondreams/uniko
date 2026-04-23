@@ -551,8 +551,12 @@ fn resolve_subject(
     }
 
     // Second person → other speaker.
-    if lower == "you" || lower.starts_with("you'") || lower.starts_with("you\u{2019}")
-        || lower == "your" || lower == "yours" || lower == "yourself"
+    if lower == "you"
+        || lower.starts_with("you'")
+        || lower.starts_with("you\u{2019}")
+        || lower == "your"
+        || lower == "yours"
+        || lower == "yourself"
     {
         if let Some(other) = ctx.other_speakers.first() {
             return other.clone();
@@ -593,8 +597,7 @@ fn collect_noun_phrase(root_idx: usize, words: &[String], dep_arcs: &[DepArc]) -
             if arc.head == head && !indices.contains(&arc.dependent) {
                 // Only include content-bearing noun modifiers.
                 match arc.relation.as_str() {
-                    "compound" | "amod" | "flat" | "flat:name" | "nmod:poss" | "det"
-                    | "nummod" => {
+                    "compound" | "amod" | "flat" | "flat:name" | "nmod:poss" | "det" | "nummod" => {
                         indices.push(arc.dependent);
                         queue.push(arc.dependent);
                     }

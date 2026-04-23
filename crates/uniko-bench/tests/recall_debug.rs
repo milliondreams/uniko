@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use uni_db::ModelAliasSpec;
 use uniko_memory::recall::{RecallConfig, recall};
-use uniko_store::config::UnikoConfig;
 use uniko_store::KnowledgeBase;
+use uniko_store::config::UnikoConfig;
 
 async fn load_kb() -> Arc<KnowledgeBase> {
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -33,10 +33,21 @@ async fn debug_chunk_existence() {
     let session = kb.db().session();
 
     // Count nodes by type
-    for label in &["Message", "Chunk", "Observation", "Session", "Entity", "Participant"] {
+    for label in &[
+        "Message",
+        "Chunk",
+        "Observation",
+        "Session",
+        "Entity",
+        "Participant",
+    ] {
         let cypher = format!("MATCH (m:{label}) RETURN count(m) AS cnt");
         let result = session.query_with(&cypher).fetch_all().await.unwrap();
-        let cnt: i64 = result.rows().first().and_then(|r| r.get("cnt").ok()).unwrap_or(0);
+        let cnt: i64 = result
+            .rows()
+            .first()
+            .and_then(|r| r.get("cnt").ok())
+            .unwrap_or(0);
         eprintln!("{label:15}: {cnt} nodes");
     }
 
@@ -48,7 +59,11 @@ async fn debug_chunk_existence() {
             format!("MATCH (c:Chunk {{chunk_type: '{ct}'}}) RETURN count(c) AS cnt")
         };
         let result = session.query_with(&cypher).fetch_all().await.unwrap();
-        let cnt: i64 = result.rows().first().and_then(|r| r.get("cnt").ok()).unwrap_or(0);
+        let cnt: i64 = result
+            .rows()
+            .first()
+            .and_then(|r| r.get("cnt").ok())
+            .unwrap_or(0);
         let label = if ct.is_empty() { "null" } else { ct };
         eprintln!("  chunk_type={label}: {cnt}");
     }
@@ -59,14 +74,22 @@ async fn debug_chunk_existence() {
         .fetch_all()
         .await
         .unwrap();
-    let with_embed: i64 = result.rows().first().and_then(|r| r.get("cnt").ok()).unwrap_or(0);
+    let with_embed: i64 = result
+        .rows()
+        .first()
+        .and_then(|r| r.get("cnt").ok())
+        .unwrap_or(0);
 
     let result = session
         .query_with("MATCH (c:Chunk) WHERE c.embedding IS NULL RETURN count(c) AS cnt")
         .fetch_all()
         .await
         .unwrap();
-    let without_embed: i64 = result.rows().first().and_then(|r| r.get("cnt").ok()).unwrap_or(0);
+    let without_embed: i64 = result
+        .rows()
+        .first()
+        .and_then(|r| r.get("cnt").ok())
+        .unwrap_or(0);
     eprintln!("\nChunks with embedding: {with_embed}");
     eprintln!("Chunks without embedding: {without_embed}");
 
@@ -78,11 +101,19 @@ async fn debug_chunk_existence() {
         .unwrap();
     if let Some(row) = result.rows().first() {
         let text: String = row.get("text").unwrap_or_default();
-        eprintln!("\nSample session chunk ({} chars): {}...", text.len(), &text[..text.len().min(200)]);
+        eprintln!(
+            "\nSample session chunk ({} chars): {}...",
+            text.len(),
+            &text[..text.len().min(200)]
+        );
     }
 
     // Check participants
-    let result = session.query_with("MATCH (p:Participant) RETURN p.name AS name").fetch_all().await.unwrap();
+    let result = session
+        .query_with("MATCH (p:Participant) RETURN p.name AS name")
+        .fetch_all()
+        .await
+        .unwrap();
     eprintln!("\nParticipants:");
     for row in result.rows() {
         let name: String = row.get("name").unwrap_or_default();
@@ -90,7 +121,11 @@ async fn debug_chunk_existence() {
     }
 
     // Check entity names
-    let result = session.query_with("MATCH (e:Entity) RETURN e.name AS name, e.entity_type AS et LIMIT 10").fetch_all().await.unwrap();
+    let result = session
+        .query_with("MATCH (e:Entity) RETURN e.name AS name, e.entity_type AS et LIMIT 10")
+        .fetch_all()
+        .await
+        .unwrap();
     eprintln!("\nEntities (first 10):");
     for row in result.rows() {
         let name: String = row.get("name").unwrap_or_default();
@@ -113,7 +148,10 @@ async fn debug_chunk_existence() {
     }
 
     // Check IN_SESSION edges
-    let result = session.query_with("MATCH (m:Message)-[:IN_SESSION]->(s) RETURN labels(s)[0] AS slbl LIMIT 3").fetch_all().await;
+    let result = session
+        .query_with("MATCH (m:Message)-[:IN_SESSION]->(s) RETURN labels(s)[0] AS slbl LIMIT 3")
+        .fetch_all()
+        .await;
     match result {
         Ok(r) => {
             eprintln!("\nIN_SESSION target labels:");
@@ -157,12 +195,25 @@ async fn debug_chunk_existence() {
     }
 
     // Check: where do HAS_CHUNK edges come from?
-    let result = session.query_with("MATCH ()-[e:HAS_CHUNK]->() RETURN count(e) AS cnt").fetch_all().await.unwrap();
-    let hc_cnt: i64 = result.rows().first().and_then(|r| r.get("cnt").ok()).unwrap_or(0);
+    let result = session
+        .query_with("MATCH ()-[e:HAS_CHUNK]->() RETURN count(e) AS cnt")
+        .fetch_all()
+        .await
+        .unwrap();
+    let hc_cnt: i64 = result
+        .rows()
+        .first()
+        .and_then(|r| r.get("cnt").ok())
+        .unwrap_or(0);
     eprintln!("\nTotal HAS_CHUNK edges (any direction): {hc_cnt}");
 
     // Check session node details
-    let result = session.query_with("MATCH (m:Message)-[:IN_SESSION]->(s) RETURN id(s) AS sid, labels(s) AS lbls LIMIT 3").fetch_all().await;
+    let result = session
+        .query_with(
+            "MATCH (m:Message)-[:IN_SESSION]->(s) RETURN id(s) AS sid, labels(s) AS lbls LIMIT 3",
+        )
+        .fetch_all()
+        .await;
     match result {
         Ok(r) => {
             eprintln!("\nIN_SESSION targets (with id and labels):");
@@ -205,8 +256,15 @@ async fn debug_chunk_existence() {
             .await;
         match result {
             Ok(r) => {
-                let top_score: f64 = r.rows().first().and_then(|row| row.get("score").ok()).unwrap_or(0.0);
-                eprintln!("BM25 Chunk '{q}': top_score={top_score:.4} ({} results)", r.len());
+                let top_score: f64 = r
+                    .rows()
+                    .first()
+                    .and_then(|row| row.get("score").ok())
+                    .unwrap_or(0.0);
+                eprintln!(
+                    "BM25 Chunk '{q}': top_score={top_score:.4} ({} results)",
+                    r.len()
+                );
             }
             Err(e) => eprintln!("BM25 Chunk '{q}': ERROR {e}"),
         }
@@ -222,8 +280,15 @@ async fn debug_chunk_existence() {
             .await;
         match result {
             Ok(r) => {
-                let top_score: f64 = r.rows().first().and_then(|row| row.get("score").ok()).unwrap_or(0.0);
-                eprintln!("BM25 Message '{q}': top_score={top_score:.4} ({} results)", r.len());
+                let top_score: f64 = r
+                    .rows()
+                    .first()
+                    .and_then(|row| row.get("score").ok())
+                    .unwrap_or(0.0);
+                eprintln!(
+                    "BM25 Message '{q}': top_score={top_score:.4} ({} results)",
+                    r.len()
+                );
             }
             Err(e) => eprintln!("BM25 Message '{q}': ERROR {e}"),
         }
@@ -231,7 +296,9 @@ async fn debug_chunk_existence() {
 
     // Test vector search on Chunk separately
     eprintln!();
-    let intent = uniko_memory::recall::build_intent(&kb, "favorite style of dance").await.unwrap();
+    let intent = uniko_memory::recall::build_intent(&kb, "favorite style of dance")
+        .await
+        .unwrap();
     eprintln!("Intent keywords: '{}'", intent.keywords);
     eprintln!("Intent vec len: {}", intent.intent_vec.len());
 
@@ -255,12 +322,23 @@ async fn debug_chunk_existence() {
     }
 
     // Test full recall for a missed question
-    let config = RecallConfig { limit: 15, ..Default::default() };
-    let bundle = recall(&kb, "What is Gina's favorite style of dance?", &config).await.unwrap();
+    let config = RecallConfig {
+        limit: 15,
+        ..Default::default()
+    };
+    let bundle = recall(&kb, "What is Gina's favorite style of dance?", &config)
+        .await
+        .unwrap();
     eprintln!("\nFull recall for 'What is Gina's favorite style of dance?':");
     for (i, item) in bundle.items.iter().enumerate() {
         let preview = item.content.replace('\n', " ");
-        eprintln!("  #{:2} [{:12}] score={:.4} | {}...", i+1, item.node_type, item.score, &preview[..preview.len().min(100)]);
+        eprintln!(
+            "  #{:2} [{:12}] score={:.4} | {}...",
+            i + 1,
+            item.node_type,
+            item.score,
+            &preview[..preview.len().min(100)]
+        );
     }
 
     // Test hybrid similar_to on Chunk (same as recall does)

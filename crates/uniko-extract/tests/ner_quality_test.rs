@@ -10,8 +10,8 @@
 mod onnx_tests {
     use uni_db::ModelAliasSpec;
     use uniko_extract::nlp::NlpPipeline;
-    use uniko_store::config::UnikoConfig;
     use uniko_store::KnowledgeBase;
+    use uniko_store::config::UnikoConfig;
 
     async fn make_pipeline() -> NlpPipeline {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -167,7 +167,10 @@ mod onnx_tests {
             let mut hits = Vec::new();
             let mut misses = Vec::new();
             for &exp in case.expected {
-                if found_texts.iter().any(|f| f.to_lowercase().contains(&exp.to_lowercase())) {
+                if found_texts
+                    .iter()
+                    .any(|f| f.to_lowercase().contains(&exp.to_lowercase()))
+                {
                     hits.push(exp);
                     total_found += 1;
                 } else {
@@ -180,7 +183,10 @@ mod onnx_tests {
             let extras: Vec<&str> = found_texts
                 .iter()
                 .filter(|f| {
-                    !case.expected.iter().any(|e| f.to_lowercase().contains(&e.to_lowercase()))
+                    !case
+                        .expected
+                        .iter()
+                        .any(|e| f.to_lowercase().contains(&e.to_lowercase()))
                 })
                 .copied()
                 .collect();

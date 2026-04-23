@@ -5,8 +5,8 @@
 //!
 //! Run: cargo nextest run -p uniko-extract --test observation_extraction_test --nocapture
 
-use uniko_extract::nlp::decode::extract_dep_observations;
 use uniko_extract::ingest::context::SentenceContext;
+use uniko_extract::nlp::decode::extract_dep_observations;
 use uniko_extract::nlp::types::DepArc;
 
 /// Helper to build a dep arc.
@@ -50,7 +50,14 @@ fn test_simple_svo_with_speaker() {
         arc(3, 1, "obj"), // job → lost
     ];
 
-    let obs = extract_dep_observations(&words, &pos_indices, &dep_arcs, &pos_labels(), "Jon", &mut SentenceContext::default());
+    let obs = extract_dep_observations(
+        &words,
+        &pos_indices,
+        &dep_arcs,
+        &pos_labels(),
+        "Jon",
+        &mut SentenceContext::default(),
+    );
 
     eprintln!("Observations: {obs:?}");
     assert!(!obs.is_empty(), "Should produce at least one observation");
@@ -93,7 +100,14 @@ fn test_third_person_keeps_name() {
         arc(4, 1, "obj"),
     ];
 
-    let obs = extract_dep_observations(&words, &pos_indices, &dep_arcs, &pos_labels(), "Gina", &mut SentenceContext::default());
+    let obs = extract_dep_observations(
+        &words,
+        &pos_indices,
+        &dep_arcs,
+        &pos_labels(),
+        "Gina",
+        &mut SentenceContext::default(),
+    );
 
     eprintln!("Observations: {obs:?}");
     assert!(!obs.is_empty());
@@ -112,7 +126,14 @@ fn test_no_observation_without_subject_or_object() {
     let pos_indices = vec![pos("INTJ"), pos("PUNCT")];
     let dep_arcs = vec![arc(0, usize::MAX, "root"), arc(1, 0, "punct")];
 
-    let obs = extract_dep_observations(&words, &pos_indices, &dep_arcs, &pos_labels(), "Jon", &mut SentenceContext::default());
+    let obs = extract_dep_observations(
+        &words,
+        &pos_indices,
+        &dep_arcs,
+        &pos_labels(),
+        "Jon",
+        &mut SentenceContext::default(),
+    );
     assert!(
         obs.is_empty(),
         "Exclamation should not produce observations"
@@ -129,7 +150,14 @@ fn test_verb_only_no_subject_no_object_skipped() {
         arc(1, 0, "xcomp"), // go is an xcomp modifier, not subject or object
     ];
 
-    let obs = extract_dep_observations(&words, &pos_indices, &dep_arcs, &pos_labels(), "Jon", &mut SentenceContext::default());
+    let obs = extract_dep_observations(
+        &words,
+        &pos_indices,
+        &dep_arcs,
+        &pos_labels(),
+        "Jon",
+        &mut SentenceContext::default(),
+    );
     // xcomp is a modifier — verb "go" has no subject or object
     // The root verb "Let's" also has no nsubj or obj
     eprintln!("Observations: {obs:?}");
@@ -161,7 +189,14 @@ fn test_with_oblique_modifier() {
         arc(5, 1, "obl"),           // dancing → starting (oblique)
     ];
 
-    let obs = extract_dep_observations(&words, &pos_indices, &dep_arcs, &pos_labels(), "Jon", &mut SentenceContext::default());
+    let obs = extract_dep_observations(
+        &words,
+        &pos_indices,
+        &dep_arcs,
+        &pos_labels(),
+        "Jon",
+        &mut SentenceContext::default(),
+    );
 
     eprintln!("Observations: {obs:?}");
     assert!(!obs.is_empty());
@@ -207,7 +242,14 @@ fn test_multiple_verbs_produce_multiple_observations() {
         arc(7, 5, "obj"),           // business → started
     ];
 
-    let obs = extract_dep_observations(&words, &pos_indices, &dep_arcs, &pos_labels(), "Jon", &mut SentenceContext::default());
+    let obs = extract_dep_observations(
+        &words,
+        &pos_indices,
+        &dep_arcs,
+        &pos_labels(),
+        "Jon",
+        &mut SentenceContext::default(),
+    );
 
     eprintln!("Observations: {obs:?}");
     // "started" is a VERB with obj "business" but nsubj goes to "lost" via conj chain
@@ -247,7 +289,14 @@ fn test_observation_minimum_quality() {
         arc(4, 1, "obl"),
     ];
 
-    let obs = extract_dep_observations(&words, &pos_indices, &dep_arcs, &pos_labels(), "Gina", &mut SentenceContext::default());
+    let obs = extract_dep_observations(
+        &words,
+        &pos_indices,
+        &dep_arcs,
+        &pos_labels(),
+        "Gina",
+        &mut SentenceContext::default(),
+    );
 
     eprintln!("Observations: {obs:?}");
     assert!(!obs.is_empty());

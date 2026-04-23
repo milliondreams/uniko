@@ -12,12 +12,12 @@ mod onnx_dump {
     use std::io::Write;
 
     use uni_db::ModelAliasSpec;
-    use uniko_extract::nlp::assets::label_maps;
-    use uniko_extract::nlp::decode::extract_dep_observations;
     use uniko_extract::ingest::context::SentenceContext;
     use uniko_extract::nlp::NlpPipeline;
-    use uniko_store::config::UnikoConfig;
+    use uniko_extract::nlp::assets::label_maps;
+    use uniko_extract::nlp::decode::extract_dep_observations;
     use uniko_store::KnowledgeBase;
+    use uniko_store::config::UnikoConfig;
 
     async fn make_pipeline() -> NlpPipeline {
         let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -149,14 +149,23 @@ mod onnx_dump {
                     .collect();
             }
 
-            writeln!(out, "========================================================================").unwrap();
+            writeln!(
+                out,
+                "========================================================================"
+            )
+            .unwrap();
             writeln!(out, "[{dia_id}] {session_id} | {speaker}: \"{text}\"").unwrap();
             writeln!(
                 out,
                 "  context: subj={:?} obj={:?}",
                 sent_ctx.last_noun_subject, sent_ctx.last_noun_object
-            ).unwrap();
-            writeln!(out, "------------------------------------------------------------------------").unwrap();
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "------------------------------------------------------------------------"
+            )
+            .unwrap();
 
             let results = match pipeline.analyze_sentences(text).await {
                 Ok(r) => r,
@@ -181,9 +190,7 @@ mod onnx_dump {
                 let pos_tags: Vec<&str> = result
                     .pos_indices
                     .iter()
-                    .map(|&i| {
-                        labels.pos_labels.get(i).map(String::as_str).unwrap_or("?")
-                    })
+                    .map(|&i| labels.pos_labels.get(i).map(String::as_str).unwrap_or("?"))
                     .collect();
 
                 // CLS
@@ -194,7 +201,8 @@ mod onnx_dump {
                     result.cls_confidence,
                     if informative { "EXTRACT" } else { "SKIP" },
                     sentence_text
-                ).unwrap();
+                )
+                .unwrap();
 
                 // POS
                 let pos_str: String = result
@@ -209,11 +217,20 @@ mod onnx_dump {
                 // DEP tree
                 write!(out, "       DEP:").unwrap();
                 for arc in &result.dep_arcs {
-                    let dep_word = result.words.get(arc.dependent).map(String::as_str).unwrap_or("?");
+                    let dep_word = result
+                        .words
+                        .get(arc.dependent)
+                        .map(String::as_str)
+                        .unwrap_or("?");
                     let head_word = if arc.head == usize::MAX {
                         "ROOT".to_string()
                     } else {
-                        result.words.get(arc.head).map(String::as_str).unwrap_or("?").to_string()
+                        result
+                            .words
+                            .get(arc.head)
+                            .map(String::as_str)
+                            .unwrap_or("?")
+                            .to_string()
                     };
                     write!(out, " {dep_word}-[{}]->{head_word}", arc.relation).unwrap();
                 }
@@ -252,7 +269,12 @@ mod onnx_dump {
                                 total_pronoun_resolved += 1;
                             }
                             let marker = if resolved { " [resolved]" } else { "" };
-                            writeln!(out, "       OBS: [{}]{} \"{}\"", o.subject, marker, o.content).unwrap();
+                            writeln!(
+                                out,
+                                "       OBS: [{}]{} \"{}\"",
+                                o.subject, marker, o.content
+                            )
+                            .unwrap();
                         }
                     }
                 } else {
@@ -272,7 +294,11 @@ mod onnx_dump {
             }
         }
 
-        writeln!(out, "\n========================================================================").unwrap();
+        writeln!(
+            out,
+            "\n========================================================================"
+        )
+        .unwrap();
         writeln!(out, "SUMMARY").unwrap();
         writeln!(out, "  Messages: {}", messages.len()).unwrap();
         writeln!(out, "  Sentences: {total_sentences}").unwrap();

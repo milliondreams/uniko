@@ -144,13 +144,12 @@ pub async fn ingest_item(
             total_observations += ctx.extracted_observations.len();
 
             // Read back updated sentence context.
-            if let Some(updated) = ctx.metadata.get("sentence_ctx_updated") {
-                if let Ok(sent_ctx) = serde_json::from_value::<
+            if let Some(updated) = ctx.metadata.get("sentence_ctx_updated")
+                && let Ok(sent_ctx) = serde_json::from_value::<
                     uniko_extract::ingest::context::SentenceContext,
                 >(updated.clone())
-                {
-                    session_ctx.sentence_ctx = sent_ctx;
-                }
+            {
+                session_ctx.sentence_ctx = sent_ctx;
             }
 
             // Track evidence.
@@ -161,7 +160,7 @@ pub async fn ingest_item(
 
             total_turns += 1;
 
-            if total_turns == 1 || total_turns % 50 == 0 {
+            if total_turns == 1 || total_turns.is_multiple_of(50) {
                 tracing::info!(
                     turn = total_turns,
                     session = session_idx,
@@ -177,10 +176,9 @@ pub async fn ingest_item(
             .insert(session_id.clone(), session_message_ids);
 
         // Chunk the session for retrieval.
-        let chunk_ids =
-            uniko_extract::ingest::session_chunk::chunk_session(&kb, session_id)
-                .await
-                .with_context(|| format!("chunking session {session_id}"))?;
+        let chunk_ids = uniko_extract::ingest::session_chunk::chunk_session(&kb, session_id)
+            .await
+            .with_context(|| format!("chunking session {session_id}"))?;
         total_session_chunks += chunk_ids.len();
 
         // Chunk session observations.
@@ -208,10 +206,7 @@ pub async fn ingest_item(
 /// Parse LongMemEval datetime format: "YYYY/MM/DD (Day) HH:MM".
 fn parse_lme_datetime(dt: &str) -> DateTime<Utc> {
     // Try the LongMemEval format first: "2023/04/10 (Mon) 23:07"
-    for fmt in &[
-        "%Y/%m/%d (%a) %H:%M",
-        "%Y/%m/%d %H:%M",
-    ] {
+    for fmt in &["%Y/%m/%d (%a) %H:%M", "%Y/%m/%d %H:%M"] {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(dt, fmt) {
             return naive.and_utc();
         }
@@ -223,11 +218,7 @@ fn parse_lme_datetime(dt: &str) -> DateTime<Utc> {
     }
 
     // Try standard formats.
-    for fmt in &[
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d",
-    ] {
+    for fmt in &["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(dt, fmt) {
             return naive.and_utc();
         }

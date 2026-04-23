@@ -56,11 +56,7 @@ pub fn recall_at_k(
 ///
 /// Measures not just whether relevant sessions are retrieved, but
 /// whether they appear at higher ranks (earlier positions).
-pub fn ndcg_at_k(
-    retrieved_session_ids: &[String],
-    answer_session_ids: &[String],
-    k: usize,
-) -> f64 {
+pub fn ndcg_at_k(retrieved_session_ids: &[String], answer_session_ids: &[String], k: usize) -> f64 {
     if answer_session_ids.is_empty() {
         return 0.0;
     }

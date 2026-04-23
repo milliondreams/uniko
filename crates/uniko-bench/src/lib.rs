@@ -59,22 +59,22 @@ pub fn build_llm_catalog(
         });
 
         // If judge alias is different, add it separately.
-        if let Some(judge) = judge_alias {
-            if judge != alias {
-                catalog.push(ModelAliasSpec {
-                    alias: judge.to_string(),
-                    task: ModelTask::Generate,
-                    provider_id: "local/mistralrs".to_string(),
-                    model_id: model_id.to_string(),
-                    revision: None,
-                    warmup: WarmupPolicy::Lazy,
-                    required: false,
-                    timeout: None,
-                    load_timeout: None,
-                    retry: None,
-                    options: serde_json::json!({"isq": "Q4K"}),
-                });
-            }
+        if let Some(judge) = judge_alias
+            && judge != alias
+        {
+            catalog.push(ModelAliasSpec {
+                alias: judge.to_string(),
+                task: ModelTask::Generate,
+                provider_id: "local/mistralrs".to_string(),
+                model_id: model_id.to_string(),
+                revision: None,
+                warmup: WarmupPolicy::Lazy,
+                required: false,
+                timeout: None,
+                load_timeout: None,
+                retry: None,
+                options: serde_json::json!({"isq": "Q4K"}),
+            });
         }
     }
 

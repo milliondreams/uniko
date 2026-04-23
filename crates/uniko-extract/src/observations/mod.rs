@@ -197,7 +197,10 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 props
             })
             .collect();
-        let obs_node_ids = ctx.kb.batch_create_nodes(labels::OBSERVATION, &obs_props).await?;
+        let obs_node_ids = ctx
+            .kb
+            .batch_create_nodes(labels::OBSERVATION, &obs_props)
+            .await?;
 
         // 4b. Batch create OBSERVED_IN edges (Observation → source node).
         let observed_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = obs_node_ids

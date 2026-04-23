@@ -15,13 +15,12 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use uni_db::{ModelAliasSpec, Value};
-use uniko_store::config::UnikoConfig;
 use uniko_store::KnowledgeBase;
+use uniko_store::config::UnikoConfig;
 
 const NUM_INSERTS: usize = 200;
 const NUM_PERSISTENT: usize = 300;
-const MESSAGE_TEXT: &str =
-    "I went to a LGBTQ support group yesterday and it was so powerful. \
+const MESSAGE_TEXT: &str = "I went to a LGBTQ support group yesterday and it was so powerful. \
      The transgender stories were so inspiring and I felt really accepted.";
 
 /// Insert N identical Message nodes with auto-embed and measure per-insert latency.
@@ -39,10 +38,7 @@ async fn insert_latency_should_not_grow_with_row_count() {
 
     for i in 0..NUM_INSERTS {
         let mut props = HashMap::new();
-        props.insert(
-            "message_id".into(),
-            Value::String(format!("msg-{i:04}")),
-        );
+        props.insert("message_id".into(), Value::String(format!("msg-{i:04}")));
         props.insert("content".into(), Value::String(MESSAGE_TEXT.into()));
         props.insert("content_type".into(), Value::String("text".into()));
         props.insert(
@@ -135,10 +131,7 @@ async fn insert_latency_without_autoembed_baseline() {
         );
         props.insert("content".into(), Value::String(MESSAGE_TEXT.into()));
         props.insert("subject".into(), Value::String("Caroline".into()));
-        props.insert(
-            "confidence".into(),
-            Value::Float(0.85),
-        );
+        props.insert("confidence".into(), Value::Float(0.85));
 
         let start = Instant::now();
         kb.create_node("Observation", &props).await.unwrap();
@@ -188,7 +181,11 @@ async fn insert_latency_without_autoembed_baseline() {
 #[ignore] // Slow — creates a temp dir and writes ~300 nodes+edges
 async fn insert_latency_persistent_with_edges() {
     let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap().to_path_buf();
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     std::env::set_current_dir(&ws).expect("cd");
 
     let tmp_dir = std::env::temp_dir().join("unidb-edge-latency-test");
@@ -207,13 +204,14 @@ async fn insert_latency_persistent_with_edges() {
     // Create a Session and Participant node to wire edges to.
     let mut session_props = HashMap::new();
     session_props.insert("session_id".into(), Value::String("test-session".into()));
-    session_props.insert("started_at".into(), Value::Temporal(
-        uni_db::common::TemporalValue::DateTime {
+    session_props.insert(
+        "started_at".into(),
+        Value::Temporal(uni_db::common::TemporalValue::DateTime {
             nanos_since_epoch: 0,
             offset_seconds: 0,
             timezone_name: None,
-        },
-    ));
+        }),
+    );
     let session_nid = kb.create_node("Session", &session_props).await.unwrap();
 
     let mut participant_props = HashMap::new();
@@ -221,7 +219,10 @@ async fn insert_latency_persistent_with_edges() {
     participant_props.insert("name".into(), Value::String("TestUser".into()));
     participant_props.insert("kind".into(), Value::String("human".into()));
     participant_props.insert("last_seen".into(), Value::String("2024-01-01".into()));
-    let participant_nid = kb.create_node("Participant", &participant_props).await.unwrap();
+    let participant_nid = kb
+        .create_node("Participant", &participant_props)
+        .await
+        .unwrap();
 
     let mut node_latencies = Vec::with_capacity(NUM_PERSISTENT);
     let mut edge_latencies = Vec::with_capacity(NUM_PERSISTENT);
@@ -235,13 +236,14 @@ async fn insert_latency_persistent_with_edges() {
         props.insert("message_id".into(), Value::String(format!("msg-{i:04}")));
         props.insert("content".into(), Value::String(MESSAGE_TEXT.into()));
         props.insert("content_type".into(), Value::String("text".into()));
-        props.insert("timestamp".into(), Value::Temporal(
-            uni_db::common::TemporalValue::DateTime {
+        props.insert(
+            "timestamp".into(),
+            Value::Temporal(uni_db::common::TemporalValue::DateTime {
                 nanos_since_epoch: i as i64 * 1_000_000_000,
                 offset_seconds: 0,
                 timezone_name: None,
-            },
-        ));
+            }),
+        );
 
         let node_start = Instant::now();
         let msg_nid = kb.create_node("Message", &props).await.unwrap();
@@ -274,19 +276,49 @@ async fn insert_latency_persistent_with_edges() {
 
     eprintln!("\n=== Persistent KB: {NUM_PERSISTENT} Messages + 2 edges each ===");
     eprintln!("  Node create (auto-embed):");
-    eprintln!("    First {first}: avg {:.1}ms  max {:.1}ms", avg(&node_latencies[..first]), max(&node_latencies[..first]));
-    eprintln!("    Last {first}:  avg {:.1}ms  max {:.1}ms", avg(&node_latencies[n-first..]), max(&node_latencies[n-first..]));
-    eprintln!("    Ratio: {:.2}x", avg(&node_latencies[n-first..]) / avg(&node_latencies[..first]).max(1.0));
+    eprintln!(
+        "    First {first}: avg {:.1}ms  max {:.1}ms",
+        avg(&node_latencies[..first]),
+        max(&node_latencies[..first])
+    );
+    eprintln!(
+        "    Last {first}:  avg {:.1}ms  max {:.1}ms",
+        avg(&node_latencies[n - first..]),
+        max(&node_latencies[n - first..])
+    );
+    eprintln!(
+        "    Ratio: {:.2}x",
+        avg(&node_latencies[n - first..]) / avg(&node_latencies[..first]).max(1.0)
+    );
 
     eprintln!("  Edge create (SENT_BY + IN_SESSION):");
-    eprintln!("    First {first}: avg {:.1}ms  max {:.1}ms", avg(&edge_latencies[..first]), max(&edge_latencies[..first]));
-    eprintln!("    Last {first}:  avg {:.1}ms  max {:.1}ms", avg(&edge_latencies[n-first..]), max(&edge_latencies[n-first..]));
-    eprintln!("    Ratio: {:.2}x", avg(&edge_latencies[n-first..]) / avg(&edge_latencies[..first]).max(1.0));
+    eprintln!(
+        "    First {first}: avg {:.1}ms  max {:.1}ms",
+        avg(&edge_latencies[..first]),
+        max(&edge_latencies[..first])
+    );
+    eprintln!(
+        "    Last {first}:  avg {:.1}ms  max {:.1}ms",
+        avg(&edge_latencies[n - first..]),
+        max(&edge_latencies[n - first..])
+    );
+    eprintln!(
+        "    Ratio: {:.2}x",
+        avg(&edge_latencies[n - first..]) / avg(&edge_latencies[..first]).max(1.0)
+    );
 
     eprintln!("  Total (node + edges):");
-    eprintln!("    First {first}: avg {:.1}ms  max {:.1}ms", avg(&total_latencies[..first]), max(&total_latencies[..first]));
-    eprintln!("    Last {first}:  avg {:.1}ms  max {:.1}ms", avg(&total_latencies[n-first..]), max(&total_latencies[n-first..]));
-    let ratio = avg(&total_latencies[n-first..]) / avg(&total_latencies[..first]).max(1.0);
+    eprintln!(
+        "    First {first}: avg {:.1}ms  max {:.1}ms",
+        avg(&total_latencies[..first]),
+        max(&total_latencies[..first])
+    );
+    eprintln!(
+        "    Last {first}:  avg {:.1}ms  max {:.1}ms",
+        avg(&total_latencies[n - first..]),
+        max(&total_latencies[n - first..])
+    );
+    let ratio = avg(&total_latencies[n - first..]) / avg(&total_latencies[..first]).max(1.0);
     eprintln!("    Ratio: {ratio:.2}x");
 
     // Per-insert trend.
@@ -299,7 +331,10 @@ async fn insert_latency_persistent_with_edges() {
     }
     eprintln!(
         "    insert {:>4}: node={:.0}ms edge={:.0}ms total={:.0}ms",
-        n - 1, node_latencies[n-1], edge_latencies[n-1], total_latencies[n-1]
+        n - 1,
+        node_latencies[n - 1],
+        edge_latencies[n - 1],
+        total_latencies[n - 1]
     );
 
     // Clean up.

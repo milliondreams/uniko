@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use uni_db::{ModelAliasSpec, Value};
-use uniko_store::config::UnikoConfig;
 use uniko_store::KnowledgeBase;
+use uniko_store::config::UnikoConfig;
 
 const NUM_MESSAGES: usize = 300;
 
@@ -58,10 +58,7 @@ async fn create_edge_latency_grows_with_graph_size() {
     for i in 0..NUM_MESSAGES {
         // Create Message node (auto-embed on content).
         let mut props = HashMap::new();
-        props.insert(
-            "message_id".into(),
-            Value::String(format!("msg-{i:04}")),
-        );
+        props.insert("message_id".into(), Value::String(format!("msg-{i:04}")));
         props.insert(
             "content".into(),
             Value::String("Test message for edge latency measurement.".into()),

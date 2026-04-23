@@ -132,15 +132,13 @@ async fn main() -> Result<()> {
             LmeQuestionType::SingleSessionAssistant,
             LmeQuestionType::MultiSession,
         ])
-    } else if let Some(ref types_str) = cli.question_types {
-        Some(
+    } else {
+        cli.question_types.as_ref().map(|types_str| {
             types_str
                 .split(',')
                 .filter_map(|s| LmeQuestionType::from_shorthand(s.trim()))
-                .collect(),
-        )
-    } else {
-        None
+                .collect()
+        })
     };
 
     if let Some(ref filter) = type_filter {

@@ -191,7 +191,11 @@ pub async fn chunk_session_observations(
         .await
         .map_err(|e| UnikoError::Storage(e.to_string()))?;
     if !check.is_empty() {
-        tracing::debug!(session_id, chunks = check.len(), "observation chunks already exist");
+        tracing::debug!(
+            session_id,
+            chunks = check.len(),
+            "observation chunks already exist"
+        );
         let ids: Vec<NodeId> = check
             .rows()
             .iter()
@@ -276,8 +280,7 @@ pub async fn chunk_session_observations(
 
     // Create chunk nodes and HAS_CHUNK edges from Session.
     let obs_ext_id = format!("{session_id}:obs");
-    let chunk_nids =
-        create_chunks(kb, &obs_ext_id, session_nid, &chunks, "Session").await?;
+    let chunk_nids = create_chunks(kb, &obs_ext_id, session_nid, &chunks, "Session").await?;
 
     // Wire ABOUT edges from observation chunks to entities.
     let entity_cypher = "\

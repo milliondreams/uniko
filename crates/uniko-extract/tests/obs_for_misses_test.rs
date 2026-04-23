@@ -7,12 +7,12 @@
 #[cfg(feature = "onnx")]
 mod onnx_tests {
     use uni_db::ModelAliasSpec;
+    use uniko_extract::ingest::context::SentenceContext;
+    use uniko_extract::nlp::NlpPipeline;
     use uniko_extract::nlp::assets::label_maps;
     use uniko_extract::nlp::decode::extract_dep_observations;
-use uniko_extract::ingest::context::SentenceContext;
-    use uniko_extract::nlp::NlpPipeline;
-    use uniko_store::config::UnikoConfig;
     use uniko_store::KnowledgeBase;
+    use uniko_store::config::UnikoConfig;
 
     async fn make_pipeline() -> NlpPipeline {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -34,18 +34,78 @@ use uniko_extract::ingest::context::SentenceContext;
     /// (dia_id, speaker, &mut SentenceContext::default(), text, question_it_answers)
     fn evidence_messages() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
         vec![
-            ("D1:6", "Jon", "I've been into dancing since I was a kid and it's been my passion and escape. I wanna start a dance studio so I can teach others the joy that dancing brings me.", "How do Jon and Gina both like to destress?"),
-            ("D1:7", "Gina", "Wow Jon, same here! Dance is pretty much my go-to for stress relief. Got any fave styles?", "How do Jon and Gina both like to destress?"),
-            ("D1:2", "Jon", "Hey Gina! Good to see you too. Lost my job as a banker yesterday, so I'm gonna take a shot at starting my own business.", "Why did Jon decide to start his dance studio?"),
-            ("D1:4", "Jon", "Sorry to hear that! I'm starting a dance studio 'cause I'm passionate about dancing and it'd be great to share it with others.", "Why did Jon decide to start his dance studio?"),
-            ("D1:9", "Gina", "Yeah, me too! Contemporary dance is so expressive and graceful - it really speaks to me.", "What is Gina's favorite style of dance?"),
-            ("D1:8", "Jon", "Cool, Gina! I love all dances, but contemporary is my top pick. It's so expressive and powerful! What's your fave?", "What is Jon's favorite style of dance?"),
-            ("D4:2", "Gina", "Hey Jon! The store's doing great! It's a wild ride. How's the biz?", "How is Gina's store doing?"),
-            ("D7:5", "Jon", "Yeah, brand identity is key. Make sure yours stands out. Also be sure to build relationships with your customers - let them know you care. And don't forget to stay positive and motivate others. Your energy is contagious!", "What advice does Gina give to Jon?"),
-            ("D8:8", "Gina", "Thanks! I'm passionate about dance and fashion so combining them lets me show my creativity and share my love with others. Plus, I can add dance-inspired items to my store!", "Why did Gina combine her clothing business with dance?"),
-            ("D9:5", "Jon", "Yeah, Gina! It's been tough, but I'm living my true self. Dancing makes me so happy, and now I get to share that with other people. Seeing my students get better at it brings me such joy.", "What does Jon's dance make him?"),
-            ("D14:17", "Jon", "Sure thing, Gina! Your help means a lot to me. I'm not giving up.", "What does Jon tell Gina he won't do?"),
-            ("D15:7", "Jon", "Thanks, Gina! I'm excited! It's been a wild ride, but I'm feeling good and ready to give it my best.", "How does Jon feel about the opening night?"),
+            (
+                "D1:6",
+                "Jon",
+                "I've been into dancing since I was a kid and it's been my passion and escape. I wanna start a dance studio so I can teach others the joy that dancing brings me.",
+                "How do Jon and Gina both like to destress?",
+            ),
+            (
+                "D1:7",
+                "Gina",
+                "Wow Jon, same here! Dance is pretty much my go-to for stress relief. Got any fave styles?",
+                "How do Jon and Gina both like to destress?",
+            ),
+            (
+                "D1:2",
+                "Jon",
+                "Hey Gina! Good to see you too. Lost my job as a banker yesterday, so I'm gonna take a shot at starting my own business.",
+                "Why did Jon decide to start his dance studio?",
+            ),
+            (
+                "D1:4",
+                "Jon",
+                "Sorry to hear that! I'm starting a dance studio 'cause I'm passionate about dancing and it'd be great to share it with others.",
+                "Why did Jon decide to start his dance studio?",
+            ),
+            (
+                "D1:9",
+                "Gina",
+                "Yeah, me too! Contemporary dance is so expressive and graceful - it really speaks to me.",
+                "What is Gina's favorite style of dance?",
+            ),
+            (
+                "D1:8",
+                "Jon",
+                "Cool, Gina! I love all dances, but contemporary is my top pick. It's so expressive and powerful! What's your fave?",
+                "What is Jon's favorite style of dance?",
+            ),
+            (
+                "D4:2",
+                "Gina",
+                "Hey Jon! The store's doing great! It's a wild ride. How's the biz?",
+                "How is Gina's store doing?",
+            ),
+            (
+                "D7:5",
+                "Jon",
+                "Yeah, brand identity is key. Make sure yours stands out. Also be sure to build relationships with your customers - let them know you care. And don't forget to stay positive and motivate others. Your energy is contagious!",
+                "What advice does Gina give to Jon?",
+            ),
+            (
+                "D8:8",
+                "Gina",
+                "Thanks! I'm passionate about dance and fashion so combining them lets me show my creativity and share my love with others. Plus, I can add dance-inspired items to my store!",
+                "Why did Gina combine her clothing business with dance?",
+            ),
+            (
+                "D9:5",
+                "Jon",
+                "Yeah, Gina! It's been tough, but I'm living my true self. Dancing makes me so happy, and now I get to share that with other people. Seeing my students get better at it brings me such joy.",
+                "What does Jon's dance make him?",
+            ),
+            (
+                "D14:17",
+                "Jon",
+                "Sure thing, Gina! Your help means a lot to me. I'm not giving up.",
+                "What does Jon tell Gina he won't do?",
+            ),
+            (
+                "D15:7",
+                "Jon",
+                "Thanks, Gina! I'm excited! It's been a wild ride, but I'm feeling good and ready to give it my best.",
+                "How does Jon feel about the opening night?",
+            ),
         ]
     }
 
@@ -91,7 +151,7 @@ use uniko_extract::ingest::context::SentenceContext;
                         &result.dep_arcs,
                         &labels.pos_labels,
                         speaker,
-                    &mut SentenceContext::default(),
+                        &mut SentenceContext::default(),
                     );
                     for o in &obs {
                         eprintln!("      → [{}] \"{}\"", o.subject, o.content);

@@ -107,4 +107,3 @@ async fn generate_answer(
         .await?;
     Ok(result.text.trim().to_string())
 }
-

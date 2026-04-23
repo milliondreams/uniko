@@ -109,7 +109,7 @@ impl LmeQuestionType {
     }
 
     /// Parse from the string value in the dataset.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "single-session-user" => Some(Self::SingleSessionUser),
             "single-session-assistant" => Some(Self::SingleSessionAssistant),
@@ -142,12 +142,14 @@ impl std::fmt::Display for LmeQuestionType {
 }
 
 /// Custom deserializer for `LmeQuestionType` from its string representation.
-fn deserialize_question_type<'de, D>(deserializer: D) -> std::result::Result<LmeQuestionType, D::Error>
+fn deserialize_question_type<'de, D>(
+    deserializer: D,
+) -> std::result::Result<LmeQuestionType, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    LmeQuestionType::from_str(&s)
+    LmeQuestionType::parse(&s)
         .ok_or_else(|| serde::de::Error::custom(format!("unknown question type: {s}")))
 }
 
@@ -175,14 +177,14 @@ mod tests {
     #[test]
     fn test_parse_question_types() {
         assert_eq!(
-            LmeQuestionType::from_str("single-session-user"),
+            LmeQuestionType::parse("single-session-user"),
             Some(LmeQuestionType::SingleSessionUser)
         );
         assert_eq!(
-            LmeQuestionType::from_str("knowledge-update"),
+            LmeQuestionType::parse("knowledge-update"),
             Some(LmeQuestionType::KnowledgeUpdate)
         );
-        assert_eq!(LmeQuestionType::from_str("invalid"), None);
+        assert_eq!(LmeQuestionType::parse("invalid"), None);
     }
 
     #[test]

@@ -41,6 +41,7 @@ pub struct LmeQueryResult {
 }
 
 /// Run recall for a LongMemEval question and optionally generate an answer.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_lme_query(
     kb: &KnowledgeBase,
     question_id: &str,
@@ -66,8 +67,7 @@ pub async fn run_lme_query(
 
     // Compute retrieval metrics.
     let recalled_contents: Vec<&str> = bundle.items.iter().map(|i| i.content.as_str()).collect();
-    let answer_session_ids: Vec<String> =
-        evidence_map.answer_session_ids.iter().cloned().collect();
+    let answer_session_ids: Vec<String> = evidence_map.answer_session_ids.iter().cloned().collect();
 
     let context_contains = super::eval::context_contains_answer(&recalled_contents, gold_answer, 5);
     let recall_5 = super::eval::recall_at_k(&recalled_session_ids, &answer_session_ids, 5);
@@ -151,10 +151,10 @@ async fn extract_session_ids(kb: &KnowledgeBase, bundle: &ContextBundle) -> Vec<
         );
         if let Ok(result) = session.query_with(&query).fetch_all().await {
             for row in result.rows() {
-                if let Ok(sid) = row.get::<String>("sid") {
-                    if seen.insert(sid.clone()) {
-                        session_ids.push(sid);
-                    }
+                if let Ok(sid) = row.get::<String>("sid")
+                    && seen.insert(sid.clone())
+                {
+                    session_ids.push(sid);
                 }
             }
         }

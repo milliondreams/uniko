@@ -88,10 +88,7 @@ pub async fn embed_batch(
             "Xervo embedding runtime not available".into(),
         ));
     }
-    let prefixed: Vec<String> = texts
-        .iter()
-        .map(|t| apply_prefix(t, prefix))
-        .collect();
+    let prefixed: Vec<String> = texts.iter().map(|t| apply_prefix(t, prefix)).collect();
     let refs: Vec<&str> = prefixed.iter().map(|s| s.as_str()).collect();
     xervo
         .embed(EMBED_ALIAS, &refs)

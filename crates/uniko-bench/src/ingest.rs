@@ -62,10 +62,7 @@ pub async fn ingest_conversation(
             &sample.conversation.speaker_a,
             0, // nid resolved later
         );
-        session_ctx.register_participant(
-            &sample.conversation.speaker_b,
-            0,
-        );
+        session_ctx.register_participant(&sample.conversation.speaker_b, 0);
 
         for (turn_idx, turn) in session.turns.iter().enumerate() {
             let timestamp = base_ts + Duration::seconds(turn_idx as i64 * 30);
@@ -159,15 +156,12 @@ pub async fn ingest_conversation(
         total_session_chunks += chunk_ids.len();
 
         // Aggregate per-message observations into searchable session-level chunks.
-        let obs_chunk_ids =
-            uniko_extract::ingest::session_chunk::chunk_session_observations(
-                &kb,
-                &session.session_id,
-            )
-            .await
-            .with_context(|| {
-                format!("chunking session observations {}", session.session_id)
-            })?;
+        let obs_chunk_ids = uniko_extract::ingest::session_chunk::chunk_session_observations(
+            &kb,
+            &session.session_id,
+        )
+        .await
+        .with_context(|| format!("chunking session observations {}", session.session_id))?;
         total_session_chunks += obs_chunk_ids.len();
     }
 
