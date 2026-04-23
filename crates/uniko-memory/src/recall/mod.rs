@@ -156,8 +156,10 @@ pub async fn recall(
     // Observation nodes are trace-only (no indexes); session-level
     // observation Chunks (chunk_type="observation") are searchable
     // via the Chunk target below.
+    // Search Chunks only — Messages are raw turns (noisy); Chunks are
+    // curated retrieval units (session transcripts + observation summaries).
+    // Entity-scoped search boosts Chunks via PARTICIPATED_IN → Session → HAS_CHUNK.
     let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str)] = &[
-        ("Message", Some("embedding"), Some("content"), "content"),
         ("Chunk", Some("embedding"), Some("text"), "text"),
     ];
 
@@ -229,18 +231,8 @@ pub async fn recall(
     // by similar_to within the scoped set.
 
     // (label, content_field, embed_field, entity_pattern)
+    // Entity-scoped: find Chunks in sessions where the entity participated.
     let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
-        // Messages: sent by, addressed to, or mentioning the entity.
-        (
-            "Message",
-            "content",
-            "embedding",
-            "(m)-[:SENT_BY]->(:Participant {name: $ename}) \
-                OR (m)-[:ADDRESSED_TO]->(:Participant {name: $ename}) \
-                OR (m)-[:MENTIONS]->(:Entity {name: $ename})",
-        ),
-        // Chunks: in sessions where the entity participated (covers
-        // both session transcript chunks and observation chunks).
         (
             "Chunk",
             "text",
