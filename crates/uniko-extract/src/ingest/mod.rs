@@ -54,7 +54,7 @@ impl uniko_pipes::Step for IngestStep {
         match ingest_type {
             "message" => {
                 let msg = deserialize_message(&ctx.metadata)?;
-                let result = message::ingest_message(&ctx.kb, &msg).await?;
+                let result = message::ingest_message(&ctx.kb, &msg, None).await?;
                 ctx.node_id = result.message_node_id;
                 // Forward chunk IDs to downstream steps (embedding).
                 ctx.metadata.insert(

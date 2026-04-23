@@ -93,63 +93,25 @@ pub async fn upsert_entities(
                 (nid, true)
             }
             None => {
-                // Step 2: embedding similarity search before creating.
+                // Create new entity. Skip embedding similarity search
+                // during ingestion — exact entity_id match handles
+                // canonical dedup. Embedding-based dedup can be done
+                // as a post-processing batch step if needed.
                 let entity_type_str = entity.entity_type.as_str();
-                if let Some((similar_nid, similar_props)) =
-                    find_similar_entity(kb, &entity.canonical_name, entity_type_str).await?
-                {
-                    // Merge with existing similar entity.
-                    let old_freq = similar_props
-                        .get("frequency")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    let mut update = HashMap::new();
-                    update.insert(
-                        "frequency".into(),
-                        Value::Int(old_freq + mention_count as i64),
-                    );
-                    update.insert("last_seen".into(), Value::String(now_str.clone()));
-                    let old_conf = similar_props
-                        .get("confidence")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
-                    if entity.confidence > old_conf {
-                        update.insert("confidence".into(), Value::Float(entity.confidence));
-                    }
-                    kb.update_node(similar_nid, &update).await?;
-                    tracing::debug!(
-                        name = %entity.canonical_name,
-                        merged_with = ?similar_nid,
-                        "entity merged via embedding similarity",
-                    );
-                    (similar_nid, true)
-                } else {
-                    // Step 3: create new entity with embedding.
-                    let mut props = HashMap::new();
-                    props.insert("entity_id".into(), Value::String(entity_id));
-                    props.insert("name".into(), Value::String(entity.canonical_name.clone()));
-                    props.insert(
-                        "entity_type".into(),
-                        Value::String(entity_type_str.to_string()),
-                    );
-                    props.insert("first_seen".into(), Value::String(now_str.clone()));
-                    props.insert("last_seen".into(), Value::String(now_str.clone()));
-                    props.insert("frequency".into(), Value::Int(mention_count as i64));
-                    props.insert("confidence".into(), Value::Float(entity.confidence));
+                let mut props = HashMap::new();
+                props.insert("entity_id".into(), Value::String(entity_id));
+                props.insert("name".into(), Value::String(entity.canonical_name.clone()));
+                props.insert(
+                    "entity_type".into(),
+                    Value::String(entity_type_str.to_string()),
+                );
+                props.insert("first_seen".into(), Value::String(now_str.clone()));
+                props.insert("last_seen".into(), Value::String(now_str.clone()));
+                props.insert("frequency".into(), Value::Int(mention_count as i64));
+                props.insert("confidence".into(), Value::Float(entity.confidence));
 
-                    // Compute and store embedding for future similarity searches.
-                    if let Ok(vec) = crate::embedding::embed_text(
-                        kb,
-                        &format_embed_text(&entity.canonical_name, entity_type_str),
-                    )
-                    .await
-                    {
-                        props.insert("embedding".into(), Value::Vector(vec));
-                    }
-
-                    let nid = kb.create_node(labels::ENTITY, &props).await?;
-                    (nid, false)
-                }
+                let nid = kb.create_node(labels::ENTITY, &props).await?;
+                (nid, false)
             }
         };
 

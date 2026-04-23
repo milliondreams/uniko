@@ -69,6 +69,7 @@ pub async fn ingest_conversation(
 
     for session in sessions {
         let base_ts = parse_session_datetime(&session.date_time);
+        let mut prev_message_nid: Option<i64> = None;
 
         for (turn_idx, turn) in session.turns.iter().enumerate() {
             let timestamp = base_ts + Duration::seconds(turn_idx as i64 * 30);
@@ -89,9 +90,10 @@ pub async fn ingest_conversation(
             let turn_start = std::time::Instant::now();
 
             // Ingest the message (creates node, edges, chunks).
-            let result = ingest_message(&kb, &msg)
+            let result = ingest_message(&kb, &msg, prev_message_nid)
                 .await
                 .with_context(|| format!("ingesting {}", turn.dia_id))?;
+            prev_message_nid = Some(result.message_node_id);
 
             let ingest_ms = turn_start.elapsed().as_millis();
 

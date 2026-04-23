@@ -143,45 +143,67 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             });
         }
 
-        // 4. Create nodes and wire edges.
+        // 4. Create nodes and wire edges (batched).
         let persist_start = std::time::Instant::now();
         let entity_refs = load_all_entity_refs(ctx, &sender_ref).await;
         let entity_ref_ms = persist_start.elapsed().as_millis();
 
         let nodes_start = std::time::Instant::now();
-        let mut obs_node_ids = Vec::with_capacity(all_obs.len());
 
-        for raw in &all_obs {
-            let obs_nid = create_observation_node(&ctx.kb, raw).await?;
+        // 4a. Batch create all Observation nodes.
+        let obs_props: Vec<HashMap<String, Value>> = all_obs
+            .iter()
+            .map(|raw| {
+                let obs_id = uniko_store::id::new_id();
+                let mut props = HashMap::new();
+                props.insert("observation_id".into(), Value::String(obs_id));
+                props.insert("content".into(), Value::String(raw.content.clone()));
+                props.insert("subject".into(), Value::String(raw.subject.clone()));
+                props.insert(
+                    "observed_at".into(),
+                    Value::String(raw.observed_at.to_rfc3339()),
+                );
+                props.insert("confidence".into(), Value::Float(raw.confidence));
+                props
+            })
+            .collect();
+        let obs_node_ids = ctx.kb.batch_create_nodes(labels::OBSERVATION, &obs_props).await?;
 
-            // OBSERVED_IN: Observation → source node (Message or Chunk).
-            ctx.kb
-                .create_edge(edges::OBSERVED_IN, obs_nid, ctx.node_id, &HashMap::new())
-                .await?;
+        // 4b. Batch create OBSERVED_IN edges (Observation → source node).
+        let observed_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = obs_node_ids
+            .iter()
+            .map(|&nid| (nid, ctx.node_id, HashMap::new()))
+            .collect();
+        ctx.kb
+            .batch_create_edges(edges::OBSERVED_IN, &observed_edges)
+            .await?;
 
-            // ABOUT: wire to speaker (always) + entities matching subject.
+        // 4c. Batch create ABOUT edges.
+        let mut about_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
+        for (i, raw) in all_obs.iter().enumerate() {
+            let obs_nid = obs_node_ids[i];
+
+            // Wire to speaker (always).
             if let Some((sender_nid, _)) = &sender_ref {
-                ctx.kb
-                    .create_edge(edges::ABOUT, obs_nid, *sender_nid, &HashMap::new())
-                    .await?;
+                about_edges.push((obs_nid, *sender_nid, HashMap::new()));
             }
+            // Wire to entities matching the observation subject.
             for &(entity_nid, ref name) in &entity_refs {
-                // Skip sender (already wired above).
                 if sender_ref
                     .as_ref()
                     .is_some_and(|(nid, _)| *nid == entity_nid)
                 {
                     continue;
                 }
-                // Wire to entities that match the observation subject.
                 if raw.subject.to_lowercase() == name.to_lowercase() {
-                    ctx.kb
-                        .create_edge(edges::ABOUT, obs_nid, entity_nid, &HashMap::new())
-                        .await?;
+                    about_edges.push((obs_nid, entity_nid, HashMap::new()));
                 }
             }
-
-            obs_node_ids.push(obs_nid);
+        }
+        if !about_edges.is_empty() {
+            ctx.kb
+                .batch_create_edges(edges::ABOUT, &about_edges)
+                .await?;
         }
         let nodes_ms = nodes_start.elapsed().as_millis();
 
@@ -205,24 +227,6 @@ impl uniko_pipes::Step for ObservationExtractionStep {
     fn error_policy(&self) -> StepErrorPolicy {
         StepErrorPolicy::Skip
     }
-}
-
-/// Create an Observation node in the graph.
-async fn create_observation_node(
-    kb: &uniko_store::KnowledgeBase,
-    raw: &RawObservation,
-) -> uniko_store::Result<NodeId> {
-    let obs_id = uniko_store::id::new_id();
-    let mut props = HashMap::new();
-    props.insert("observation_id".into(), Value::String(obs_id));
-    props.insert("content".into(), Value::String(raw.content.clone()));
-    props.insert("subject".into(), Value::String(raw.subject.clone()));
-    props.insert(
-        "observed_at".into(),
-        Value::String(raw.observed_at.to_rfc3339()),
-    );
-    props.insert("confidence".into(), Value::Float(raw.confidence));
-    kb.create_node(labels::OBSERVATION, &props).await
 }
 
 /// Load the message sender via SENT_BY edge.

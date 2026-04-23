@@ -45,6 +45,7 @@ pub struct MessageIngestResult {
 pub async fn ingest_message(
     kb: &KnowledgeBase,
     msg: &IngestMessage,
+    prev_message_nid: Option<NodeId>,
 ) -> uniko_store::Result<MessageIngestResult> {
     let ts = msg.timestamp.to_rfc3339();
     let ts_value = datetime_value(msg.timestamp);
@@ -103,8 +104,13 @@ pub async fn ingest_message(
 
     create_addressed_to_edges(kb, message_nid, msg, participant_nid, session_nid).await?;
 
-    // 7. Find previous message in session and create NEXT edge.
-    find_and_link_previous(kb, &msg.session_id, &ts_value, message_nid).await?;
+    // 7. Create NEXT edge to link to previous message.
+    if let Some(prev_nid) = prev_message_nid {
+        let mut edge_props = HashMap::new();
+        edge_props.insert("gap_ms".into(), Value::Int(0));
+        kb.create_edge("NEXT", prev_nid, message_nid, &edge_props)
+            .await?;
+    }
     let edges_ms = edges_start.elapsed().as_millis();
 
     // 8. Chunk long messages.
@@ -135,45 +141,6 @@ pub async fn ingest_message(
         chunk_node_ids,
         session_node_id: session_nid,
     })
-}
-
-/// Find the previous message in the same session and create a NEXT edge.
-async fn find_and_link_previous(
-    kb: &KnowledgeBase,
-    session_id: &str,
-    timestamp: &Value,
-    new_message_nid: NodeId,
-) -> uniko_store::Result<()> {
-    let cypher = "\
-        MATCH (prev:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
-        WHERE prev.timestamp < $ts \
-        RETURN id(prev) AS vid \
-        ORDER BY prev.timestamp DESC \
-        LIMIT 1";
-
-    let session = kb.db().session();
-    let result = session
-        .query_with(cypher)
-        .param("sid", session_id)
-        .param("ts", timestamp.clone())
-        .fetch_all()
-        .await
-        .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
-
-    if let Some(row) = result.rows().first() {
-        let prev_vid: i64 = row
-            .get("vid")
-            .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
-
-        // gap_ms is approximate — we don't have the previous timestamp
-        // parsed here, so we use 0 and let the caller compute if needed.
-        let mut edge_props = HashMap::new();
-        edge_props.insert("gap_ms".into(), Value::Int(0));
-        kb.create_edge("NEXT", prev_vid, new_message_nid, &edge_props)
-            .await?;
-    }
-
-    Ok(())
 }
 
 /// Create ADDRESSED_TO edges from the message to recipient participants.
