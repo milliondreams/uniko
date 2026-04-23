@@ -36,40 +36,7 @@ pub struct DialogTurn {
     pub text: String,
 }
 
-/// Deserialize a value that may be a string or a number into `Option<String>`.
-fn string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de;
-
-    struct StringOrNumber;
-    impl<'de> de::Visitor<'de> for StringOrNumber {
-        type Value = Option<String>;
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "a string or number")
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            Ok(Some(v.to_string()))
-        }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
-            Ok(Some(v.to_string()))
-        }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
-            Ok(Some(v.to_string()))
-        }
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
-            Ok(Some(v.to_string()))
-        }
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-    }
-    deserializer.deserialize_any(StringOrNumber)
-}
+use uniko_bench::string_or_number;
 
 /// A question-answer pair with evaluation metadata.
 #[derive(Debug, Deserialize)]

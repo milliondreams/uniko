@@ -1,6 +1,5 @@
 //! Recall and answer generation for benchmark questions.
 
-use std::fmt::Write;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -59,7 +58,7 @@ pub async fn run_query(
     let predicted_answer = if let Some(alias) = llm_alias {
         generate_answer(kb, &bundle, &qa.question, alias).await?
     } else {
-        retrieval_answer(&bundle)
+        uniko_bench::retrieval_answer(&bundle, 5)
     };
     let generation_latency_ms = gen_start.elapsed().as_millis() as u64;
 
@@ -85,7 +84,7 @@ async fn generate_answer(
 ) -> Result<String> {
     use uni_db::xervo::{GenerationOptions, Message};
 
-    let context = format_context(bundle);
+    let context = uniko_bench::format_context(bundle);
 
     let system = "You are a helpful assistant answering questions about conversations. \
         Use ONLY the provided context to answer. If the information is not available \
@@ -109,29 +108,3 @@ async fn generate_answer(
     Ok(result.text.trim().to_string())
 }
 
-/// In retrieval-only mode, concatenate top recall items as the answer.
-fn retrieval_answer(bundle: &ContextBundle) -> String {
-    bundle
-        .items
-        .iter()
-        .take(5)
-        .map(|item| item.content.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Format recall items into a context string for the LLM prompt.
-fn format_context(bundle: &ContextBundle) -> String {
-    let mut ctx = String::new();
-    for (i, item) in bundle.items.iter().enumerate() {
-        let _ = writeln!(
-            &mut ctx,
-            "[{}] ({}, score={:.3}): {}",
-            i + 1,
-            item.node_type,
-            item.score,
-            item.content,
-        );
-    }
-    ctx
-}

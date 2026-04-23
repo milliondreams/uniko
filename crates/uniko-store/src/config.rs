@@ -25,6 +25,16 @@ pub struct EmbeddingConfig {
     pub dimensions: usize,
     /// Batch size for auto-embed operations.
     pub batch_size: usize,
+    /// Prefix prepended to documents before embedding.
+    ///
+    /// Nomic Embed Text v1.5 requires `"search_document: "` for optimal
+    /// retrieval. Models without task prefixes (e.g., MiniLM) use `None`.
+    pub document_prefix: Option<String>,
+    /// Prefix prepended to queries before embedding.
+    ///
+    /// Nomic Embed Text v1.5 requires `"search_query: "` for optimal
+    /// retrieval. Models without task prefixes (e.g., MiniLM) use `None`.
+    pub query_prefix: Option<String>,
 }
 
 impl EmbeddingConfig {
@@ -34,6 +44,8 @@ impl EmbeddingConfig {
             model_id: "NomicEmbedTextV15".into(),
             dimensions: 768,
             batch_size: 32,
+            document_prefix: Some("search_document: ".into()),
+            query_prefix: Some("search_query: ".into()),
         }
     }
 
@@ -43,6 +55,8 @@ impl EmbeddingConfig {
             model_id: "NomicEmbedTextV15Q".into(),
             dimensions: 768,
             batch_size: 32,
+            document_prefix: Some("search_document: ".into()),
+            query_prefix: Some("search_query: ".into()),
         }
     }
 
@@ -52,6 +66,8 @@ impl EmbeddingConfig {
             model_id: "AllMiniLML6V2".into(),
             dimensions: 384,
             batch_size: 32,
+            document_prefix: None,
+            query_prefix: None,
         }
     }
 }

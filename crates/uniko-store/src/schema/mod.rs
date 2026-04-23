@@ -68,8 +68,8 @@ pub(crate) fn auto_embed_vector_index(
             alias: EMBED_ALIAS.to_string(),
             source_properties: vec![source_property.to_string()],
             batch_size: config.embedding.batch_size,
-            document_prefix: None,
-            query_prefix: None,
+            document_prefix: config.embedding.document_prefix.clone(),
+            query_prefix: config.embedding.query_prefix.clone(),
         }),
     }
 }

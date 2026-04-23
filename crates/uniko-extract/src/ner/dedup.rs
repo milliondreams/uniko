@@ -153,7 +153,7 @@ async fn find_similar_entity(
 ) -> uniko_store::Result<Option<(NodeId, HashMap<String, Value>)>> {
     // Compute embedding for the candidate entity.
     let embed_text = format_embed_text(name, entity_type);
-    let vec = match crate::embedding::embed_text(kb, &embed_text).await {
+    let vec = match crate::embedding::embed_query(kb, &embed_text).await {
         Ok(v) if !v.is_empty() => v,
         _ => return Ok(None), // Xervo unavailable or empty — skip similarity.
     };

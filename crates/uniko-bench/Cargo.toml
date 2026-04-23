@@ -9,6 +9,10 @@ license.workspace = true
 name = "uniko-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "longmemeval-bench"
+path = "src/longmemeval_main.rs"
+
 [dependencies]
 uniko-memory = { workspace = true, features = ["onnx"] }
 uniko-extract = { workspace = true, features = ["onnx"] }

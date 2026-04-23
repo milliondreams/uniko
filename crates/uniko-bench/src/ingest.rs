@@ -25,25 +25,6 @@ use uniko_store::config::UnikoConfig;
 
 use crate::data::{Conversation, LocomoSample, ParsedSession};
 
-/// Ingest a full LoCoMo conversation into a fresh in-memory KB.
-///
-/// Returns the populated KB ready for recall queries.
-///
-/// # Errors
-///
-/// Returns an error if KB creation or any ingestion step fails.
-/// Open an existing persistent KB without ingesting.
-pub async fn open_kb(
-    ingest_dir: &Path,
-    config: UnikoConfig,
-    extra_catalog: &[ModelAliasSpec],
-) -> Result<Arc<KnowledgeBase>> {
-    let kb = KnowledgeBase::open_with_xervo(ingest_dir, config, extra_catalog.to_vec())
-        .await
-        .context("opening KB")?;
-    Ok(Arc::new(kb))
-}
-
 /// Ingest a full LoCoMo conversation into a persistent KB.
 pub async fn ingest_conversation(
     sample: &LocomoSample,

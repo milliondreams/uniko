@@ -173,9 +173,14 @@ pub fn aggregate(
 
 /// Print the report as a formatted table to stdout.
 pub fn print_report(report: &BenchmarkReport) {
+    print_report_with_name(report, "LoCoMo");
+}
+
+/// Print the report with a custom benchmark name.
+pub fn print_report_with_name(report: &BenchmarkReport, name: &str) {
     println!();
     println!("═══════════════════════════════════════════════════════════════");
-    println!("  LoCoMo Benchmark Results");
+    println!("  {name} Benchmark Results");
     println!(
         "  {} conversations, {} questions",
         report.total_conversations, report.total_questions

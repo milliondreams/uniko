@@ -39,7 +39,7 @@ pub async fn build_intent(kb: &KnowledgeBase, query: &str) -> Result<IntentProfi
     // Embed the keywords (not the raw question) — keyword-stripped text
     // embeds closer to statement-form content in the index.
     let embed_text = if keywords != query { &keywords } else { query };
-    let intent_vec = uniko_extract::embedding::embed_text(kb, embed_text)
+    let intent_vec = uniko_extract::embedding::embed_query(kb, embed_text)
         .await
         .unwrap_or_default();
 

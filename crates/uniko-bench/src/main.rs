@@ -25,7 +25,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
 
 use data::{QuestionCategory, build_evidence_lookup, parse_sessions, resolve_evidence};
 use query::QueryResult;
@@ -138,7 +137,11 @@ async fn main() -> Result<()> {
     }
 
     // Build extra catalog for LLM.
-    let extra_catalog = build_llm_catalog(&cli);
+    let extra_catalog = uniko_bench::build_llm_catalog(
+        cli.llm_alias.as_deref(),
+        cli.llm_model_id.as_deref(),
+        cli.judge_alias.as_deref(),
+    );
     let llm_alias = if cli.retrieval_only {
         None
     } else {
@@ -177,7 +180,7 @@ async fn main() -> Result<()> {
         let kb_dir = cli.ingest_dir.join(&sample.sample_id);
         let kb = if cli.reuse && kb_dir.exists() {
             tracing::info!(path = %kb_dir.display(), "reusing existing KB");
-            ingest::open_kb(&kb_dir, config.clone(), &extra_catalog).await?
+            uniko_bench::open_kb(&kb_dir, config.clone(), &extra_catalog).await?
         } else {
             let ingest_start = Instant::now();
             let kb = ingest::ingest_conversation(
@@ -274,44 +277,3 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Build LLM model aliases for the xervo catalog.
-fn build_llm_catalog(cli: &Cli) -> Vec<ModelAliasSpec> {
-    let mut catalog = Vec::new();
-
-    if let (Some(alias), Some(model_id)) = (&cli.llm_alias, &cli.llm_model_id) {
-        catalog.push(ModelAliasSpec {
-            alias: alias.clone(),
-            task: ModelTask::Generate,
-            provider_id: "local/mistralrs".to_string(),
-            model_id: model_id.clone(),
-            revision: None,
-            warmup: WarmupPolicy::Lazy,
-            required: false,
-            timeout: None,
-            load_timeout: None,
-            retry: None,
-            options: serde_json::json!({"isq": "Q4K"}),
-        });
-
-        // If judge alias is different, add it separately.
-        if let Some(judge) = &cli.judge_alias
-            && judge != alias
-        {
-            catalog.push(ModelAliasSpec {
-                alias: judge.clone(),
-                task: ModelTask::Generate,
-                provider_id: "local/mistralrs".to_string(),
-                model_id: model_id.clone(),
-                revision: None,
-                warmup: WarmupPolicy::Lazy,
-                required: false,
-                timeout: None,
-                load_timeout: None,
-                retry: None,
-                options: serde_json::json!({"isq": "Q4K"}),
-            });
-        }
-    }
-
-    catalog
-}
