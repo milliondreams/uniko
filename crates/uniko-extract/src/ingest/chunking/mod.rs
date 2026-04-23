@@ -53,8 +53,12 @@ pub struct ChunkConfig {
 impl ChunkConfig {
     /// Build from [`uniko_store::config::UnikoConfig`] defaults.
     pub fn from_uniko_config(cfg: &uniko_store::config::UnikoConfig) -> Self {
-        // Overlap ≈ 10 % of max, capped at 50 tokens.
-        let overlap = (cfg.max_chunk_tokens / 10).min(50);
+        let overlap = if cfg.chunk_overlap_tokens > 0 {
+            cfg.chunk_overlap_tokens
+        } else {
+            // Auto: ~10% of max, capped at 50 tokens.
+            (cfg.max_chunk_tokens / 10).min(50)
+        };
         Self {
             max_chunk_tokens: cfg.max_chunk_tokens,
             min_chunk_tokens: cfg.min_chunk_tokens,

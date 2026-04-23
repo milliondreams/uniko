@@ -235,6 +235,20 @@ pub struct UnikoConfig {
     pub max_chunk_tokens: usize,
     /// Minimum tokens per chunk (fragments below this are merged).
     pub min_chunk_tokens: usize,
+    /// Overlap tokens between adjacent chunks (0 = auto: 10% of max, capped at 50).
+    pub chunk_overlap_tokens: usize,
+
+    // Recall parameters
+    /// Maximum items returned from recall.
+    pub recall_limit: usize,
+    /// Maximum total tokens in the context bundle.
+    pub recall_token_budget: usize,
+    /// Minimum fused score for result inclusion.
+    pub recall_min_score: f64,
+    /// Vector similarity weight in hybrid fusion \[0.0–1.0\].
+    pub recall_vector_weight: f64,
+    /// BM25 fulltext weight in hybrid fusion \[0.0–1.0\].
+    pub recall_bm25_weight: f64,
 
     // Memory decay
     /// Half-life in days for importance decay: `importance * exp(-ln(2) / half_life * age_days)`.
@@ -273,6 +287,12 @@ impl Default for UnikoConfig {
             action_output_artifact_threshold: 256,
             max_chunk_tokens: 256,
             min_chunk_tokens: 32,
+            chunk_overlap_tokens: 0, // 0 = auto: 10% of max, capped at 50
+            recall_limit: 15,
+            recall_token_budget: 8192,
+            recall_min_score: 0.001,
+            recall_vector_weight: 0.5,
+            recall_bm25_weight: 0.5,
             half_life_days: 30.0,
             prune_below: 0.05,
             phase1_coverage_threshold: 0.75,
@@ -378,6 +398,12 @@ mod tests {
         assert_eq!(c.action_output_artifact_threshold, 256);
         assert_eq!(c.max_chunk_tokens, 256);
         assert_eq!(c.min_chunk_tokens, 32);
+        assert_eq!(c.chunk_overlap_tokens, 0);
+        assert_eq!(c.recall_limit, 15);
+        assert_eq!(c.recall_token_budget, 8192);
+        assert!((c.recall_min_score - 0.001).abs() < f64::EPSILON);
+        assert!((c.recall_vector_weight - 0.5).abs() < f64::EPSILON);
+        assert!((c.recall_bm25_weight - 0.5).abs() < f64::EPSILON);
         assert_eq!(c.half_life_days, 30.0);
         assert_eq!(c.prune_below, 0.05);
         assert_eq!(c.phase1_coverage_threshold, 0.75);

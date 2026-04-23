@@ -96,6 +96,10 @@ pub struct RecallConfig {
     pub token_budget: usize,
     /// Minimum fused score for inclusion.
     pub min_score: f64,
+    /// Vector similarity weight in hybrid fusion.
+    pub vector_weight: f64,
+    /// BM25 fulltext weight in hybrid fusion.
+    pub bm25_weight: f64,
 }
 
 impl Default for RecallConfig {
@@ -103,9 +107,22 @@ impl Default for RecallConfig {
         Self {
             limit: 15,
             token_budget: 8192,
-            // RRF scores are naturally low: 1/(k+rank) with k=60.
-            // A result in 3 lists scores ~0.05 * tier_weight.
             min_score: 0.001,
+            vector_weight: 0.5,
+            bm25_weight: 0.5,
+        }
+    }
+}
+
+impl RecallConfig {
+    /// Build from [`UnikoConfig`](uniko_store::config::UnikoConfig).
+    pub fn from_uniko_config(cfg: &uniko_store::config::UnikoConfig) -> Self {
+        Self {
+            limit: cfg.recall_limit,
+            token_budget: cfg.recall_token_budget,
+            min_score: cfg.recall_min_score,
+            vector_weight: cfg.recall_vector_weight,
+            bm25_weight: cfg.recall_bm25_weight,
         }
     }
 }
@@ -171,7 +188,7 @@ pub async fn recall(
                 (Some(ef), Some(ff)) => (
                     format!("[m.{ef}, m.{ff}]"),
                     "[$qvec, $qtxt]".to_string(),
-                    ", {method: 'weighted', weights: [0.5, 0.5]}".to_string(),
+                    format!(", {{method: 'weighted', weights: [{}, {}]}}", config.vector_weight, config.bm25_weight),
                     (true, true),
                 ),
                 (Some(ef), None) => (
