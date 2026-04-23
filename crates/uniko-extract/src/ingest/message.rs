@@ -108,21 +108,30 @@ pub async fn ingest_message(
     sent_by_props.insert("role".into(), Value::String("user".to_string()));
     kb.create_edge("SENT_BY", message_nid, participant_nid, &sent_by_props)
         .await?;
+    let sent_by_ms = edges_start.elapsed().as_millis();
 
+    let t = std::time::Instant::now();
     kb.create_edge("IN_SESSION", message_nid, session_nid, &HashMap::new())
         .await?;
+    let in_session_ms = t.elapsed().as_millis();
 
+    let t = std::time::Instant::now();
     ensure_participated_in(kb, participant_nid, session_nid).await?;
+    let participated_ms = t.elapsed().as_millis();
 
+    let t = std::time::Instant::now();
     create_addressed_to_edges(kb, message_nid, msg, participant_nid, session_nid).await?;
+    let addressed_ms = t.elapsed().as_millis();
 
     // 7. Create NEXT edge to link to previous message.
+    let t = std::time::Instant::now();
     if let Some(prev_nid) = session_ctx.prev_message_nid {
         let mut edge_props = HashMap::new();
         edge_props.insert("gap_ms".into(), Value::Int(0));
         kb.create_edge("NEXT", prev_nid, message_nid, &edge_props)
             .await?;
     }
+    let next_ms = t.elapsed().as_millis();
     session_ctx.prev_message_nid = Some(message_nid);
     let edges_ms = edges_start.elapsed().as_millis();
 
@@ -143,6 +152,11 @@ pub async fn ingest_message(
         message_id = %msg.message_id,
         setup_ms,
         create_ms,
+        sent_by_ms,
+        in_session_ms,
+        participated_ms,
+        addressed_ms,
+        next_ms,
         edges_ms,
         chunk_ms,
         total_ms = ingest_start.elapsed().as_millis(),

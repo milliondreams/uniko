@@ -271,8 +271,8 @@ impl Default for UnikoConfig {
             circuit_recovery_ms: 60_000,
             message_chunk_threshold: 1024,
             action_output_artifact_threshold: 256,
-            max_chunk_tokens: 512,
-            min_chunk_tokens: 64,
+            max_chunk_tokens: 256,
+            min_chunk_tokens: 32,
             half_life_days: 30.0,
             prune_below: 0.05,
             phase1_coverage_threshold: 0.75,
@@ -376,8 +376,8 @@ mod tests {
         assert_eq!(c.circuit_recovery_ms, 60_000);
         assert_eq!(c.message_chunk_threshold, 1024);
         assert_eq!(c.action_output_artifact_threshold, 256);
-        assert_eq!(c.max_chunk_tokens, 512);
-        assert_eq!(c.min_chunk_tokens, 64);
+        assert_eq!(c.max_chunk_tokens, 256);
+        assert_eq!(c.min_chunk_tokens, 32);
         assert_eq!(c.half_life_days, 30.0);
         assert_eq!(c.prune_below, 0.05);
         assert_eq!(c.phase1_coverage_threshold, 0.75);

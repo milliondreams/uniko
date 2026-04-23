@@ -152,22 +152,20 @@ pub async fn recall(
 
     let has_vec = !intent.intent_vec.is_empty();
 
-    // (label, embed_field, fts_field, content_field)
-    // Observation nodes are trace-only (no indexes); session-level
-    // observation Chunks (chunk_type="observation") are searchable
-    // via the Chunk target below.
     // Search Chunks only — Messages are raw turns (noisy); Chunks are
     // curated retrieval units (session transcripts + observation summaries).
-    // Entity-scoped search boosts Chunks via PARTICIPATED_IN → Session → HAS_CHUNK.
-    let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str)] = &[
-        ("Chunk", Some("embedding"), Some("text"), "text"),
+    // Session chunks get more slots than observation chunks because they
+    // contain richer context. Observation chunks are dense keyword matches
+    // but lack conversational context.
+    //
+    // (label, embed_field, fts_field, content_field, where_clause)
+    let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str, &str)] = &[
+        ("Chunk", Some("embedding"), Some("text"), "text", "m.chunk_type = 'session'"),
+        ("Chunk", Some("embedding"), Some("text"), "text", "m.chunk_type = 'observation'"),
     ];
 
-    for &(label, embed_field, fts_field, content_field) in hybrid_targets {
+    for &(label, embed_field, fts_field, content_field, where_clause) in hybrid_targets {
         // Build the multi-source similar_to with proper RRF fusion.
-        // similar_to([sources], [queries]) handles normalization and fusion.
-        // Weighted fusion: boost BM25 (0.7) over vector (0.3) since
-        // keyword-extracted queries match better on exact terms.
         let (sources, queries, fusion, params_needed) =
             match (embed_field.filter(|_| has_vec), fts_field) {
                 (Some(ef), Some(ff)) => (
@@ -191,8 +189,14 @@ pub async fn recall(
                 (None, None) => continue,
             };
 
+        let where_part = if where_clause.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {where_clause}")
+        };
+
         let cypher = format!(
-            "MATCH (m:{label}) \
+            "MATCH (m:{label}){where_part} \
              RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                     m.{content_field} AS content, \
                     similar_to({sources}, {queries}{fusion}) AS score \
