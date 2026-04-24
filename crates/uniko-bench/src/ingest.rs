@@ -14,12 +14,13 @@ use tokio_util::sync::CancellationToken;
 use uniko_pipes::Step;
 
 use uni_db::ModelAliasSpec;
+use uniko_extract::ingest::artifact::ingest_artifact;
 use uniko_extract::ingest::message::ingest_message;
 use uniko_extract::ner::EntityExtractionStep;
 use uniko_extract::observations::ObservationExtractionStep;
 use uniko_pipes::circuit_breaker::CircuitBreaker;
 use uniko_pipes::step::PipelineContext;
-use uniko_pipes::types::IngestMessage;
+use uniko_pipes::types::{IngestArtifact, IngestMessage};
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 
@@ -72,9 +73,28 @@ pub async fn ingest_conversation(
             // Update session context with current speaker.
             session_ctx.set_current_speaker(&turn.speaker);
 
+            // Enrich message content with image caption/query if present.
+            let mut content = turn.text.clone();
+            if let Some(ref caption) = turn.blip_caption {
+                if !caption.is_empty() {
+                    if !content.is_empty() {
+                        content.push(' ');
+                    }
+                    content.push_str(caption);
+                }
+            }
+            if let Some(ref query) = turn.query {
+                if !query.is_empty() {
+                    if !content.is_empty() {
+                        content.push(' ');
+                    }
+                    content.push_str(query);
+                }
+            }
+
             let msg = IngestMessage {
                 message_id: format!("{}-{}", sample.sample_id, turn.dia_id),
-                content: turn.text.clone(),
+                content: content.clone(),
                 content_type: "text".to_string(),
                 sender_id: turn.speaker.clone(),
                 session_id: session.session_id.clone(),
@@ -90,9 +110,42 @@ pub async fn ingest_conversation(
                 .await
                 .with_context(|| format!("ingesting {}", turn.dia_id))?;
 
+            // Create Artifact node for image turns.
+            // TODO(uni-db#50): Store actual image bytes in a blob field once
+            // DataType::Bytes is available.
+            if turn.img_url.is_some() {
+                let caption = turn.blip_caption.as_deref().unwrap_or("");
+                let query_text = turn.query.as_deref().unwrap_or("");
+                let artifact_content = format!("{caption} {query_text}").trim().to_string();
+
+                if !artifact_content.is_empty() {
+                    let img_path = turn
+                        .img_url
+                        .as_ref()
+                        .and_then(|urls| urls.first().cloned());
+
+                    let artifact = IngestArtifact {
+                        artifact_id: format!("{}-{}-img", sample.sample_id, turn.dia_id),
+                        content: artifact_content,
+                        kind: "image".to_string(),
+                        path: img_path,
+                        metadata: HashMap::new(),
+                    };
+
+                    if let Err(e) = ingest_artifact(&kb, &artifact).await {
+                        tracing::warn!(
+                            dia_id = %turn.dia_id,
+                            error = %e,
+                            "failed to ingest image artifact",
+                        );
+                    }
+                }
+            }
+
             let ingest_ms = turn_start.elapsed().as_millis();
 
-            // Run entity extraction on the message node.
+            // Run entity/observation extraction on the original text only —
+            // appended captions confuse the ONNX NER model.
             let mut ctx = PipelineContext::new(
                 result.message_node_id,
                 turn.text.clone(),

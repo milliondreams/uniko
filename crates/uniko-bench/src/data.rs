@@ -33,7 +33,17 @@ pub struct Conversation {
 pub struct DialogTurn {
     pub speaker: String,
     pub dia_id: String,
+    #[serde(default)]
     pub text: String,
+    /// Image URLs attached to this turn (LoCoMo multimodal data).
+    #[serde(default)]
+    pub img_url: Option<Vec<String>>,
+    /// BLIP-generated caption describing the image.
+    #[serde(default)]
+    pub blip_caption: Option<String>,
+    /// Search query/intent associated with the image.
+    #[serde(default)]
+    pub query: Option<String>,
 }
 
 use uniko_bench::string_or_number;
@@ -171,11 +181,31 @@ pub fn parse_sessions(sample_id: &str, conv: &Conversation) -> Result<Vec<Parsed
 }
 
 /// Build a `dia_id → text` lookup from parsed sessions.
+///
+/// For image turns, appends `[image: caption | query]` so that
+/// evidence substring matching can find image-only evidence.
 pub fn build_evidence_lookup(sessions: &[ParsedSession]) -> HashMap<String, String> {
     let mut lookup = HashMap::new();
     for session in sessions {
         for turn in &session.turns {
-            lookup.insert(turn.dia_id.clone(), turn.text.clone());
+            let mut text = turn.text.clone();
+            if let Some(ref caption) = turn.blip_caption {
+                if !caption.is_empty() {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(caption);
+                }
+            }
+            if let Some(ref query) = turn.query {
+                if !query.is_empty() {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(query);
+                }
+            }
+            lookup.insert(turn.dia_id.clone(), text);
         }
     }
     lookup

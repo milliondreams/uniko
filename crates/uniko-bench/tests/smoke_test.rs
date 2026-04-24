@@ -7,6 +7,7 @@ use chrono::Utc;
 use tokio_util::sync::CancellationToken;
 
 use uni_db::ModelAliasSpec;
+use uniko_extract::ingest::context::SessionContext;
 use uniko_extract::ingest::message::ingest_message;
 use uniko_extract::ner::EntityExtractionStep;
 use uniko_extract::observations::ObservationExtractionStep;
@@ -26,11 +27,15 @@ async fn make_kb() -> Arc<KnowledgeBase> {
     Arc::new(kb)
 }
 
-async fn ingest_and_extract(kb: &Arc<KnowledgeBase>, msg: IngestMessage) {
+async fn ingest_and_extract(
+    kb: &Arc<KnowledgeBase>,
+    msg: IngestMessage,
+    session_ctx: &mut SessionContext,
+) {
     let breaker = Arc::new(CircuitBreaker::new(5, 60_000));
     let cancel = CancellationToken::new();
 
-    let result = ingest_message(kb, &msg).await.unwrap();
+    let result = ingest_message(kb, &msg, session_ctx).await.unwrap();
 
     let mut ctx = PipelineContext::new(
         result.message_node_id,
@@ -83,13 +88,16 @@ async fn test_ingest_and_recall() {
     let kb = make_kb().await;
 
     eprintln!("--- Ingesting messages ---");
+    let mut session_ctx = SessionContext::new("s-1".into(), 0);
     ingest_and_extract(
         &kb,
         msg("m1", "Hey Gina! Lost my job as a banker yesterday, so I'm gonna take a shot at starting my own business.", "Jon"),
+        &mut session_ctx,
     ).await;
     ingest_and_extract(
         &kb,
         msg("m2", "Sorry about your job Jon, but starting your own business sounds awesome! I also lost my job at Door Dash last week.", "Gina"),
+        &mut session_ctx,
     ).await;
     ingest_and_extract(
         &kb,
@@ -98,6 +106,7 @@ async fn test_ingest_and_recall() {
             "We both like to destress by dancing, so let's go dancing this weekend!",
             "Jon",
         ),
+        &mut session_ctx,
     )
     .await;
 
@@ -106,6 +115,8 @@ async fn test_ingest_and_recall() {
         limit: 10,
         token_budget: 4096,
         min_score: 0.001,
+        vector_weight: 0.5,
+        bm25_weight: 0.5,
     };
 
     let bundle = recall(&kb, "When did Jon lose his job?", &config)
@@ -221,7 +232,7 @@ async fn test_ingest_and_recall() {
 
     // Try direct vector search
     eprintln!("\n--- Direct vector search ---");
-    let intent_vec = uniko_extract::embedding::embed_text(&kb, "When did Jon lose his job?")
+    let intent_vec = uniko_extract::embedding::embed_query(&kb, "When did Jon lose his job?")
         .await
         .unwrap_or_default();
     eprintln!("  intent_vec len: {}", intent_vec.len());
