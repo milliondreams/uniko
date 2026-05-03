@@ -13,7 +13,7 @@ async fn setup_db() -> Uni {
         .xervo_catalog(vec![ModelAliasSpec {
             alias: "embed/default".to_string(),
             task: ModelTask::Embed,
-            provider_id: "local/fastembed".to_string(),
+            provider_id: "local/onnx".to_string(),
             model_id: "AllMiniLML6V2".to_string(),
             revision: None,
             warmup: WarmupPolicy::Lazy,

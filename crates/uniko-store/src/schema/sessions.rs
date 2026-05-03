@@ -40,12 +40,11 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
         .done()
         .edge_type(edges::FOR_GOAL, &[labels::SESSION], &[labels::GOAL])
         .done()
-        // Participant → Session (with role)
+        // Participant → Session
         .edge_type(
             edges::PARTICIPATED_IN,
             &[labels::PARTICIPANT],
             &[labels::SESSION],
         )
-        .property_nullable("role", DataType::String)
         .done()
 }

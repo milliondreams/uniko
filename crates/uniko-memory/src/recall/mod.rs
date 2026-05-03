@@ -52,7 +52,12 @@ impl RecallTier {
         match label {
             "Fact" | "Topic" => Self::Semantic,
             "Procedure" => Self::Procedural,
-            "Episode" | "Observation" => Self::Episodic,
+            "Episode" => Self::Episodic,
+            // Observations index `content` directly now and compete with
+            // Chunks on raw similarity. Putting them in KnowledgeBase
+            // (same weight as Chunk) avoids the tier multiplier
+            // crowding Chunks out of the bundle.
+            "Observation" => Self::KnowledgeBase,
             "Chunk" | "Artifact" => Self::KnowledgeBase,
             _ => Self::Provenance,
         }
@@ -100,6 +105,21 @@ pub struct RecallConfig {
     pub vector_weight: f64,
     /// BM25 fulltext weight in hybrid fusion.
     pub bm25_weight: f64,
+    /// When true, re-score the top `reranker_top_n` RRF candidates with
+    /// the cross-encoder registered at `rerank/default`.
+    pub reranker_enabled: bool,
+    /// Number of RRF candidates to send to the reranker.
+    pub reranker_top_n: usize,
+    /// Apply sigmoid to raw cross-encoder logits.
+    pub reranker_apply_sigmoid: bool,
+    /// When > 1.0, multiplies the score of any RecallItem whose
+    /// connected entities include one of `IntentProfile.expected_answer_type`.
+    /// `1.0` is a no-op. Only triggers when `predict_answer_type` returns
+    /// a label.
+    pub answer_type_boost: f64,
+    /// Cap on how many top items are checked for the boost (one Cypher
+    /// lookup per item — avoid scaling badly when limit is large).
+    pub answer_type_top_n: usize,
 }
 
 impl Default for RecallConfig {
@@ -110,6 +130,18 @@ impl Default for RecallConfig {
             min_score: 0.001,
             vector_weight: 0.5,
             bm25_weight: 0.5,
+            reranker_enabled: false,
+            reranker_top_n: 50,
+            reranker_apply_sigmoid: true,
+            // Off by default. The naive "any connected entity matches
+            // predicted type → boost" rule swamps top-K with off-target
+            // hits when the predicted type is common in the corpus
+            // (especially `measurement` for "how many" questions).
+            // Measured −0.149 R@5 / −0.186 NDCG@5 on a 24-question
+            // LongMemEval slice (2026-05-03). Set to a small value like
+            // 1.05 if used as a tiebreaker, or leave at 1.0.
+            answer_type_boost: 1.0,
+            answer_type_top_n: 50,
         }
     }
 }
@@ -123,6 +155,18 @@ impl RecallConfig {
             min_score: cfg.recall_min_score,
             vector_weight: cfg.recall_vector_weight,
             bm25_weight: cfg.recall_bm25_weight,
+            reranker_enabled: cfg.reranker.enabled,
+            reranker_top_n: cfg.reranker.top_n,
+            reranker_apply_sigmoid: cfg.reranker.apply_sigmoid,
+            // Off by default. The naive "any connected entity matches
+            // predicted type → boost" rule swamps top-K with off-target
+            // hits when the predicted type is common in the corpus
+            // (especially `measurement` for "how many" questions).
+            // Measured −0.149 R@5 / −0.186 NDCG@5 on a 24-question
+            // LongMemEval slice (2026-05-03). Set to a small value like
+            // 1.05 if used as a tiebreaker, or leave at 1.0.
+            answer_type_boost: 1.0,
+            answer_type_top_n: 50,
         }
     }
 }
@@ -169,11 +213,15 @@ pub async fn recall(
 
     let has_vec = !intent.intent_vec.is_empty();
 
-    // Search Chunks only — Messages are raw turns (noisy); Chunks are
-    // curated retrieval units (session transcripts + observation summaries).
-    // Session chunks get more slots than observation chunks because they
-    // contain richer context. Observation chunks are dense keyword matches
-    // but lack conversational context.
+    // Retrieval substrate (per-question, hybrid vector + BM25):
+    // - Session Chunks: full-context dialogue snippets — best for
+    //   questions whose answer needs surrounding conversation.
+    // - Observation Chunks: per-session aggregations of extracted
+    //   facts (one chunk lists all observations from that session).
+    // - Observation nodes: individual extracted facts in claim form
+    //   ("Caroline tough breakup", "Melanie play clarinet"). These
+    //   are usually the closest match to a question's answer because
+    //   they're already in claim-form, not embedded in dialogue.
     //
     // (label, embed_field, fts_field, content_field, where_clause)
     let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str, &str)] = &[
@@ -191,6 +239,11 @@ pub async fn recall(
             "text",
             "m.chunk_type = 'observation'",
         ),
+        // Observations are intentionally NOT in the global hybrid path.
+        // They flood the bundle when ungated (short claim-form text
+        // scores higher than long dialogue chunks). Observations are
+        // surfaced via entity-scoped paths below, where the entity
+        // anchor keeps them topical.
     ];
 
     for &(label, embed_field, fts_field, content_field, where_clause) in hybrid_targets {
@@ -267,13 +320,63 @@ pub async fn recall(
     // by similar_to within the scoped set.
 
     // (label, content_field, embed_field, entity_pattern)
-    // Entity-scoped: find Chunks in sessions where the entity participated.
-    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[(
-        "Chunk",
-        "text",
-        "embedding",
-        "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
-    )];
+    // Entity-scoped anchors. Each is a different graph hop into the
+    // entity-relevant subset; `similar_to` then ranks within it.
+    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
+        // Loose: chunks in any session the participant was in. Wide net
+        // when the participant is a frequent participant (e.g. Caroline
+        // in conv-26 — every session).
+        (
+            "Chunk",
+            "text",
+            "embedding",
+            "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
+        ),
+        // Tight: observation chunks directly ABOUT the named participant.
+        // Anchored via Observation→ABOUT→Participant edges propagated to
+        // the chunk by `chunk_session_observations`. This is the path
+        // multi-hop questions about a person should hit.
+        (
+            "Chunk",
+            "text",
+            "embedding",
+            "(m)-[:ABOUT]->(:Participant {name: $ename})",
+        ),
+        // Tight: observation chunks directly ABOUT a named entity (e.g.
+        // a place, organization, work-of-art).
+        (
+            "Chunk",
+            "text",
+            "embedding",
+            "(m)-[:ABOUT]->(:Entity {name: $ename})",
+        ),
+        // Observation nodes anchored on a named participant. Highest
+        // precision for entity-attribute questions because each
+        // observation is a single claim ("Melanie play clarinet").
+        (
+            "Observation",
+            "content",
+            "embedding",
+            "(m)-[:ABOUT]->(:Participant {name: $ename})",
+        ),
+        // Observation nodes anchored on a named entity (place, org…).
+        (
+            "Observation",
+            "content",
+            "embedding",
+            "(m)-[:ABOUT]->(:Entity {name: $ename})",
+        ),
+        // Observations whose extracted subject literally matches the
+        // entity name — catches cases where the speaker context
+        // resolved the subject before we wrote the ABOUT edge, but
+        // the same speaker name appears as the structured subject.
+        (
+            "Observation",
+            "content",
+            "embedding",
+            "m.subject = $ename",
+        ),
+    ];
 
     for entity_name in &intent.entity_refs {
         for &(label, content_field, embed_field, pattern) in entity_scoped_targets {
@@ -358,6 +461,80 @@ pub async fn recall(
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    // ── Optional cross-encoder reranker stage ──────────────────────
+    // Re-score the top RRF candidates with a cross-encoder before
+    // truncating to the recall limit.  Disabled by default — when off,
+    // this is a no-op.
+    if config.reranker_enabled && !items.is_empty() {
+        let top_n = config.reranker_top_n.min(items.len());
+        let docs: Vec<&str> = items[..top_n].iter().map(|i| i.content.as_str()).collect();
+        match kb
+            .db()
+            .xervo()
+            .rerank(uniko_store::schema::RERANK_ALIAS, query, &docs)
+            .await
+        {
+            Ok(scored) => {
+                let mut head: Vec<RecallItem> = scored
+                    .into_iter()
+                    .filter_map(|s| {
+                        items.get(s.index).cloned().map(|mut it| {
+                            it.score = if config.reranker_apply_sigmoid {
+                                1.0 / (1.0 + f64::exp(-(s.score as f64)))
+                            } else {
+                                s.score as f64
+                            };
+                            it
+                        })
+                    })
+                    .collect();
+                let tail = items.split_off(top_n);
+                head.extend(tail);
+                items = head;
+                items.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            Err(e) => tracing::warn!(error = %e, "reranker call failed, falling back to RRF order"),
+        }
+    }
+
+    // ── Answer-type boost ────────────────────────────────────────────
+    // When the question's surface form predicts an entity_type
+    // ("where" → location, "how many" → measurement, …), boost any
+    // top-N item whose connected entities include one of that type.
+    // No-op when no rule fired or the boost is 1.0.
+    if config.answer_type_boost > 1.0
+        && let Some(target_type) = intent.expected_answer_type
+        && !items.is_empty()
+    {
+        let n = config.answer_type_top_n.min(items.len());
+        let mut matched = 0usize;
+        for item in items.iter_mut().take(n) {
+            if entity_type_match(kb, item.node_id, target_type).await {
+                item.score *= config.answer_type_boost;
+                matched += 1;
+            }
+        }
+        if matched > 0 {
+            items.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        tracing::info!(
+            target_type,
+            checked = n,
+            matched,
+            boost = config.answer_type_boost,
+            "answer-type reweight applied",
+        );
+    }
+
     items.truncate(config.limit);
 
     let mut total_tokens = 0;
@@ -390,6 +567,43 @@ pub async fn recall(
         phase1_only: false, // Always false in Phase 1.
         coverage,
     })
+}
+
+/// Does any Entity reachable from `node_id` (via the relationships
+/// the recall path actually walks — `MENTIONS` from Message, `ABOUT`
+/// from Observation/Chunk) carry `entity_type = target_type`? Also
+/// matches when the node *is* an Entity of that type.
+///
+/// Single Cypher query per call; intended to be invoked on at most
+/// `answer_type_top_n` items (default 50). Returns `false` on any
+/// query error so a transient failure can't accidentally re-rank
+/// items downward.
+async fn entity_type_match(
+    kb: &uniko_store::KnowledgeBase,
+    node_id: uniko_store::NodeId,
+    target_type: &str,
+) -> bool {
+    let session = kb.db().session();
+    let q = format!(
+        "MATCH (n) WHERE id(n) = {nid} \
+         OPTIONAL MATCH (n)-[:MENTIONS|ABOUT]->(e1:Entity {{entity_type: '{t}'}}) \
+         OPTIONAL MATCH (n)<-[:ABOUT]-(:Observation)-[:ABOUT]->(e2:Entity {{entity_type: '{t}'}}) \
+         RETURN (n.entity_type = '{t}' OR e1 IS NOT NULL OR e2 IS NOT NULL) AS hit \
+         LIMIT 1",
+        nid = node_id,
+        t = target_type.replace('\'', "\\'"),
+    );
+    match session.query_with(&q).fetch_all().await {
+        Ok(result) => result
+            .rows()
+            .first()
+            .and_then(|row| row.get::<bool>("hit").ok())
+            .unwrap_or(false),
+        Err(e) => {
+            tracing::debug!(error = %e, node_id, "entity_type_match: query failed");
+            false
+        }
+    }
 }
 
 fn empty_bundle() -> ContextBundle {

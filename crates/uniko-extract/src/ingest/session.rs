@@ -8,7 +8,6 @@ use chrono::{DateTime, Utc};
 use uni_db::Value;
 
 use uniko_store::schema::constants::edges;
-use uniko_store::storage::edges::Direction;
 use uniko_store::{KnowledgeBase, NodeId};
 
 /// Convert a `chrono::DateTime<Utc>` to `uni_db::Value::Temporal(DateTime)`.
@@ -70,41 +69,26 @@ pub(crate) async fn ensure_participant(
         .await
 }
 
-/// Ensure a `PARTICIPATED_IN` edge exists from participant to session.
+/// Create a `PARTICIPATED_IN` edge from participant to session.
 ///
-/// The first participant in a session gets role `"initiator"`;
-/// subsequent participants get `"responder"`.  If the edge already
-/// exists, this is a no-op.
+/// Call exactly once per (participant, session) pair — typically at
+/// session start. No idempotency check; the caller is responsible
+/// for not calling this twice for the same pair.
 ///
 /// # Errors
 ///
-/// Returns a storage error if the graph operation fails.
-pub(crate) async fn ensure_participated_in(
+/// Returns a storage error if the edge creation fails.
+pub(crate) async fn link_participant_to_session(
     kb: &KnowledgeBase,
     participant_nid: NodeId,
     session_nid: NodeId,
 ) -> uniko_store::Result<()> {
-    // Check if edge already exists.
-    let existing = kb
-        .get_edges(participant_nid, edges::PARTICIPATED_IN, Direction::Outgoing)
-        .await?;
-    if existing.iter().any(|e| e.to == session_nid) {
-        return Ok(()); // Already linked.
-    }
-
-    // Determine role: "initiator" if no one has joined yet, else "responder".
-    let session_participants = kb
-        .get_edges(session_nid, edges::PARTICIPATED_IN, Direction::Incoming)
-        .await?;
-    let role = if session_participants.is_empty() {
-        "initiator"
-    } else {
-        "responder"
-    };
-
-    let mut props = HashMap::new();
-    props.insert("role".into(), Value::String(role.to_string()));
-    kb.create_edge(edges::PARTICIPATED_IN, participant_nid, session_nid, &props)
-        .await?;
+    kb.create_edge(
+        edges::PARTICIPATED_IN,
+        participant_nid,
+        session_nid,
+        &HashMap::new(),
+    )
+    .await?;
     Ok(())
 }

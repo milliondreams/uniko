@@ -425,3 +425,96 @@ async fn test_batch_create_edges() {
 
     kb.shutdown().await.unwrap();
 }
+
+// ── Prepared statement & single-tx tests ──
+
+#[tokio::test]
+async fn test_prepare_basic() {
+    let kb = test_kb().await;
+
+    // Verify tx.prepare() works and doesn't hang.
+    let session = kb.db().session();
+    let tx = session.tx().await.unwrap();
+    let prepared = tx
+        .prepare("CREATE (n:Chunk {chunk_id: $cid, text: $txt}) RETURN id(n) AS vid")
+        .await
+        .unwrap();
+
+    let result = prepared
+        .execute(&[
+            ("cid", Value::String("test-1".into())),
+            ("txt", Value::String("hello".into())),
+        ])
+        .await
+        .unwrap();
+    let rows = result.rows();
+    eprintln!("prepared execute returned {} rows", rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        eprintln!("  row {i}: {:?}", row);
+    }
+    assert!(!rows.is_empty(), "prepared execute returned no rows");
+    let vid: i64 = rows.first().unwrap().get("vid").unwrap();
+    eprintln!("vid = {vid}");
+    assert!(vid >= 0);
+
+    let result2 = prepared
+        .execute(&[
+            ("cid", Value::String("test-2".into())),
+            ("txt", Value::String("world".into())),
+        ])
+        .await
+        .unwrap();
+    let vid2: i64 = result2.rows().first().unwrap().get("vid").unwrap();
+    assert!(vid2 > vid);
+
+    tx.commit().await.unwrap();
+    kb.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_batch_create_nodes_and_edges() {
+    let kb = test_kb().await;
+
+    // Create an Artifact to wire chunk edges to.
+    let mut art_props = HashMap::new();
+    art_props.insert("artifact_id".into(), Value::String("art-x".into()));
+    art_props.insert("kind".into(), Value::String("file".into()));
+    let art_id = kb.create_node("Artifact", &art_props).await.unwrap();
+
+    // Create chunks + HAS_CHUNK edges in a single transaction.
+    let chunk_props: Vec<HashMap<String, Value>> = (0..5)
+        .map(|i| {
+            let mut props = HashMap::new();
+            props.insert("chunk_id".into(), Value::String(format!("cx-{i}")));
+            props.insert("text".into(), Value::String(format!("chunk {i}")));
+            props
+        })
+        .collect();
+
+    let node_ids = kb
+        .batch_create_nodes_and_edges("Chunk", &chunk_props, |nids| {
+            let edges: Vec<_> = nids
+                .iter()
+                .enumerate()
+                .map(|(i, &nid)| {
+                    let mut props = HashMap::new();
+                    props.insert("index".into(), Value::Int(i as i64));
+                    (art_id, nid, props)
+                })
+                .collect();
+            vec![("HAS_CHUNK".to_string(), edges)]
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(node_ids.len(), 5);
+
+    // Verify edges exist.
+    let edges = kb
+        .get_edges(art_id, "HAS_CHUNK", Direction::Outgoing)
+        .await
+        .unwrap();
+    assert_eq!(edges.len(), 5);
+
+    kb.shutdown().await.unwrap();
+}

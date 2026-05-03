@@ -15,6 +15,8 @@ pub mod contradiction;
 pub mod filter;
 pub mod llm;
 pub mod rules;
+#[cfg(feature = "onnx")]
+pub mod rules_engine;
 pub mod temporal;
 pub mod types;
 
@@ -33,8 +35,9 @@ use uniko_store::{NodeId, UnikoError};
 /// Pipeline step that extracts observations from content.
 ///
 /// Orchestration:
-/// 1. CLS gate: only "inform" and "plan_commit" proceed.
-/// 2. DEP tree extraction: reconstruct subject-verb-object from parse.
+/// 1. CLS gate: only `inform`/`request`/`confirm`/`offer`/`status` proceed.
+/// 2. DEP tree extraction: reconstruct subject-verb-object from the
+///    biaffine parse.
 /// 3. Speaker substitution: "I"/"we" → sender name.
 /// 4. Create Observation nodes + OBSERVED_IN + ABOUT edges.
 /// 5. Fallback to rule-based when NLP unavailable.
@@ -113,11 +116,15 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                     crate::ingest::context::SentenceContext::new(speaker, Vec::new())
                 });
 
+            let rules = load_observation_rules(ctx);
+
             for nlp_result in &nlp_results {
-                // Per-sentence CLS gate.
-                if !nlp_result.sentence_class.is_informative() {
-                    // Still update context from skipped sentences —
-                    // nouns in greetings can be useful antecedents.
+                // Multi-label CLS gate. Accept the sentence if any
+                // raw-CLS label whose softmax prob clears `min_prob` is
+                // in the configured informative-label set. Falls back
+                // to the legacy argmax check when the model didn't
+                // emit a probability vector (older serialised data).
+                if !cls_gate_admits(nlp_result, &labels.cls_labels, &rules.filters.cls_gate) {
                     crate::nlp::decode::update_sentence_context(
                         &mut sent_ctx,
                         &nlp_result.words,
@@ -128,7 +135,8 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                     continue;
                 }
 
-                let dep_obs = crate::nlp::decode::extract_dep_observations(
+                let dep_obs = crate::observations::rules_engine::extract_with_rules(
+                    rules,
                     &nlp_result.words,
                     &nlp_result.pos_indices,
                     &nlp_result.dep_arcs,
@@ -201,17 +209,27 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             .kb
             .batch_create_nodes(labels::OBSERVATION, &obs_props)
             .await?;
+        let create_nodes_ms = nodes_start.elapsed().as_millis();
 
         // 4b. Batch create OBSERVED_IN edges (Observation → source node).
+        // Source is always Observation; target is Message in this code path.
+        let observed_start = std::time::Instant::now();
         let observed_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = obs_node_ids
             .iter()
             .map(|&nid| (nid, ctx.node_id, HashMap::new()))
             .collect();
         ctx.kb
-            .batch_create_edges(edges::OBSERVED_IN, &observed_edges)
+            .batch_create_edges_fast(
+                edges::OBSERVED_IN,
+                Some(labels::OBSERVATION),
+                Some(labels::MESSAGE),
+                &observed_edges,
+            )
             .await?;
+        let observed_in_ms = observed_start.elapsed().as_millis();
 
         // 4c. Batch create ABOUT edges.
+        let about_start = std::time::Instant::now();
         let mut about_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
         for (i, raw) in all_obs.iter().enumerate() {
             let obs_nid = obs_node_ids[i];
@@ -238,10 +256,21 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             }
         }
         if !about_edges.is_empty() {
+            // Source is always Observation; target is Participant or Entity.
+            // uni-db#56 added label-disjunction parsing, but the resulting
+            // plan panics during DataFusion union_schema when the two
+            // branches have different property-column counts (filed as
+            // a follow-up). Until that's resolved, leave dst unlabelled.
             ctx.kb
-                .batch_create_edges(edges::ABOUT, &about_edges)
+                .batch_create_edges_fast(
+                    edges::ABOUT,
+                    Some(labels::OBSERVATION),
+                    None,
+                    &about_edges,
+                )
                 .await?;
         }
+        let about_ms = about_start.elapsed().as_millis();
         let nodes_ms = nodes_start.elapsed().as_millis();
 
         // 5. Populate context for downstream steps.
@@ -253,6 +282,10 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             sender_ms,
             extract_ms,
             entity_ref_ms,
+            create_nodes_ms,
+            observed_in_ms,
+            about_ms,
+            about_edges = about_edges.len(),
             nodes_ms,
             total_ms = step_start.elapsed().as_millis(),
             "observation step",
@@ -300,6 +333,81 @@ async fn load_all_entity_refs(
         }
     }
     refs
+}
+
+/// Load the observation rule set, honouring `UnikoConfig.observation_rules_path`.
+///
+/// External paths are read once and cached in a process-global map keyed
+/// by canonical path. The bundled `english.yml` is also cached (parsed
+/// once) — reused across every message in a process.
+#[cfg(feature = "onnx")]
+fn load_observation_rules(
+    ctx: &PipelineContext,
+) -> &'static crate::observations::rules_engine::Rules {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    static EXTERNAL: OnceLock<Mutex<HashMap<PathBuf, &'static crate::observations::rules_engine::Rules>>> =
+        OnceLock::new();
+
+    let cfg_path = ctx.kb.config().observation_rules_path.clone();
+    if let Some(path) = cfg_path {
+        let key = std::fs::canonicalize(&path).unwrap_or(path);
+        let map = EXTERNAL.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = map.lock().expect("observation rules cache poisoned");
+        if let Some(r) = guard.get(&key) {
+            return r;
+        }
+        match crate::observations::rules_engine::load_rules_from_path(&key) {
+            Ok(rules) => {
+                let leaked: &'static _ = Box::leak(Box::new(rules));
+                guard.insert(key, leaked);
+                return leaked;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to load observation_rules_path; falling back to bundled rules"
+                );
+            }
+        }
+    }
+    crate::observations::rules_engine::load_bundled_rules()
+}
+
+/// Multi-label CLS gate.
+///
+/// The CLS head emits a softmax over 8 raw labels. We accept a sentence
+/// if **any** label whose prob clears `min_prob` belongs to the
+/// configured informative set (default: `inform`, `status`, `request`,
+/// `offer`). This handles the common case where the argmax is `social`
+/// but the sentence carries propositional content (e.g. self-status
+/// reports with affective language).
+///
+/// Falls back to the legacy `is_informative()` argmax check when
+/// `cls_probs` is empty (e.g. data serialised before this field
+/// existed).
+#[cfg(feature = "onnx")]
+fn cls_gate_admits(
+    nlp_result: &crate::nlp::types::NlpResult,
+    cls_labels: &[String],
+    gate: &crate::observations::rules_engine::rules::ClsGate,
+) -> bool {
+    if nlp_result.cls_probs.is_empty() {
+        return nlp_result.sentence_class.is_informative();
+    }
+    for (i, &p) in nlp_result.cls_probs.iter().enumerate() {
+        if p < gate.min_prob {
+            continue;
+        }
+        if let Some(name) = cls_labels.get(i)
+            && gate.informative_labels.iter().any(|l| l == name)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Extract the message timestamp from context metadata or use now.

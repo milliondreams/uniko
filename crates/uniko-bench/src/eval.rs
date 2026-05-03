@@ -134,12 +134,21 @@ fn bag_of_words(tokens: &[String]) -> HashMap<String, usize> {
 
 /// Check how many evidence messages appear in the recalled items.
 ///
-/// An evidence message is "found" if a significant substring of its text
-/// appears in any recalled item's content. Uses multiple fingerprints
-/// to handle speaker prefixes in session chunks (e.g., "Jon: message...").
+/// Two-stage match:
+/// 1. Each evidence message is "found" if a significant substring of its
+///    text appears in any recalled item's content. Uses multiple
+///    fingerprints to handle speaker prefixes (e.g., `"Jon: message..."`).
+/// 2. Fallback: if zero evidence items matched but the `gold_answer`
+///    appears at a word boundary in some recalled chunk, count one hit.
+///    Catches the case where recall surfaces a paraphrased mention of
+///    the answer rather than the LoCoMo-tagged evidence message.
 ///
 /// Returns `(found, total)`.
-pub fn evidence_hit(recalled_contents: &[&str], evidence_texts: &[String]) -> (usize, usize) {
+pub fn evidence_hit(
+    recalled_contents: &[&str],
+    evidence_texts: &[String],
+    gold_answer: &str,
+) -> (usize, usize) {
     let total = evidence_texts.len();
     if total == 0 {
         return (0, 0);
@@ -150,16 +159,24 @@ pub fn evidence_hit(recalled_contents: &[&str], evidence_texts: &[String]) -> (u
         let ev_lower = evidence.to_lowercase();
         // Try multiple fingerprint positions to handle prefixed chunks.
         // Skip short words at the start that might be speaker names.
+        // Use floor_char_boundary to avoid slicing inside multi-byte chars.
+        let end0 = ev_lower.floor_char_boundary(50);
         let fingerprints: Vec<&str> = vec![
-            &ev_lower[..ev_lower.len().min(50)],
+            &ev_lower[..end0],
             // Skip first word (might be a speaker prefix in the chunk)
             ev_lower
                 .find(' ')
-                .map(|i| &ev_lower[i + 1..ev_lower.len().min(i + 51)])
+                .map(|i| {
+                    let start = i + 1;
+                    let end = ev_lower.floor_char_boundary(start + 50);
+                    &ev_lower[start..end]
+                })
                 .unwrap_or(""),
             // Use a chunk from the middle for longer texts
             if ev_lower.len() > 30 {
-                &ev_lower[10..ev_lower.len().min(60)]
+                let start = ev_lower.ceil_char_boundary(10);
+                let end = ev_lower.floor_char_boundary(60);
+                &ev_lower[start..end]
             } else {
                 ""
             },
@@ -175,7 +192,53 @@ pub fn evidence_hit(recalled_contents: &[&str], evidence_texts: &[String]) -> (u
         }
     }
 
+    // Fallback: gold answer present in retrieved chunks counts as one hit.
+    if found == 0 && gold_answer_in_retrieved(gold_answer, recalled_contents) {
+        found = 1;
+    }
+
     (found, total)
+}
+
+/// Whether `gold_answer` appears at a word boundary in any recalled chunk.
+///
+/// Word-boundary matching avoids spurious hits where the gold answer is
+/// a substring of a longer unrelated word (e.g. `"ice"` inside `"rice"`).
+/// Skips gold answers shorter than 4 characters to bound false positives.
+fn gold_answer_in_retrieved(gold_answer: &str, recalled_contents: &[&str]) -> bool {
+    let needle = gold_answer.trim().to_lowercase();
+    if needle.len() < 4 {
+        return false;
+    }
+    recalled_contents
+        .iter()
+        .any(|rc| contains_at_word_boundary(&rc.to_lowercase(), &needle))
+}
+
+/// Case-insensitive substring search with word boundaries on both sides.
+///
+/// Both inputs are expected to already be lowercased. A boundary is any
+/// non-alphanumeric character (or string edge).
+fn contains_at_word_boundary(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let n = needle.len();
+    let mut start = 0;
+    while let Some(idx) = haystack[start..].find(needle) {
+        let abs = start + idx;
+        let before_ok = abs == 0
+            || !(bytes[abs - 1] as char).is_ascii_alphanumeric();
+        let after = abs + n;
+        let after_ok = after == bytes.len()
+            || !(bytes[after] as char).is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
 }
 
 // ── LLM-as-Judge ─────────────────────────────────────────────────
@@ -207,11 +270,11 @@ pub async fn llm_judge(
     );
 
     let messages = vec![Message::user(&prompt)];
-    let options = GenerationOptions {
-        max_tokens: Some(10),
-        temperature: Some(0.0),
-        ..Default::default()
-    };
+    // Use provider defaults: GPT-5 rejects `max_tokens` (requires
+    // `max_completion_tokens`) and `temperature: 0` (only accepts the
+    // default 1.0). The judge prompt constrains the response to a
+    // single word, so neither parameter is load-bearing.
+    let options = GenerationOptions::default();
 
     let result = kb
         .db()
@@ -272,5 +335,84 @@ mod tests {
     #[test]
     fn test_normalize_removes_articles() {
         assert_eq!(normalize("The quick and a fox"), "quick fox");
+    }
+
+    // ── evidence_hit tests ─────────────────────────────────────
+
+    #[test]
+    fn test_evidence_hit_matches_evidence_text() {
+        let chunks = vec!["Jon: I'm a huge fan of dance, especially contemporary"];
+        let evidence = vec!["Jon: I'm a huge fan of dance, especially contemporary".to_string()];
+        let (found, total) = evidence_hit(&chunks, &evidence, "Contemporary");
+        assert_eq!((found, total), (1, 1));
+    }
+
+    #[test]
+    fn test_evidence_hit_gold_answer_fallback() {
+        // Evidence-text fingerprint won't match (different chunk),
+        // but gold answer "Harry Potter" appears verbatim.
+        let chunks = vec!["movie marathon with friends harry potter"];
+        let evidence =
+            vec!["John: I'm a huge Harry Potter fan, just rewatched the whole series".to_string()];
+        let (found, total) = evidence_hit(&chunks, &evidence, "Harry Potter");
+        assert_eq!((found, total), (1, 1), "gold answer fallback should hit");
+    }
+
+    #[test]
+    fn test_evidence_hit_no_match() {
+        let chunks = vec!["unrelated content about cooking"];
+        let evidence = vec!["John: I'm a huge Harry Potter fan".to_string()];
+        let (found, total) = evidence_hit(&chunks, &evidence, "Harry Potter");
+        assert_eq!((found, total), (0, 1));
+    }
+
+    #[test]
+    fn test_evidence_hit_word_boundary_substring_does_not_match() {
+        // "ice" should NOT match inside "rice" or "price".
+        let chunks = vec!["He bought rice at the price of $5"];
+        let evidence = vec!["completely different evidence text not found in chunks".to_string()];
+        let (found, total) = evidence_hit(&chunks, &evidence, "ice");
+        assert_eq!((found, total), (0, 1), "short gold should not trigger");
+    }
+
+    #[test]
+    fn test_evidence_hit_word_boundary_real_match() {
+        let chunks = vec!["I love ice cream a lot"];
+        let evidence = vec!["completely different evidence text not found in chunks".to_string()];
+        let (found, total) = evidence_hit(&chunks, &evidence, "ice cream");
+        assert_eq!((found, total), (1, 1), "multi-word gold matches with boundaries");
+    }
+
+    #[test]
+    fn test_evidence_hit_short_gold_skipped() {
+        // 3-char gold should not trigger fallback.
+        let chunks = vec!["The cat sat on the mat"];
+        let evidence = vec!["unrelated evidence string".to_string()];
+        let (found, total) = evidence_hit(&chunks, &evidence, "cat");
+        assert_eq!((found, total), (0, 1));
+    }
+
+    #[test]
+    fn test_evidence_hit_partial_not_bumped() {
+        // 1/2 evidence matched — gold-answer fallback should NOT bump.
+        let chunks = vec!["First evidence text completely included Harry Potter"];
+        let evidence = vec![
+            "First evidence text completely included Harry Potter".to_string(),
+            "Second evidence message that is missing entirely".to_string(),
+        ];
+        let (found, total) = evidence_hit(&chunks, &evidence, "Harry Potter");
+        assert_eq!(
+            (found, total),
+            (1, 2),
+            "fallback only applies when zero evidence matched"
+        );
+    }
+
+    #[test]
+    fn test_evidence_hit_gold_case_insensitive() {
+        let chunks = vec!["Tim cheers for THE WOLVES every weekend"];
+        let evidence = vec!["completely different evidence text not in chunks".to_string()];
+        let (found, total) = evidence_hit(&chunks, &evidence, "the wolves");
+        assert_eq!((found, total), (1, 1));
     }
 }

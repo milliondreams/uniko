@@ -12,14 +12,15 @@ use crate::error::{Result, UnikoError};
 
 /// Embedding model selection.
 ///
-/// Controls which fastembed model is used for auto-embedding and
+/// Controls which ONNX embedding model is used for auto-embedding and
 /// computed embeddings.  Dimensions must match the model's output.
 ///
 /// Use [`EmbeddingConfig::nomic_v15`] (768d, recommended) or
 /// [`EmbeddingConfig::minilm_l6_v2`] (384d, legacy) for presets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
-    /// Fastembed model identifier (e.g., `"NomicEmbedTextV15"`).
+    /// Embedding model identifier (e.g., `"NomicEmbedTextV15"`). Resolved
+    /// by the `local/onnx` provider in uni-db's xervo catalog.
     pub model_id: String,
     /// Output vector dimensions (must match model).
     pub dimensions: usize,
@@ -35,6 +36,14 @@ pub struct EmbeddingConfig {
     /// Nomic Embed Text v1.5 requires `"search_query: "` for optimal
     /// retrieval. Models without task prefixes (e.g., MiniLM) use `None`.
     pub query_prefix: Option<String>,
+    /// Optional override for ONNX execution providers when registering
+    /// the embedder with `local/onnx`. Values are xervo's EP string ids
+    /// (e.g. `["cuda", "cpu"]`, `["coreml", "cpu"]`, `["cpu"]`). When
+    /// `None`, [`embed_catalog`](crate::storage::embed_catalog) picks
+    /// a feature-aware default (CUDA → CPU on `gpu-cuda`, CoreML → CPU
+    /// on `gpu-metal`, CPU otherwise).
+    #[serde(default)]
+    pub execution_providers: Option<Vec<String>>,
 }
 
 impl EmbeddingConfig {
@@ -46,6 +55,7 @@ impl EmbeddingConfig {
             batch_size: 32,
             document_prefix: Some("search_document: ".into()),
             query_prefix: Some("search_query: ".into()),
+            execution_providers: None,
         }
     }
 
@@ -57,6 +67,7 @@ impl EmbeddingConfig {
             batch_size: 32,
             document_prefix: Some("search_document: ".into()),
             query_prefix: Some("search_query: ".into()),
+            execution_providers: None,
         }
     }
 
@@ -68,7 +79,110 @@ impl EmbeddingConfig {
             batch_size: 32,
             document_prefix: None,
             query_prefix: None,
+            execution_providers: None,
         }
+    }
+
+    /// BAAI/bge-small-en-v1.5 — 384d, BERT-based, MTEB-strong general
+    /// retriever. Uses a query-side prefix only (documents go in raw).
+    pub fn bge_small_en_v15() -> Self {
+        Self {
+            model_id: "BGESmallENV15".into(),
+            dimensions: 384,
+            batch_size: 32,
+            document_prefix: None,
+            query_prefix: Some(
+                "Represent this sentence for searching relevant passages: ".into(),
+            ),
+            execution_providers: None,
+        }
+    }
+
+    /// BAAI/bge-large-en-v1.5 — 1024d, BERT-large-based, top-tier MTEB
+    /// quality. Same query-prefix convention as BGE-small. ~10× the
+    /// parameter count of BGE-small; expect 2-3× slower per-query
+    /// embedding.
+    pub fn bge_large_en_v15() -> Self {
+        Self {
+            model_id: "BGELargeENV15".into(),
+            dimensions: 1024,
+            batch_size: 16,
+            document_prefix: None,
+            query_prefix: Some(
+                "Represent this sentence for searching relevant passages: ".into(),
+            ),
+            execution_providers: None,
+        }
+    }
+}
+
+/// Cross-encoder reranker selection.
+///
+/// When `enabled`, recall fuses RRF candidates and then re-scores the
+/// top `top_n` items with a cross-encoder via uni-db's `local/onnx`
+/// provider.  Disabled by default to keep CPU-only CI cheap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RerankerConfig {
+    /// Whether to register and invoke the reranker.
+    pub enabled: bool,
+    /// HuggingFace model id for the cross-encoder ONNX export.
+    pub model_id: String,
+    /// Number of top RRF candidates to send to the reranker.
+    ///
+    /// Must be `>= recall_limit` when enabled; otherwise truncation
+    /// would discard items the reranker hasn't seen.
+    pub top_n: usize,
+    /// Apply sigmoid to raw cross-encoder logits to map to `[0, 1]`.
+    pub apply_sigmoid: bool,
+    /// Optional override for ONNX execution providers when registering
+    /// the reranker with `local/onnx`. Same semantics as the embedder
+    /// equivalent on [`EmbeddingConfig`]. `None` → feature-aware default.
+    #[serde(default)]
+    pub execution_providers: Option<Vec<String>>,
+    /// xervo `local/onnx` reranker code path. `"cross-encoder"` (default)
+    /// loads BERT-family encoders that emit a relevance logit per
+    /// `(query, doc)` pair (e.g. `BAAI/bge-reranker-base`,
+    /// `cross-encoder/ms-marco-MiniLM-L-6-v2`). `"generative"` loads a
+    /// decoder-LM reranker that scores yes/no via next-token logits
+    /// (e.g. `onnx-community/Qwen3-Reranker-0.6B-ONNX`). Any other
+    /// value triggers a runtime error from xervo.
+    #[serde(default = "default_reranker_style")]
+    pub style: String,
+}
+
+fn default_reranker_style() -> String {
+    "cross-encoder".to_string()
+}
+
+impl RerankerConfig {
+    /// BAAI/bge-reranker-base — 278M params, accurate, CPU-feasible.
+    pub fn bge_base() -> Self {
+        Self {
+            enabled: false,
+            model_id: "BAAI/bge-reranker-base".into(),
+            top_n: 50,
+            apply_sigmoid: true,
+            execution_providers: None,
+            style: default_reranker_style(),
+        }
+    }
+
+    /// MS-MARCO MiniLM-L6-v2 — 22M params, ~12× faster, lower accuracy.
+    pub fn minilm_l6() -> Self {
+        Self {
+            enabled: false,
+            model_id: "cross-encoder/ms-marco-MiniLM-L-6-v2".into(),
+            top_n: 50,
+            apply_sigmoid: true,
+            execution_providers: None,
+            style: default_reranker_style(),
+        }
+    }
+}
+
+impl Default for RerankerConfig {
+    fn default() -> Self {
+        Self::bge_base()
     }
 }
 
@@ -205,10 +319,19 @@ pub struct UnikoConfig {
     /// instead of the builder-based registration. Use `None` for defaults.
     #[serde(default)]
     pub schema_path: Option<PathBuf>,
+    /// Path to observation extraction rules YAML. When set, the
+    /// observation pipeline loads patterns from this file instead of
+    /// the bundled `english.yml`. Lets us iterate on extraction
+    /// patterns without recompiling.
+    #[serde(default)]
+    pub observation_rules_path: Option<PathBuf>,
 
     // Embedding + vector index
     /// Embedding model selection (controls dimensions and model ID).
     pub embedding: EmbeddingConfig,
+    /// Cross-encoder reranker selection (disabled by default).
+    #[serde(default)]
+    pub reranker: RerankerConfig,
     /// Vector index algorithm and quantization strategy.
     pub vector_algorithm: VectorAlgorithm,
     /// Distance metric for similarity search.
@@ -284,7 +407,9 @@ impl Default for UnikoConfig {
         Self {
             catalog_path: None,
             schema_path: None,
+            observation_rules_path: None,
             embedding: EmbeddingConfig::nomic_v15(),
+            reranker: RerankerConfig::default(),
             vector_algorithm: VectorAlgorithm::HnswSq {
                 m: 16,
                 ef_construction: 100,
@@ -366,6 +491,13 @@ impl UnikoConfig {
             return Err(UnikoError::Config(format!(
                 "phase2_coverage_threshold ({}) must be in (0.0, 1.0]",
                 self.phase2_coverage_threshold,
+            )));
+        }
+
+        if self.reranker.enabled && self.reranker.top_n < self.recall_limit {
+            return Err(UnikoError::Config(format!(
+                "reranker.top_n ({}) must be >= recall_limit ({}) when enabled",
+                self.reranker.top_n, self.recall_limit,
             )));
         }
 

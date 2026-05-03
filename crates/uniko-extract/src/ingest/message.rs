@@ -11,7 +11,7 @@ use uniko_pipes::types::IngestMessage;
 use uniko_store::{KnowledgeBase, NodeId};
 
 use super::chunking::{ChunkConfig, count_tokens, select_chunker};
-use super::session::{ensure_participant, ensure_participated_in, get_or_create_session};
+use super::session::{ensure_participant, get_or_create_session, link_participant_to_session};
 
 /// Convert a `chrono::DateTime<Utc>` to `uni_db::Value::Temporal(DateTime)`.
 fn datetime_value(dt: DateTime<Utc>) -> Value {
@@ -64,27 +64,31 @@ pub async fn ingest_message(
 
     let ingest_start = std::time::Instant::now();
 
-    // 2. Ensure Participant exists (use cache when available).
-    let participant_nid = if let Some(nid) = session_ctx.participant_nid(&msg.sender_id) {
-        if nid != 0 {
-            nid
-        } else {
-            let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
-            session_ctx.register_participant(&msg.sender_id, nid);
-            nid
-        }
-    } else {
-        let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
-        session_ctx.register_participant(&msg.sender_id, nid);
-        nid
-    };
-
-    // 3. Ensure Session exists (use cache when available).
+    // 2. Ensure Session exists (use cache when available).
     let session_nid = if session_ctx.session_nid != 0 {
         session_ctx.session_nid
     } else {
         let nid = get_or_create_session(kb, &msg.session_id, &msg.timestamp).await?;
         session_ctx.session_nid = nid;
+        nid
+    };
+
+    // 3. Ensure Participant exists and is linked to session.
+    //    link_participant_to_session is called once per participant per
+    //    session (on first sight), not per message.
+    let participant_nid = if let Some(nid) = session_ctx.participant_nid(&msg.sender_id) {
+        if nid != 0 {
+            nid
+        } else {
+            let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
+            link_participant_to_session(kb, nid, session_nid).await?;
+            session_ctx.register_participant(&msg.sender_id, nid);
+            nid
+        }
+    } else {
+        let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
+        link_participant_to_session(kb, nid, session_nid).await?;
+        session_ctx.register_participant(&msg.sender_id, nid);
         nid
     };
     let setup_ms = ingest_start.elapsed().as_millis();
@@ -102,36 +106,34 @@ pub async fn ingest_message(
     let message_nid = kb.create_node("Message", &props).await?;
     let create_ms = create_start.elapsed().as_millis();
 
-    // 5-6. Create edges.
+    // 5-7. Collect and create all edges in a single transaction.
     let edges_start = std::time::Instant::now();
+
+    let mut edge_specs: Vec<(&str, NodeId, NodeId, HashMap<String, Value>)> = Vec::with_capacity(4);
+
+    // SENT_BY
     let mut sent_by_props = HashMap::new();
     sent_by_props.insert("role".into(), Value::String("user".to_string()));
-    kb.create_edge("SENT_BY", message_nid, participant_nid, &sent_by_props)
-        .await?;
-    let sent_by_ms = edges_start.elapsed().as_millis();
+    edge_specs.push(("SENT_BY", message_nid, participant_nid, sent_by_props));
 
-    let t = std::time::Instant::now();
-    kb.create_edge("IN_SESSION", message_nid, session_nid, &HashMap::new())
-        .await?;
-    let in_session_ms = t.elapsed().as_millis();
+    // IN_SESSION
+    edge_specs.push(("IN_SESSION", message_nid, session_nid, HashMap::new()));
 
-    let t = std::time::Instant::now();
-    ensure_participated_in(kb, participant_nid, session_nid).await?;
-    let participated_ms = t.elapsed().as_millis();
-
-    let t = std::time::Instant::now();
-    create_addressed_to_edges(kb, message_nid, msg, participant_nid, session_nid).await?;
-    let addressed_ms = t.elapsed().as_millis();
-
-    // 7. Create NEXT edge to link to previous message.
-    let t = std::time::Instant::now();
-    if let Some(prev_nid) = session_ctx.prev_message_nid {
-        let mut edge_props = HashMap::new();
-        edge_props.insert("gap_ms".into(), Value::Int(0));
-        kb.create_edge("NEXT", prev_nid, message_nid, &edge_props)
-            .await?;
+    // ADDRESSED_TO
+    let recipient_nids =
+        resolve_recipients(kb, msg, participant_nid, session_nid).await?;
+    for &rnid in &recipient_nids {
+        edge_specs.push(("ADDRESSED_TO", message_nid, rnid, HashMap::new()));
     }
-    let next_ms = t.elapsed().as_millis();
+
+    // NEXT
+    if let Some(prev_nid) = session_ctx.prev_message_nid {
+        let mut next_props = HashMap::new();
+        next_props.insert("gap_ms".into(), Value::Int(0));
+        edge_specs.push(("NEXT", prev_nid, message_nid, next_props));
+    }
+
+    kb.create_edges_tx(&edge_specs).await?;
     session_ctx.prev_message_nid = Some(message_nid);
     let edges_ms = edges_start.elapsed().as_millis();
 
@@ -152,12 +154,8 @@ pub async fn ingest_message(
         message_id = %msg.message_id,
         setup_ms,
         create_ms,
-        sent_by_ms,
-        in_session_ms,
-        participated_ms,
-        addressed_ms,
-        next_ms,
         edges_ms,
+        edge_count = edge_specs.len(),
         chunk_ms,
         total_ms = ingest_start.elapsed().as_millis(),
         "message ingest",
@@ -170,48 +168,38 @@ pub async fn ingest_message(
     })
 }
 
-/// Create ADDRESSED_TO edges from the message to recipient participants.
+/// Resolve ADDRESSED_TO recipient node IDs.
 ///
-/// If `msg.addressed_to` is provided, uses those IDs.  Otherwise infers
-/// recipients from the session's PARTICIPATED_IN edges (all participants
-/// except the sender).
-async fn create_addressed_to_edges(
+/// If `msg.addressed_to` is provided, ensures each participant exists
+/// and returns their node IDs.  Otherwise infers recipients from the
+/// session's PARTICIPATED_IN edges (all participants except sender).
+async fn resolve_recipients(
     kb: &KnowledgeBase,
-    message_nid: NodeId,
     msg: &IngestMessage,
     sender_nid: NodeId,
     session_nid: NodeId,
-) -> uniko_store::Result<()> {
+) -> uniko_store::Result<Vec<NodeId>> {
     use uniko_store::schema::constants::edges;
     use uniko_store::storage::edges::Direction;
 
-    let recipient_nids: Vec<NodeId> = if let Some(ref ids) = msg.addressed_to {
-        // Explicit recipients — ensure each exists and collect node IDs.
+    if let Some(ref ids) = msg.addressed_to {
         let mut nids = Vec::with_capacity(ids.len());
         for pid in ids {
             let nid =
                 super::session::ensure_participant(kb, pid, &msg.timestamp.to_rfc3339()).await?;
             nids.push(nid);
         }
-        nids
+        Ok(nids)
     } else {
-        // Infer from session: all PARTICIPATED_IN participants except sender.
         let participated = kb
             .get_edges(session_nid, edges::PARTICIPATED_IN, Direction::Incoming)
             .await?;
-        participated
+        Ok(participated
             .iter()
             .filter(|e| e.from != sender_nid)
             .map(|e| e.from)
-            .collect()
-    };
-
-    for &recipient_nid in &recipient_nids {
-        kb.create_edge("ADDRESSED_TO", message_nid, recipient_nid, &HashMap::new())
-            .await?;
+            .collect())
     }
-
-    Ok(())
 }
 
 /// Create Chunk nodes + HAS_CHUNK edges for a parent node.
@@ -220,7 +208,7 @@ pub async fn create_chunks(
     parent_ext_id: &str,
     parent_nid: NodeId,
     chunks: &[super::chunking::ChunkData],
-    _parent_label: &str,
+    parent_label: &str,
 ) -> uniko_store::Result<Vec<NodeId>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
@@ -263,7 +251,14 @@ pub async fn create_chunks(
         })
         .collect();
 
-    kb.batch_create_edges("HAS_CHUNK", &edges).await?;
+    // Source label is dynamic (Message, Session, or Artifact); target is :Chunk.
+    kb.batch_create_edges_fast(
+        "HAS_CHUNK",
+        Some(parent_label),
+        Some(uniko_store::schema::constants::labels::CHUNK),
+        &edges,
+    )
+    .await?;
 
     Ok(chunk_nids)
 }

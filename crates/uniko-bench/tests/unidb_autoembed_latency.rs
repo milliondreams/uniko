@@ -26,7 +26,7 @@ fn nomic_catalog() -> Vec<ModelAliasSpec> {
     vec![ModelAliasSpec {
         alias: "embed/default".to_string(),
         task: ModelTask::Embed,
-        provider_id: "local/fastembed".to_string(),
+        provider_id: "local/onnx".to_string(),
         model_id: "NomicEmbedTextV15".to_string(),
         revision: None,
         warmup: WarmupPolicy::Lazy,

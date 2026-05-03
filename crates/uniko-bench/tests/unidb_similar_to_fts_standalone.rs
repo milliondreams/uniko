@@ -11,7 +11,7 @@ async fn similar_to_fts_zero_with_auto_embed() {
         .xervo_catalog(vec![uni_db::ModelAliasSpec {
             alias: "embed/default".to_string(),
             task: uni_db::ModelTask::Embed,
-            provider_id: "local/fastembed".to_string(),
+            provider_id: "local/onnx".to_string(),
             model_id: "AllMiniLML6V2".to_string(),
             revision: None,
             warmup: uni_db::WarmupPolicy::Lazy,

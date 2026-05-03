@@ -71,6 +71,26 @@ pub async fn ingest_item(
     let mut total_observations = 0usize;
     let mut total_session_chunks = 0usize;
 
+    // Timing accumulators (milliseconds).
+    let mut t_ingest_msg_ms = 0u128;
+    let mut t_entity_ms = 0u128;
+    let mut t_obs_ms = 0u128;
+    let mut t_session_chunk_ms = 0u128;
+    let mut t_obs_chunk_ms = 0u128;
+    let mut t_ctx_setup_ms = 0u128;
+
+    // Entity sub-timing accumulators.
+    let mut t_ner_rules_ms = 0u64;
+    let mut t_ner_nlp_ms = 0u64;
+    let mut t_ner_onnx_total_ms = 0u64;
+    let mut t_ner_upsert_ms = 0u64;
+
+    // Observation sub-timing accumulators.
+    let mut t_obs_sender_ms = 0u64;
+    let mut t_obs_extract_ms = 0u64;
+    let mut t_obs_entity_ref_ms = 0u64;
+    let mut t_obs_nodes_ms = 0u64;
+
     // Iterate over sessions: zip haystack_sessions, haystack_session_ids, haystack_dates.
     for (session_idx, ((session_turns, session_id), date_str)) in item
         .haystack_sessions
@@ -115,11 +135,14 @@ pub async fn ingest_item(
             };
 
             // Ingest the message.
+            let t0 = std::time::Instant::now();
             let result = ingest_message(&kb, &msg, &mut session_ctx)
                 .await
                 .with_context(|| format!("ingesting {message_id}"))?;
+            t_ingest_msg_ms += t0.elapsed().as_millis();
 
-            // Run entity extraction.
+            // Build pipeline context.
+            let t0 = std::time::Instant::now();
             let mut ctx = PipelineContext::new(
                 result.message_node_id,
                 turn.content.clone(),
@@ -135,13 +158,35 @@ pub async fn ingest_item(
             if let Ok(val) = serde_json::to_value(&session_ctx) {
                 ctx.metadata.insert("session_context".into(), val);
             }
+            t_ctx_setup_ms += t0.elapsed().as_millis();
 
+            // Run entity extraction.
+            let t0 = std::time::Instant::now();
             let _ = entity_step.execute(&mut ctx).await;
+            t_entity_ms += t0.elapsed().as_millis();
             total_entities += ctx.extracted_entities.len();
 
+            // Collect entity sub-timings.
+            if let Some(et) = ctx.metadata.get("entity_timings") {
+                t_ner_rules_ms += et["rules_ms"].as_u64().unwrap_or(0);
+                t_ner_nlp_ms += et["nlp_ms"].as_u64().unwrap_or(0);
+                t_ner_onnx_total_ms += et["onnx_total_ms"].as_u64().unwrap_or(0);
+                t_ner_upsert_ms += et["upsert_ms"].as_u64().unwrap_or(0);
+            }
+
             // Run observation extraction.
+            let t0 = std::time::Instant::now();
             let _ = obs_step.execute(&mut ctx).await;
+            t_obs_ms += t0.elapsed().as_millis();
             total_observations += ctx.extracted_observations.len();
+
+            // Collect observation sub-timings.
+            if let Some(ot) = ctx.metadata.get("obs_timings") {
+                t_obs_sender_ms += ot["sender_ms"].as_u64().unwrap_or(0);
+                t_obs_extract_ms += ot["extract_ms"].as_u64().unwrap_or(0);
+                t_obs_entity_ref_ms += ot["entity_ref_ms"].as_u64().unwrap_or(0);
+                t_obs_nodes_ms += ot["nodes_ms"].as_u64().unwrap_or(0);
+            }
 
             // Read back updated sentence context.
             if let Some(updated) = ctx.metadata.get("sentence_ctx_updated")
@@ -160,13 +205,17 @@ pub async fn ingest_item(
 
             total_turns += 1;
 
-            if total_turns == 1 || total_turns.is_multiple_of(50) {
+            if total_turns == 1 || total_turns.is_multiple_of(20) {
                 tracing::info!(
                     turn = total_turns,
                     session = session_idx,
                     entities = ctx.extracted_entities.len(),
                     observations = ctx.extracted_observations.len(),
-                    "turn processed",
+                    ingest_msg_ms = t_ingest_msg_ms,
+                    entity_ms = t_entity_ms,
+                    obs_ms = t_obs_ms,
+                    ctx_setup_ms = t_ctx_setup_ms,
+                    "turn processed (cumulative timings)",
                 );
             }
         }
@@ -176,19 +225,24 @@ pub async fn ingest_item(
             .insert(session_id.clone(), session_message_ids);
 
         // Chunk the session for retrieval.
+        let t0 = std::time::Instant::now();
         let chunk_ids = uniko_extract::ingest::session_chunk::chunk_session(&kb, session_id)
             .await
             .with_context(|| format!("chunking session {session_id}"))?;
+        t_session_chunk_ms += t0.elapsed().as_millis();
         total_session_chunks += chunk_ids.len();
 
         // Chunk session observations.
+        let t0 = std::time::Instant::now();
         let obs_chunk_ids =
             uniko_extract::ingest::session_chunk::chunk_session_observations(&kb, session_id)
                 .await
                 .with_context(|| format!("chunking observations {session_id}"))?;
+        t_obs_chunk_ms += t0.elapsed().as_millis();
         total_session_chunks += obs_chunk_ids.len();
     }
 
+    let total_ms = t_ingest_msg_ms + t_entity_ms + t_obs_ms + t_session_chunk_ms + t_obs_chunk_ms + t_ctx_setup_ms;
     tracing::info!(
         question_id = %item.question_id,
         sessions = item.haystack_sessions.len(),
@@ -198,6 +252,33 @@ pub async fn ingest_item(
         session_chunks = total_session_chunks,
         evidence_messages = evidence_map.answer_message_ids.len(),
         "item ingested",
+    );
+    tracing::info!(
+        question_id = %item.question_id,
+        ingest_msg_ms = t_ingest_msg_ms,
+        entity_ms = t_entity_ms,
+        obs_ms = t_obs_ms,
+        session_chunk_ms = t_session_chunk_ms,
+        obs_chunk_ms = t_obs_chunk_ms,
+        ctx_setup_ms = t_ctx_setup_ms,
+        total_ms = total_ms,
+        "ingestion timing breakdown",
+    );
+    tracing::info!(
+        question_id = %item.question_id,
+        ner_rules_ms = t_ner_rules_ms,
+        ner_nlp_ms = t_ner_nlp_ms,
+        ner_onnx_total_ms = t_ner_onnx_total_ms,
+        ner_upsert_ms = t_ner_upsert_ms,
+        "entity extraction sub-timings",
+    );
+    tracing::info!(
+        question_id = %item.question_id,
+        obs_sender_ms = t_obs_sender_ms,
+        obs_dep_extract_ms = t_obs_extract_ms,
+        obs_entity_ref_ms = t_obs_entity_ref_ms,
+        obs_graph_nodes_ms = t_obs_nodes_ms,
+        "observation extraction sub-timings",
     );
 
     Ok((kb, evidence_map))

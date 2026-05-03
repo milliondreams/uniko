@@ -133,18 +133,23 @@ fn is_too_short(text: &str) -> bool {
     word_count < 5
 }
 
-/// Classify informativeness using the NLP model's sentence class.
+/// Classify informativeness using the NLP model's dialog-act label.
 ///
-/// Returns `true` for Statement, QuestionFact, and Command — these
-/// contain factual content worth extracting observations from.
-/// Returns `false` for Question, Greeting, Filler, Acknowledgment.
+/// The cascade emits one of 8 ISO 24617-2 inspired dialog-act labels:
+/// `inform`, `request`, `question`, `confirm`, `reject`, `offer`,
+/// `social`, `status`.
+///
+/// Extract from acts that carry propositional content: `inform` and
+/// `status` (declarative facts), `request` and `offer` (actionable
+/// directives), and `confirm` (positive assertion of a prior fact).
+///
+/// Reject acts that don't add new information: `question` (asks
+/// rather than asserts), `reject` (negates without asserting an
+/// alternative), `social` (greetings, phatic).
 pub fn is_informative_by_cls(cls_label: &str) -> bool {
     matches!(
         cls_label,
-        // DistilRoBERTa labels
-        "statement" | "question_fact" | "command"
-        // DeBERTa labels
-        | "inform" | "correction" | "plan_commit" | "request"
+        "inform" | "request" | "confirm" | "offer" | "status"
     )
 }
 

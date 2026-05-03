@@ -2,7 +2,7 @@
   {
     "alias": "embed/default",
     "task": "embed",
-    "provider_id": "local/fastembed",
+    "provider_id": "local/onnx",
     "model_id": "AllMiniLML6V2",
     "warmup": "lazy",
     "required": false
@@ -11,11 +11,11 @@
     "alias": "nlp/default",
     "task": "raw",
     "provider_id": "local/onnx",
-    "model_id": "dragonscale-ai/kniv-deberta-v3-nlp-en",
+    "model_id": "dragonscale-ai/kniv-deberta-nlp-base-en-xsmall",
     "warmup": "lazy",
     "required": false,
     "options": {
-      "artifact": "model-int8.onnx",
+      "artifact": "onnx/cascade-int8.onnx",
       "max_batch_size": 16
     }
   }

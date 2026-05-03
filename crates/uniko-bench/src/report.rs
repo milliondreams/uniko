@@ -45,6 +45,9 @@ pub struct QuestionDetail {
     pub f1: f64,
     pub judge: Option<f64>,
     pub recall_latency_ms: u64,
+    /// Full bundle of retrieved items (node_type / score / content).
+    /// Always populated; useful for offline failure-mode analysis.
+    pub recall_bundle: Vec<crate::query::RecalledItem>,
 }
 
 /// Aggregate query results into a benchmark report.
@@ -248,6 +251,7 @@ pub fn write_json(
             f1: *f1,
             judge: *judge,
             recall_latency_ms: qr.recall_latency_ms,
+            recall_bundle: qr.recall_bundle.clone(),
         })
         .collect();
 

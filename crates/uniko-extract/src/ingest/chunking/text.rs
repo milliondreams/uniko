@@ -247,8 +247,14 @@ fn apply_overlap(chunks: &mut [RawChunk], config: &ChunkConfig) {
 
     for i in 1..chunks.len() {
         let prev_text = chunks[i - 1].text.clone();
-        if prev_text.len() > overlap_chars {
-            let suffix = &prev_text[prev_text.len() - overlap_chars..];
+        let char_count = prev_text.chars().count();
+        if char_count > overlap_chars {
+            // Find byte offset of the character `overlap_chars` from the end.
+            let start_byte = prev_text
+                .char_indices()
+                .nth(char_count - overlap_chars)
+                .map_or(0, |(idx, _)| idx);
+            let suffix = &prev_text[start_byte..];
             // Find the nearest word boundary.
             let boundary = suffix.find(' ').unwrap_or(0);
             let overlap = &suffix[boundary..].trim();

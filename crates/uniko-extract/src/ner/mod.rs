@@ -109,13 +109,24 @@ impl uniko_pipes::Step for EntityExtractionStep {
         let llm_ents = llm::enhance_entities_llm(&ctx.content, &all_raw).await;
         all_raw.extend(llm_ents);
 
+        let onnx_total_ms = onnx_start.elapsed().as_millis();
+
         if all_raw.is_empty() {
+            // Export timings even when no entities found.
+            ctx.metadata.insert(
+                "entity_timings".into(),
+                serde_json::json!({
+                    "rules_ms": rules_ms as u64,
+                    "nlp_ms": nlp_ms as u64,
+                    "onnx_total_ms": onnx_total_ms as u64,
+                    "upsert_ms": 0u64,
+                    "total_ms": step_start.elapsed().as_millis() as u64,
+                }),
+            );
             return Ok(StepOutcome::Skipped {
                 reason: "no entities found".into(),
             });
         }
-
-        let onnx_total_ms = onnx_start.elapsed().as_millis();
 
         // 5. Deduplicate within this batch.
         let deduped = dedup::deduplicate_raw(all_raw);
@@ -128,14 +139,27 @@ impl uniko_pipes::Step for EntityExtractionStep {
         // 7. Populate context for downstream steps (P3, P7).
         ctx.extracted_entities = matches.iter().map(|m| m.node_id).collect();
 
+        let total_ms = step_start.elapsed().as_millis();
         tracing::info!(
             count = matches.len(),
             rules_ms,
             nlp_ms,
             onnx_total_ms,
             upsert_ms,
-            total_ms = step_start.elapsed().as_millis(),
+            total_ms,
             "entity step",
+        );
+
+        // Export sub-timings for benchmark aggregation.
+        ctx.metadata.insert(
+            "entity_timings".into(),
+            serde_json::json!({
+                "rules_ms": rules_ms as u64,
+                "nlp_ms": nlp_ms as u64,
+                "onnx_total_ms": onnx_total_ms as u64,
+                "upsert_ms": upsert_ms as u64,
+                "total_ms": total_ms as u64,
+            }),
         );
 
         Ok(StepOutcome::Completed)

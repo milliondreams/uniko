@@ -57,7 +57,7 @@ mod onnx_tests {
             .expect("KB with xervo + catalog");
 
         // Try to get the runner directly to surface any error.
-        match kb.db().xervo().onnx_runner("nlp/default").await {
+        match kb.db().xervo().raw_tensor_model("nlp/default").await {
             Ok(_) => eprintln!("ONNX runner loaded successfully"),
             Err(e) => {
                 eprintln!("ONNX runner error: {e}");

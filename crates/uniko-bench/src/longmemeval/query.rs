@@ -52,9 +52,12 @@ pub async fn run_lme_query(
     token_budget: usize,
     llm_alias: Option<&str>,
 ) -> Result<LmeQueryResult> {
+    // Honour the KB's `UnikoConfig` (reranker, recall weights, min_score,
+    // …); only the per-call token budget is overridden from the bench
+    // CLI. Mirrors the LoCoMo bench at `query.rs:62`.
     let recall_config = RecallConfig {
         token_budget,
-        ..Default::default()
+        ..RecallConfig::from_uniko_config(kb.config())
     };
 
     // Run recall.
@@ -136,18 +139,34 @@ async fn generate_answer(
 
 /// Extract unique session IDs from recalled items by querying the graph.
 ///
-/// For each recalled node, traverses BELONGS_TO/PART_OF edges to find
-/// the parent Session node and its session_id property.
+/// Walks the recall-target node types back to their parent Session via
+/// the actual edges in the schema:
+///
+/// - `(m:Message)-[:IN_SESSION]->(s)` — direct
+/// - `(s)-[:HAS_CHUNK]->(c:Chunk)` — incoming on Chunk
+/// - `(o:Observation)-[:OBSERVED_IN]->(m:Message)-[:IN_SESSION]->(s)` — 2 hops
+/// - `(e:Entity)<-[:ABOUT]-(o:Observation)-[:OBSERVED_IN]->(m)-[:IN_SESSION]->(s)`
+///   — 3 hops, lossy (an entity can appear across many sessions)
+///
+/// Order in the returned vector follows recall order (first match wins
+/// when an item resolves to multiple sessions).
 async fn extract_session_ids(kb: &KnowledgeBase, bundle: &ContextBundle) -> Vec<String> {
     let mut session_ids = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     let session = kb.db().session();
     for item in &bundle.items {
+        // Try paths in cost order: direct (Message), 1-hop reverse (Chunk),
+        // 2-hop (Observation), 3-hop (Entity). First match returns.
         let query = format!(
-            "MATCH (n)-[:BELONGS_TO|PART_OF*1..2]->(s:Session) \
-             WHERE id(n) = {} RETURN s.session_id AS sid LIMIT 1",
-            item.node_id
+            "MATCH (n) WHERE id(n) = {nid} \
+             OPTIONAL MATCH (n)-[:IN_SESSION]->(s1:Session) \
+             OPTIONAL MATCH (s2:Session)-[:HAS_CHUNK]->(n) \
+             OPTIONAL MATCH (n)-[:OBSERVED_IN]->(:Message)-[:IN_SESSION]->(s3:Session) \
+             OPTIONAL MATCH (n)<-[:ABOUT]-(:Observation)-[:OBSERVED_IN]->(:Message)-[:IN_SESSION]->(s4:Session) \
+             RETURN coalesce(s1.session_id, s2.session_id, s3.session_id, s4.session_id) AS sid \
+             LIMIT 1",
+            nid = item.node_id,
         );
         if let Ok(result) = session.query_with(&query).fetch_all().await {
             for row in result.rows() {

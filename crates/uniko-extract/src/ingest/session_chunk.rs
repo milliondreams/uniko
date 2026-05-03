@@ -310,7 +310,50 @@ pub async fn chunk_session_observations(
                     .map(move |&entity_nid| (chunk_nid, entity_nid, HashMap::new()))
             })
             .collect();
-        kb.batch_create_edges("ABOUT", &about_edges).await?;
+        // Observation chunks → entities. Source is :Chunk, target is :Entity.
+        kb.batch_create_edges_fast(
+            "ABOUT",
+            Some(uniko_store::schema::constants::labels::CHUNK),
+            Some(uniko_store::schema::constants::labels::ENTITY),
+            &about_edges,
+        )
+        .await?;
+    }
+
+    // Also propagate Participant ABOUT edges so an obs Chunk is
+    // reachable via the participant (e.g. Caroline) — needed for
+    // entity-anchored multi-hop recall.
+    let participant_cypher = "\
+        MATCH (o:Observation)-[:OBSERVED_IN]->(m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
+        MATCH (o)-[:ABOUT]->(p:Participant) \
+        RETURN DISTINCT id(p) AS pid";
+    let participant_result = session
+        .query_with(participant_cypher)
+        .param("sid", session_id)
+        .fetch_all()
+        .await
+        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+    let participant_nids: Vec<NodeId> = participant_result
+        .rows()
+        .iter()
+        .filter_map(|row| row.get::<NodeId>("pid").ok())
+        .collect();
+    if !participant_nids.is_empty() {
+        let p_edges: Vec<(NodeId, NodeId, HashMap<String, uni_db::Value>)> = chunk_nids
+            .iter()
+            .flat_map(|&chunk_nid| {
+                participant_nids
+                    .iter()
+                    .map(move |&p_nid| (chunk_nid, p_nid, HashMap::new()))
+            })
+            .collect();
+        kb.batch_create_edges_fast(
+            "ABOUT",
+            Some(uniko_store::schema::constants::labels::CHUNK),
+            Some(uniko_store::schema::constants::labels::PARTICIPANT),
+            &p_edges,
+        )
+        .await?;
     }
 
     tracing::info!(
@@ -318,6 +361,7 @@ pub async fn chunk_session_observations(
         observations = seen.len(),
         chunks = chunk_nids.len(),
         entities = entity_nids.len(),
+        participants = participant_nids.len(),
         "session observations chunked",
     );
 

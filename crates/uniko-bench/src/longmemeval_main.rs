@@ -103,6 +103,28 @@ struct Cli {
     /// Override embedding dimensions (default 768 for Nomic, use 384 for MiniLM).
     #[arg(long)]
     embedding_dim: Option<usize>,
+
+    /// Embedding preset to use. Must match what was used at ingest time.
+    /// One of: `nomic` (default 768d), `minilm` (384d), `bge-small`
+    /// (384d), `bge-large` (1024d).
+    #[arg(long, default_value = "nomic")]
+    embedding: String,
+
+    /// Enable cross-encoder reranker on top of RRF candidates.
+    #[arg(long)]
+    reranker: bool,
+
+    /// HuggingFace reranker model id. xervo 0.11 auto-detects whether
+    /// the ONNX graph expects `token_type_ids`, so XLM-R-based models
+    /// (e.g. `BAAI/bge-reranker-base`) work alongside BERT-based ones
+    /// (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`).
+    #[arg(long, default_value = "BAAI/bge-reranker-base")]
+    reranker_model: String,
+
+    /// Top-N RRF candidates to send through the reranker. Must be
+    /// `>= recall_limit` when reranker is enabled.
+    #[arg(long, default_value = "50")]
+    reranker_top_n: usize,
 }
 
 #[tokio::main]
@@ -110,7 +132,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "longmemeval_bench=info,uniko_bench=info,uniko_memory=warn,uniko_extract=warn,uniko_store=warn"
+                "longmemeval_bench=info,uniko_bench=info,uniko_memory=warn,uniko_extract=info,uniko_store=warn"
                     .parse()
                     .unwrap()
             }),
@@ -182,15 +204,34 @@ async fn main() -> Result<()> {
         schema_path: cli.schema.clone(),
         ..Default::default()
     };
+    config.embedding = match cli.embedding.as_str() {
+        "nomic" => uniko_store::config::EmbeddingConfig::nomic_v15(),
+        "minilm" => uniko_store::config::EmbeddingConfig::minilm_l6_v2(),
+        "bge-small" => uniko_store::config::EmbeddingConfig::bge_small_en_v15(),
+        "bge-large" => uniko_store::config::EmbeddingConfig::bge_large_en_v15(),
+        other => anyhow::bail!(
+            "unknown --embedding preset {other:?}; expected one of: nomic, minilm, bge-small, bge-large"
+        ),
+    };
     if let Some(dim) = cli.embedding_dim {
         config.embedding.dimensions = dim;
+    }
+    if cli.reranker {
+        config.reranker.enabled = true;
+        config.reranker.model_id = cli.reranker_model.clone();
+        config.reranker.top_n = cli.reranker_top_n;
     }
 
     // Build LLM catalog.
     let extra_catalog = uniko_bench::build_llm_catalog(
         cli.llm_alias.as_deref(),
         cli.llm_model_id.as_deref(),
+        None,
+        None,
         cli.judge_alias.as_deref(),
+        None,
+        None,
+        None,
     );
 
     // Run benchmark.
@@ -286,6 +327,15 @@ async fn main() -> Result<()> {
         );
 
         all_results.push((qr, judge_score));
+
+        // Per-item checkpoint: write the running results so a kill
+        // mid-run preserves every item completed so far. `total_items`
+        // stays the full denominator for averages — partial runs see
+        // an honest "X of N completed" picture.
+        let partial = report::aggregate_lme(&all_results, total_items);
+        if let Err(e) = report::write_lme_json(&all_results, &partial, &cli.output) {
+            tracing::warn!(error = %e, "checkpoint write failed (continuing)");
+        }
 
         // KB is dropped here, freeing memory.
     }

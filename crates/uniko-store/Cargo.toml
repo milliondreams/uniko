@@ -5,6 +5,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Enable NVIDIA CUDA acceleration in uni-db (requires CUDA toolkit at build time).
+gpu-cuda = ["uni-db/gpu-cuda"]
+# Enable Apple Metal/CoreML acceleration in uni-db (macOS only).
+gpu-metal = ["uni-db/gpu-metal"]
+
 [dependencies]
 uni-db = { workspace = true }
 serde = { workspace = true }

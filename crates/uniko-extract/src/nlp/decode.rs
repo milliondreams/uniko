@@ -6,7 +6,7 @@
 
 // Rust guideline compliant
 
-use ndarray::{ArrayView1, ArrayView2};
+use ndarray::{ArrayView1, ArrayView2, ArrayView3};
 
 use super::types::{DepArc, NerEntityType, NerSpan, SentenceClass};
 
@@ -51,6 +51,22 @@ pub fn argmax_with_confidence(logits: &ArrayView1<f32>) -> (usize, f32) {
     let confidence = 1.0 / sum_exp; // exp(0) / sum = 1 / sum
 
     (idx, confidence)
+}
+
+/// Numerically-stable softmax over a 1D logits array. Returns a vector
+/// of probabilities summing to 1.
+pub fn softmax_1d(logits: &ArrayView1<f32>) -> Vec<f32> {
+    let max_val = logits
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let exps: Vec<f32> = logits.iter().map(|&v| (v - max_val).exp()).collect();
+    let sum: f32 = exps.iter().sum();
+    if sum > 0.0 {
+        exps.into_iter().map(|e| e / sum).collect()
+    } else {
+        vec![0.0; logits.len()]
+    }
 }
 
 // ── Subword → word alignment ──────────────────────────────────────
@@ -197,119 +213,92 @@ fn parse_ner_type(suffix: &str) -> NerEntityType {
     }
 }
 
-// ── dep2label → dependency tree ──────────────────────────────────
+// ── Biaffine dependency decoder ──────────────────────────────────
 
-/// Decode dep2label predictions into dependency arcs.
+/// Decode the biaffine DEP head into word-level dependency arcs.
 ///
-/// Each dep2label string has the format `"{offset}@{relation}@{head_POS}"`.
-/// The offset is a signed integer specifying how many tokens of the
-/// given POS to skip in the indicated direction to find the head.
-/// An offset of 0 with relation "root" marks the sentence root.
-pub fn decode_dep_tree(
-    dep_indices: &[usize],
-    pos_indices: &[usize],
-    dep_labels: &[String],
-    pos_labels: &[String],
+/// The model emits `arc_scores[seq, seq]` (token i's score against
+/// every potential head j) and `label_scores[seq, seq, num_rels]`
+/// (relation logits for each (dep, head) pair). Greedy decoding:
+/// per first-subword of each word, take `argmax_j arc_scores[i, j]`
+/// for the head and `argmax_k label_scores[i, head, k]` for the
+/// relation, then project the head subword index back to a word
+/// index. Self-pointing arcs (or heads that land on a special
+/// token) are treated as root with `head = usize::MAX`.
+///
+/// Greedy is the trained-time decoder; switching to MST changes
+/// the published UAS numbers. See the project memory.
+pub fn decode_dep_arcs_biaffine(
+    arc_scores: &ArrayView2<f32>,
+    label_scores: &ArrayView3<f32>,
+    word_ids: &[Option<u32>],
+    dep_rel_labels: &[String],
 ) -> Vec<DepArc> {
-    let n = dep_indices.len();
-    let mut arcs = Vec::with_capacity(n);
-
-    for (i, &dep_idx) in dep_indices.iter().enumerate() {
-        let label = dep_labels
-            .get(dep_idx)
-            .map(String::as_str)
-            .unwrap_or("0@root@ROOT");
-
-        let parts: Vec<&str> = label.splitn(3, '@').collect();
-        if parts.len() < 3 {
-            arcs.push(DepArc {
-                dependent: i,
-                head: usize::MAX,
-                relation: "dep".to_string(),
-            });
-            continue;
+    // Build subword → word_index mapping (first-subword-wins, matches
+    // `align_to_words`). `first_subword[w]` gives the subword index of
+    // the first piece of word w; `subword_to_word[s]` gives the word
+    // index that subword s belongs to (None for special tokens).
+    let mut first_subword: Vec<usize> = Vec::new();
+    let mut subword_to_word: Vec<Option<usize>> = Vec::with_capacity(word_ids.len());
+    let mut last_word_id: Option<u32> = None;
+    let mut current_word: usize = 0;
+    for (sw_idx, &wid) in word_ids.iter().enumerate() {
+        match wid {
+            Some(w) if last_word_id != Some(w) => {
+                first_subword.push(sw_idx);
+                subword_to_word.push(Some(current_word));
+                last_word_id = Some(w);
+                current_word += 1;
+            }
+            Some(_) => {
+                // Continuation subword — belongs to the same word.
+                subword_to_word.push(Some(current_word - 1));
+            }
+            None => subword_to_word.push(None),
         }
+    }
 
-        let offset_str = parts[0];
-        let relation = parts[1].to_string();
-        let head_pos = parts[2];
+    let num_rels = label_scores.shape()[2];
+    let mut arcs = Vec::with_capacity(first_subword.len());
 
-        let offset: i32 = offset_str.parse().unwrap_or(0);
+    for (dep_word_idx, &dep_sw) in first_subword.iter().enumerate() {
+        let arc_row = arc_scores.row(dep_sw);
+        let head_sw = arc_row
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
 
-        if offset == 0 {
-            // Root token.
-            arcs.push(DepArc {
-                dependent: i,
-                head: usize::MAX,
-                relation,
-            });
-            continue;
+        let mut best_rel: usize = 0;
+        let mut best_score: f32 = f32::NEG_INFINITY;
+        for k in 0..num_rels {
+            let s = label_scores[[dep_sw, head_sw, k]];
+            if s > best_score {
+                best_score = s;
+                best_rel = k;
+            }
         }
+        let relation = dep_rel_labels
+            .get(best_rel)
+            .cloned()
+            .unwrap_or_else(|| "dep".to_string());
 
-        let head_idx = resolve_offset(i, offset, pos_indices, head_pos, pos_labels, n);
+        let head_word = subword_to_word.get(head_sw).copied().flatten();
+        let head = match head_word {
+            Some(hw) if hw == dep_word_idx => usize::MAX,
+            Some(hw) => hw,
+            None => usize::MAX,
+        };
+
         arcs.push(DepArc {
-            dependent: i,
-            head: head_idx,
+            dependent: dep_word_idx,
+            head,
             relation,
         });
     }
 
     arcs
-}
-
-/// Resolve a signed POS-counted offset to an absolute token index.
-///
-/// Scans left (negative offset) or right (positive offset) from
-/// `token_idx`, counting tokens whose POS label matches `target_pos`.
-/// Returns the absolute index when the count reaches `|offset|`, or
-/// `usize::MAX` if the boundary is reached first.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "positional scanning with early return is clearer than enumerate+skip"
-)]
-fn resolve_offset(
-    token_idx: usize,
-    offset: i32,
-    pos_indices: &[usize],
-    target_pos: &str,
-    pos_labels: &[String],
-    n: usize,
-) -> usize {
-    let abs_offset = offset.unsigned_abs() as usize;
-    let mut count = 0usize;
-
-    if offset > 0 {
-        // Scan right.
-        for j in (token_idx + 1)..n {
-            let pos = pos_labels
-                .get(pos_indices[j])
-                .map(String::as_str)
-                .unwrap_or("");
-            if pos == target_pos {
-                count += 1;
-                if count == abs_offset {
-                    return j;
-                }
-            }
-        }
-    } else {
-        // Scan left.
-        for j in (0..token_idx).rev() {
-            let pos = pos_labels
-                .get(pos_indices[j])
-                .map(String::as_str)
-                .unwrap_or("");
-            if pos == target_pos {
-                count += 1;
-                if count == abs_offset {
-                    return j;
-                }
-            }
-        }
-    }
-
-    // Boundary reached without finding the head — mark as unresolved.
-    usize::MAX
 }
 
 // ── SVO extraction from dependency tree ──────────────────────────
@@ -471,8 +460,23 @@ pub fn extract_dep_observations(
                         .get(*pos_indices.get(arc.dependent).unwrap_or(&0))
                         .map(String::as_str)
                         .unwrap_or("");
+                    // Only NOUN/PROPN/PRON subjects produce useful
+                    // observations. The biaffine DEP head occasionally
+                    // tags a VERB/AUX/ADJ as nsubj (e.g. "Taking is
+                    // important"), which becomes garbage downstream.
+                    if !matches!(subj_pos, "NOUN" | "PROPN" | "PRON") {
+                        continue;
+                    }
                     let raw_text = collect_noun_phrase(arc.dependent, words, dep_arcs);
-                    subject = Some(resolve_subject(&raw_text, subj_pos, ctx, speaker));
+                    let resolved = resolve_subject(&raw_text, subj_pos, ctx, speaker);
+                    // Drop unresolvable pronouns: relative ("which",
+                    // "who"), indeterminate ("others"), and third-person
+                    // pronouns whose context lookup found nothing
+                    // (resolve_subject returns the pronoun unchanged).
+                    if subj_pos == "PRON" && is_unresolvable_pronoun(&resolved) {
+                        continue;
+                    }
+                    subject = Some(resolved);
                 }
                 "obj" | "dobj" | "iobj" => {
                     objects.push(collect_noun_phrase(arc.dependent, words, dep_arcs));
@@ -525,6 +529,30 @@ pub fn extract_dep_observations(
     update_sentence_context(ctx, words, pos_indices, dep_arcs, pos_labels);
 
     observations
+}
+
+/// Return `true` if the resolved subject is still a pronoun-like token
+/// that doesn't refer to a concrete name. Used to skip observations
+/// whose subject couldn't be grounded — they generate noise like
+/// `"which is exciting"` or `"others have been there"`.
+fn is_unresolvable_pronoun(resolved: &str) -> bool {
+    // After [`resolve_subject`], first/second/third-person pronouns with
+    // a context match return a real name (e.g. "Caroline"). The cases
+    // below are pronouns that survive resolution unchanged.
+    let lower = resolved.trim().to_lowercase();
+    matches!(
+        lower.as_str(),
+        // Relative / interrogative
+        "which" | "who" | "whom" | "whose" | "what" | "where" | "when" | "why" | "how"
+        // Indefinite
+        | "anyone" | "anybody" | "anything"
+        | "everyone" | "everybody" | "everything"
+        | "someone" | "somebody" | "something"
+        | "no one" | "nobody" | "nothing"
+        | "others" | "another" | "all" | "some" | "few" | "many" | "most"
+        // Demonstratives without context
+        | "it" | "this" | "that" | "they" | "there" | "these" | "those"
+    )
 }
 
 /// Resolve a subject token to a concrete name using the context window.
@@ -761,34 +789,38 @@ mod tests {
     }
 
     #[test]
-    fn decode_dep_tree_root_and_nsubj() {
-        let dep_labels: Vec<String> = vec![
-            "0@root@ROOT".into(),   // 0
-            "+1@nsubj@VERB".into(), // 1
-            "-1@obj@VERB".into(),   // 2
-        ];
-        let pos_labels: Vec<String> = vec!["NOUN".into(), "VERB".into()];
+    fn decode_dep_arcs_biaffine_root_and_nsubj() {
+        // 3 words, no special tokens; one subword per word.
         // Words: ["Caroline", "works", "hard"]
-        // POS:   [  NOUN(0),  VERB(1), NOUN(0)]
-        // Dep:   [  +1@nsubj@VERB(1), 0@root@ROOT(0), -1@obj@VERB(2)]
-        let dep_indices = vec![1, 0, 2];
-        let pos_indices = vec![0, 1, 0];
+        // Expected arcs:
+        //   "Caroline" → head "works" (idx 1), rel "nsubj"
+        //   "works"    → root (self-pointing), rel "root"
+        //   "hard"     → head "works" (idx 1), rel "obj"
+        let dep_rel_labels: Vec<String> = vec!["root".into(), "nsubj".into(), "obj".into()];
+        let word_ids = vec![Some(0u32), Some(1), Some(2)];
 
-        let arcs = decode_dep_tree(&dep_indices, &pos_indices, &dep_labels, &pos_labels);
+        let arc = ndarray::arr2(&[
+            [0.0_f32, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]);
+        let mut label = ndarray::Array3::<f32>::zeros((3, 3, 3));
+        label[[0, 1, 1]] = 1.0; // 0 → 1 = nsubj
+        label[[1, 1, 0]] = 1.0; // 1 → 1 = root
+        label[[2, 1, 2]] = 1.0; // 2 → 1 = obj
+
+        let arcs =
+            decode_dep_arcs_biaffine(&arc.view(), &label.view(), &word_ids, &dep_rel_labels);
 
         assert_eq!(arcs.len(), 3);
-
-        // "Caroline" → head is "works" (first VERB to the right = idx 1)
         assert_eq!(arcs[0].dependent, 0);
         assert_eq!(arcs[0].head, 1);
         assert_eq!(arcs[0].relation, "nsubj");
 
-        // "works" → root
         assert_eq!(arcs[1].dependent, 1);
         assert_eq!(arcs[1].head, usize::MAX);
         assert_eq!(arcs[1].relation, "root");
 
-        // "hard" → head is "works" (first VERB to the left = idx 1)
         assert_eq!(arcs[2].dependent, 2);
         assert_eq!(arcs[2].head, 1);
         assert_eq!(arcs[2].relation, "obj");
@@ -848,17 +880,22 @@ mod tests {
 
     #[test]
     fn decode_cls_maps_labels() {
+        // Match the model's 8-label dialog-act vocabulary.
         let labels: Vec<String> = vec![
-            "statement".into(),
+            "inform".into(),
+            "request".into(),
             "question".into(),
-            "question_fact".into(),
-            "command".into(),
-            "greeting".into(),
-            "filler".into(),
-            "acknowledgment".into(),
+            "confirm".into(),
+            "reject".into(),
+            "offer".into(),
+            "social".into(),
+            "status".into(),
         ];
-        assert_eq!(decode_cls(0, &labels), SentenceClass::Statement);
-        assert_eq!(decode_cls(1, &labels), SentenceClass::Question);
-        assert_eq!(decode_cls(4, &labels), SentenceClass::Greeting);
+        assert_eq!(decode_cls(0, &labels), SentenceClass::Statement); // inform
+        assert_eq!(decode_cls(1, &labels), SentenceClass::Command); // request
+        assert_eq!(decode_cls(2, &labels), SentenceClass::Question);
+        assert_eq!(decode_cls(3, &labels), SentenceClass::Acknowledgment); // confirm
+        assert_eq!(decode_cls(6, &labels), SentenceClass::Greeting); // social
+        assert_eq!(decode_cls(7, &labels), SentenceClass::Statement); // status
     }
 }

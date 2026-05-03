@@ -95,6 +95,69 @@ impl KnowledgeBase {
         Ok(eid)
     }
 
+    /// Create multiple edges of potentially different types in a single
+    /// transaction.
+    ///
+    /// Each entry is `(edge_type, from, to, properties)`. All edges are
+    /// committed atomically — one WAL fsync instead of one per edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Schema`] if any edge type is unknown, or
+    /// [`UnikoError::Storage`] on database failure. The transaction is
+    /// rolled back on any error.
+    pub async fn create_edges_tx(
+        &self,
+        edges: &[(&str, NodeId, NodeId, HashMap<String, Value>)],
+    ) -> Result<Vec<EdgeId>> {
+        if edges.is_empty() {
+            return Ok(Vec::new());
+        }
+        for &(edge_type, _, _, _) in edges {
+            validate_edge_type(edge_type)?;
+        }
+
+        let session = self.db.session();
+        let tx = session
+            .tx()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+
+        // Multi-MATCH (split cartesian product) and skip RETURN since
+        // callers discard the edge IDs.
+        let edge_ids: Vec<EdgeId> = Vec::new();
+        for (edge_type, from, to, props) in edges {
+            let (set_clause, params) = build_set_clause("r", props, 0)?;
+            let cypher = if set_clause.is_empty() {
+                format!(
+                    "MATCH (a) WHERE id(a) = $src \
+                     MATCH (b) WHERE id(b) = $dst \
+                     CREATE (a)-[r:{edge_type}]->(b)"
+                )
+            } else {
+                format!(
+                    "MATCH (a) WHERE id(a) = $src \
+                     MATCH (b) WHERE id(b) = $dst \
+                     CREATE (a)-[r:{edge_type}]->(b) {set_clause}"
+                )
+            };
+
+            let mut qb = tx.execute_with(&cypher);
+            qb = qb.param("src", *from).param("dst", *to);
+            for (k, v) in &params {
+                qb = qb.param(k.as_str(), v.clone());
+            }
+            qb.run()
+                .await
+                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        Ok(edge_ids)
+    }
+
     /// Retrieve edges of a given type incident to `node_id`.
     ///
     /// # Errors

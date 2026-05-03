@@ -19,19 +19,24 @@ pub struct NlpResult {
     /// Per-word POS tag indices into `LabelMaps::pos_labels`.
     pub pos_indices: Vec<usize>,
 
-    /// Per-word dep2label tag indices into `LabelMaps::dep_labels`.
-    pub dep_indices: Vec<usize>,
-
     /// Sentence classification index into `LabelMaps::cls_labels`.
     pub cls_index: usize,
 
     /// Softmax confidence of the predicted sentence class.
     pub cls_confidence: f32,
 
+    /// Full softmax probability vector over the 8 raw CLS labels
+    /// (`inform`, `request`, `question`, `confirm`, `reject`, `offer`,
+    /// `social`, `status`). Lets the gate consider multiple plausible
+    /// labels per sentence instead of just the argmax.
+    #[serde(default)]
+    pub cls_probs: Vec<f32>,
+
     /// Named entity spans decoded from BIO tags.
     pub entities: Vec<NerSpan>,
 
-    /// Dependency arcs decoded from dep2label tags.
+    /// Dependency arcs decoded from the biaffine DEP head
+    /// (`arc_scores` for head selection, `label_scores` for relation).
     pub dep_arcs: Vec<DepArc>,
 
     /// Sentence-level classification result.
@@ -95,55 +100,47 @@ pub struct DepArc {
     pub relation: String,
 }
 
-/// Sentence-level classification from the CLS head.
+/// Sentence-level dialog-act classification from the CLS head.
+///
+/// Maps the model's 8-label dialog-act vocabulary onto a smaller set of
+/// downstream-relevant categories. The model labels are ISO 24617-2
+/// inspired: `inform`, `request`, `question`, `confirm`, `reject`,
+/// `offer`, `social`, `status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SentenceClass {
-    /// Declarative factual statement.
+    /// Declarative factual statement (`inform`, `status`).
     Statement,
-    /// Interrogative sentence.
+    /// Interrogative sentence (`question`).
     Question,
-    /// Question embedding a factual claim.
-    QuestionFact,
-    /// Imperative command or instruction.
+    /// Imperative or proposal carrying actionable content (`request`, `offer`).
     Command,
-    /// Social greeting.
+    /// Social greeting / phatic turn (`social`).
     Greeting,
-    /// Filler or backchannel.
-    Filler,
-    /// Acknowledgment or confirmation.
+    /// Acknowledgment, confirmation, or rejection (`confirm`, `reject`).
     Acknowledgment,
 }
 
 impl SentenceClass {
     /// Parse from the label string in `label_maps.json`.
-    ///
-    /// Handles both the DistilRoBERTa labels (statement, question, etc.)
-    /// and the DeBERTa labels (inform, correction, agreement, etc.).
     pub fn from_label(label: &str) -> Self {
         match label {
-            // DistilRoBERTa scheme
-            "statement" => Self::Statement,
-            "question_fact" => Self::QuestionFact,
-            "command" => Self::Command,
-            "greeting" => Self::Greeting,
-            "acknowledgment" => Self::Acknowledgment,
-            // DeBERTa scheme (ISO 24617-2 inspired)
-            "inform" => Self::Statement,
-            "correction" => Self::Statement,
-            "plan_commit" => Self::Command,
-            "request" => Self::Command,
-            "agreement" => Self::Acknowledgment,
-            "feedback" => Self::Acknowledgment,
-            "social" => Self::Greeting,
-            // Shared
+            "inform" | "status" => Self::Statement,
+            "request" | "offer" => Self::Command,
             "question" => Self::Question,
-            "filler" => Self::Filler,
+            "confirm" | "reject" => Self::Acknowledgment,
+            "social" => Self::Greeting,
             _ => Self::Statement,
         }
     }
 
-    /// Whether this class indicates informative content.
+    /// Whether this class indicates informative content worth extracting
+    /// observations from.
+    ///
+    /// `Statement` (inform/status) and `Command` (request/offer) carry
+    /// propositional content. `Question` asks rather than asserts;
+    /// `Acknowledgment` confirms or negates without adding new facts;
+    /// `Greeting` is phatic.
     pub fn is_informative(self) -> bool {
-        matches!(self, Self::Statement | Self::QuestionFact | Self::Command)
+        matches!(self, Self::Statement | Self::Command)
     }
 }

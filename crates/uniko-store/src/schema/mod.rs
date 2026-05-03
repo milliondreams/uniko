@@ -34,11 +34,14 @@ use crate::error::UnikoError;
 
 pub use constants::{edges, labels};
 
-/// Embedding model alias used by uni-db's Xervo runtime (fastembed).
+/// Embedding model alias used by uni-db's Xervo runtime (ONNX `local/onnx`).
 pub const EMBED_ALIAS: &str = "embed/default";
 
 /// NLP ONNX model alias for multi-task inference (NER, POS, dep, CLS).
 pub const NLP_ALIAS: &str = "nlp/default";
+
+/// Cross-encoder reranker alias (ONNX `local/onnx`, registered only when enabled).
+pub const RERANK_ALIAS: &str = "rerank/default";
 
 /// Build a vector index from config (no auto-embed).
 ///
@@ -55,8 +58,8 @@ pub(crate) fn vector_index(config: &UnikoConfig) -> VectorIndexCfg {
 /// Build a vector index with auto-embed from a source property.
 ///
 /// uni-db automatically computes and stores the embedding when a node
-/// is created or the source property is updated.  Uses the fastembed
-/// provider configured in [`UnikoConfig::embedding`].
+/// is created or the source property is updated.  Uses the ONNX
+/// embedding provider configured in [`UnikoConfig::embedding`].
 pub(crate) fn auto_embed_vector_index(
     source_property: &str,
     config: &UnikoConfig,

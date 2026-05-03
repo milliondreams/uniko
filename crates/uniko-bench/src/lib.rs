@@ -34,20 +34,34 @@ pub async fn open_kb(
 
 /// Build model alias specs for LLM generation and judging.
 ///
-/// Creates catalog entries for the generation LLM and optionally
-/// a separate judge LLM (if `judge_alias` differs from `llm_alias`).
+/// Creates catalog entries for the generation LLM and optionally a
+/// separate judge LLM. The judge can use a different provider and
+/// model from the generator (e.g. local mistralrs for generation +
+/// remote OpenAI for judging).
+///
+/// `judge_provider` and `judge_model_id` default to the generator's
+/// values when not specified. `llm_provider` defaults to
+/// `"local/mistralrs"`.
+#[allow(clippy::too_many_arguments)]
 pub fn build_llm_catalog(
     llm_alias: Option<&str>,
     llm_model_id: Option<&str>,
+    llm_provider: Option<&str>,
+    llm_base_url: Option<&str>,
     judge_alias: Option<&str>,
+    judge_model_id: Option<&str>,
+    judge_provider: Option<&str>,
+    judge_base_url: Option<&str>,
 ) -> Vec<ModelAliasSpec> {
     let mut catalog = Vec::new();
+
+    let gen_provider = llm_provider.unwrap_or("local/mistralrs");
 
     if let (Some(alias), Some(model_id)) = (llm_alias, llm_model_id) {
         catalog.push(ModelAliasSpec {
             alias: alias.to_string(),
             task: ModelTask::Generate,
-            provider_id: "local/mistralrs".to_string(),
+            provider_id: gen_provider.to_string(),
             model_id: model_id.to_string(),
             revision: None,
             warmup: WarmupPolicy::Lazy,
@@ -55,17 +69,23 @@ pub fn build_llm_catalog(
             timeout: None,
             load_timeout: None,
             retry: None,
-            options: serde_json::json!({"isq": "Q4K"}),
+            options: provider_options(gen_provider, llm_base_url),
         });
+    }
 
-        // If judge alias is different, add it separately.
-        if let Some(judge) = judge_alias
-            && judge != alias
-        {
+    if let Some(judge) = judge_alias {
+        let same_as_gen = llm_alias == Some(judge);
+        if !same_as_gen {
+            // Fall back to generator's provider/model when the caller
+            // doesn't override.
+            let provider = judge_provider.unwrap_or(gen_provider);
+            let model_id = judge_model_id
+                .or(llm_model_id)
+                .expect("judge_alias requires either judge_model_id or llm_model_id");
             catalog.push(ModelAliasSpec {
                 alias: judge.to_string(),
                 task: ModelTask::Generate,
-                provider_id: "local/mistralrs".to_string(),
+                provider_id: provider.to_string(),
                 model_id: model_id.to_string(),
                 revision: None,
                 warmup: WarmupPolicy::Lazy,
@@ -73,12 +93,29 @@ pub fn build_llm_catalog(
                 timeout: None,
                 load_timeout: None,
                 retry: None,
-                options: serde_json::json!({"isq": "Q4K"}),
+                options: provider_options(provider, judge_base_url),
             });
         }
     }
 
     catalog
+}
+
+/// Per-provider default options for a generation alias.
+///
+/// `local/mistralrs` defaults to ISQ Q4K so the user doesn't need a
+/// pre-quantized model file. `remote/openai` (and OpenAI-compatible
+/// servers like LM Studio / vLLM / llama.cpp) accept an optional
+/// `base_url` override; uni-xervo 0.10+ honors it.
+fn provider_options(provider: &str, base_url: Option<&str>) -> serde_json::Value {
+    match provider {
+        "local/mistralrs" => serde_json::json!({"isq": "Q4K"}),
+        "remote/openai" => match base_url {
+            Some(url) => serde_json::json!({"base_url": url}),
+            None => serde_json::json!({}),
+        },
+        _ => serde_json::json!({}),
+    }
 }
 
 // ── Context Formatting ──────────────────────────────────────────

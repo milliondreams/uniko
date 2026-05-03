@@ -13,6 +13,15 @@ path = "src/main.rs"
 name = "longmemeval-bench"
 path = "src/longmemeval_main.rs"
 
+[[bin]]
+name = "uniko-cypher"
+path = "src/cypher_main.rs"
+
+[features]
+default = []
+gpu-cuda = ["uniko-store/gpu-cuda"]
+gpu-metal = ["uniko-store/gpu-metal"]
+
 [dependencies]
 uniko-memory = { workspace = true, features = ["onnx"] }
 uniko-extract = { workspace = true, features = ["onnx"] }

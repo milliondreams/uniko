@@ -1,0 +1,168 @@
+# Default observation extraction rules for English.
+#
+# Loaded once at startup by `rules_engine::load_bundled_rules()`. The
+# matcher walks each sentence's DEP tree and, for every token whose
+# POS matches a pattern's anchor, tests the children list. When the
+# required arcs are present, captured spans are rendered through the
+# template into the observation `content`.
+#
+# To experiment without a rebuild, point `UnikoConfig.observation_rules_path`
+# at a sibling YAML; the matcher will load that file instead.
+
+subject_resolution:
+  first_person:
+    tokens: [i, we, me, my, myself]
+    contraction_prefixes: ["i'", "we'", "i’", "we’"]
+  second_person:
+    tokens: [you, your, yours, yourself]
+    contraction_prefixes: ["you'", "you’"]
+  third_person_demonstrative:
+    tokens: [it, "it's", "it'd", "it'll", this, that, they, there]
+  unresolvable:
+    tokens:
+      - which
+      - who
+      - whom
+      - whose
+      - what
+      - where
+      - when
+      - why
+      - how
+      - anyone
+      - anybody
+      - anything
+      - everyone
+      - everybody
+      - everything
+      - someone
+      - somebody
+      - something
+      - "no one"
+      - nobody
+      - nothing
+      - others
+      - another
+      - all
+      - some
+      - few
+      - many
+      - most
+      - it
+      - this
+      - that
+      - they
+      - there
+      - these
+      - those
+
+filters:
+  min_content_words: 3
+  subject_pos_required: [NOUN, PROPN, PRON]
+  drop_when_subject_unresolvable: true
+
+  # Multi-label CLS gate. The model emits a softmax over 8 raw labels;
+  # the gate accepts a sentence if any label with prob > min_prob is in
+  # informative_labels. Tuned for high-recall extraction: a sentence
+  # whose argmax is `social` but whose `inform`/`status` mass clears
+  # 20% (e.g. "I was so happy and thankful for all the support" — both
+  # social and a self-status report) still gets extracted.
+  cls_gate:
+    min_prob: 0.20
+    informative_labels: [inform, status, request, offer]
+
+phrase_collectors:
+  noun_phrase:
+    include_relations: [compound, amod, flat, "flat:name", "nmod:poss", det, nummod]
+  noun_phrase_full:
+    include_relations: [compound, amod, flat, "flat:name", "nmod:poss", det, nummod, appos, nmod]
+  subtree:
+    subtree: true
+
+patterns:
+  # Parity port of the legacy copular branch:
+  #   "Caroline is happy", "mom has been supportive".
+  - name: copular_state
+    description: "ADJ/NOUN predicate with a `cop` child"
+    match:
+      anchor:
+        pos: [ADJ, NOUN]
+        children:
+          - dep: cop
+            required: true
+          - dep: [nsubj, "nsubj:pass", csubj]
+            required: true
+            capture: subject
+            collect: noun_phrase
+          - dep: [obj, dobj, iobj]
+            capture: object
+            collect: noun_phrase
+          - dep: [obl, advmod, xcomp, advcl]
+            capture: modifiers
+            collect: subtree
+            multi: true
+    template: "{subject} is {anchor} {object} {modifiers}"
+
+  # Parity port of the legacy verbal branch:
+  #   "Jon got a temp job", subject-verb-object with optional modifiers.
+  - name: verbal_action
+    description: "VERB predicate with subject + optional object/modifiers"
+    match:
+      anchor:
+        pos: VERB
+        children:
+          - dep: [nsubj, "nsubj:pass", csubj]
+            required: true
+            capture: subject
+            collect: noun_phrase
+          - dep: [obj, dobj, iobj]
+            capture: object
+            collect: noun_phrase
+          - dep: [obl, advmod, xcomp, advcl]
+            capture: modifiers
+            collect: subtree
+            multi: true
+    template: "{subject} {anchor} {object} {modifiers}"
+
+  # Phase B: pattern for "It'll be tough as a single parent" /
+  #   "important after that tough breakup" — anchors with a subject and
+  #   a meaningful PP-attached noun phrase (`obl`) but no `obj`. The
+  #   modifier collector walks deeper (appos + nmod) to keep
+  #   "single parent", "tough breakup".
+  - name: oblique_state_modifier
+    description: "Anchor with PP-attached state, no direct object"
+    match:
+      anchor:
+        pos: [ADJ, NOUN, VERB]
+        children:
+          - dep: [nsubj, "nsubj:pass"]
+            required: true
+            capture: subject
+            collect: noun_phrase
+          - dep: obl
+            required: true
+            capture: modifier
+            collect: noun_phrase_full
+    template: "{subject} {anchor} {modifier}"
+    quality:
+      min_modifier_words: 2
+
+  # Phase B: pattern for "my home country, Sweden" — appositional
+  #   identifier renames the anchor noun. Emits
+  #   "<speaker>: <anchor> = <identifier>". The `{subject}` default
+  #   resolves to the speaker (matcher inserts it into captures), so
+  #   the resulting observation embeds with a Caroline/Melanie signal.
+  #   Without this, the apposition obs has zero subject token and
+  #   ranks well below subject-prefixed observations on queries that
+  #   mention the speaker.
+  - name: appositional_identity
+    description: "Apposition-based identity claim"
+    match:
+      anchor:
+        pos: [NOUN, PROPN]
+        children:
+          - dep: appos
+            required: true
+            capture: identifier
+            collect: noun_phrase
+    template: "{subject}: {anchor} = {identifier}"
