@@ -8,7 +8,7 @@
 
 use ndarray::{ArrayView1, ArrayView2, ArrayView3};
 
-use super::types::{DepArc, NerEntityType, NerSpan, SentenceClass};
+use super::types::{DepArc, NerEntityType, NerSpan, SentenceClass, SrlArg, SrlFrame};
 
 // ── Argmax helpers ─────────────────────────────────────────────────
 
@@ -210,6 +210,98 @@ fn parse_ner_type(suffix: &str) -> NerEntityType {
         "NORP" => NerEntityType::Group, // nationality/religious/political group
         "LAW" | "LANGUAGE" => NerEntityType::Misc,
         _ => NerEntityType::Misc,
+    }
+}
+
+// ── SRL frame decoder ─────────────────────────────────────────────
+
+/// Decode one PropBank-style SRL frame from a per-token tag sequence.
+///
+/// `tag_indices` is the word-aligned argmax over `srl_logits` for the
+/// row whose `predicate_idx` selected the verb at `predicate_idx`.
+/// `srl_labels` is the 42-class vocabulary at
+/// `nlp/assets/label_maps.json:40-52` (`O`, `V`, plus `B-`/`I-`
+/// variants of ARG0..ARG4 and ARGM-{TMP,LOC,MNR,…}).
+///
+/// Group-by-role BIO logic mirrors [`merge_bio_spans`]:
+/// - `B-{role}` opens a fresh span for that role
+/// - `I-{role}` continues the open span if the role matches; otherwise
+///   the orphan I- promotes to a new B-
+/// - `O` flushes the current span
+/// - `V` is recorded as the predicate; never appears in the args list
+///
+/// Returns a frame with `predicate_idx` and `predicate_word` populated
+/// even when no args are recognised.
+pub fn decode_srl_frame(
+    tag_indices: &[usize],
+    words: &[String],
+    srl_labels: &[String],
+    predicate_idx: usize,
+) -> SrlFrame {
+    let mut args = Vec::new();
+    let mut current_start: Option<usize> = None;
+    let mut current_role: Option<String> = None;
+
+    let flush = |args: &mut Vec<SrlArg>,
+                 start: Option<usize>,
+                 role: Option<String>,
+                 end: usize,
+                 words: &[String]| {
+        if let (Some(start), Some(role)) = (start, role) {
+            let end = end.min(words.len());
+            if end > start {
+                args.push(SrlArg {
+                    role,
+                    text: words[start..end].join(" "),
+                    start_word: start,
+                    end_word: end,
+                });
+            }
+        }
+    };
+
+    for (i, &idx) in tag_indices.iter().enumerate() {
+        let label = srl_labels.get(idx).map(String::as_str).unwrap_or("O");
+
+        if let Some(role) = label.strip_prefix("B-") {
+            flush(&mut args, current_start, current_role.take(), i, words);
+            current_start = Some(i);
+            current_role = Some(role.to_string());
+        } else if let Some(role) = label.strip_prefix("I-") {
+            if current_role.as_deref() == Some(role) {
+                // Continue current span.
+            } else {
+                // Orphan I- — promote to fresh B-.
+                flush(&mut args, current_start, current_role.take(), i, words);
+                current_start = Some(i);
+                current_role = Some(role.to_string());
+            }
+        } else {
+            // `O` or `V` — flush whatever's open. `V` itself isn't
+            // emitted as an argument; the predicate is identified by
+            // `predicate_idx` on the frame.
+            flush(&mut args, current_start, current_role.take(), i, words);
+            current_start = None;
+            current_role = None;
+        }
+    }
+    flush(
+        &mut args,
+        current_start,
+        current_role,
+        tag_indices.len(),
+        words,
+    );
+
+    let predicate_word = words
+        .get(predicate_idx)
+        .cloned()
+        .unwrap_or_default();
+
+    SrlFrame {
+        predicate_idx,
+        predicate_word,
+        args,
     }
 }
 
@@ -897,5 +989,109 @@ mod tests {
         assert_eq!(decode_cls(3, &labels), SentenceClass::Acknowledgment); // confirm
         assert_eq!(decode_cls(6, &labels), SentenceClass::Greeting); // social
         assert_eq!(decode_cls(7, &labels), SentenceClass::Statement); // status
+    }
+
+    // ── SRL frame decoder tests ─────────────────────────────────────
+
+    /// Subset of the model's `srl_labels` vocabulary that's enough to
+    /// drive the unit tests below. Order matches the indices used in
+    /// each test's `tag_indices` slice.
+    fn srl_labels_fixture() -> Vec<String> {
+        vec![
+            "O".into(),         // 0
+            "V".into(),         // 1
+            "B-ARG0".into(),    // 2
+            "I-ARG0".into(),    // 3
+            "B-ARG1".into(),    // 4
+            "I-ARG1".into(),    // 5
+            "B-ARGM-TMP".into(), // 6
+            "I-ARGM-TMP".into(), // 7
+            "B-ARGM-LOC".into(), // 8
+            "I-ARGM-LOC".into(), // 9
+        ]
+    }
+
+    fn words_v(words: &[&str]) -> Vec<String> {
+        words.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn decode_srl_frame_single_arg0_arg1() {
+        // "Caroline ate apples"
+        // tags:    [B-ARG0, V,    B-ARG1]
+        let labels = srl_labels_fixture();
+        let tags = vec![2, 1, 4];
+        let words = words_v(&["Caroline", "ate", "apples"]);
+        let frame = decode_srl_frame(&tags, &words, &labels, 1);
+        assert_eq!(frame.predicate_word, "ate");
+        assert_eq!(frame.predicate_idx, 1);
+        assert_eq!(frame.args.len(), 2);
+        assert_eq!(frame.args[0].role, "ARG0");
+        assert_eq!(frame.args[0].text, "Caroline");
+        assert_eq!(frame.args[1].role, "ARG1");
+        assert_eq!(frame.args[1].text, "apples");
+    }
+
+    #[test]
+    fn decode_srl_frame_with_argm_tmp() {
+        // "Caroline ate apples yesterday"
+        // tags:    [B-ARG0, V,    B-ARG1, B-ARGM-TMP]
+        let labels = srl_labels_fixture();
+        let tags = vec![2, 1, 4, 6];
+        let words = words_v(&["Caroline", "ate", "apples", "yesterday"]);
+        let frame = decode_srl_frame(&tags, &words, &labels, 1);
+        let tmp = frame.args.iter().find(|a| a.role == "ARGM-TMP").unwrap();
+        assert_eq!(tmp.text, "yesterday");
+        assert_eq!(tmp.start_word, 3);
+        assert_eq!(tmp.end_word, 4);
+    }
+
+    #[test]
+    fn decode_srl_frame_orphan_i_promotes() {
+        // "Caroline ate apples" with orphan I-ARG1 (no preceding B-)
+        let labels = srl_labels_fixture();
+        let tags = vec![2, 1, 5]; // I-ARG1 at index 2 with no B-
+        let words = words_v(&["Caroline", "ate", "apples"]);
+        let frame = decode_srl_frame(&tags, &words, &labels, 1);
+        let arg1 = frame.args.iter().find(|a| a.role == "ARG1").unwrap();
+        assert_eq!(arg1.text, "apples");
+    }
+
+    #[test]
+    fn decode_srl_frame_multi_word_args() {
+        // "Caroline and Mel ate big apples"
+        // tags:    [B-ARG0, I-ARG0, I-ARG0, V, B-ARG1, I-ARG1]
+        let labels = srl_labels_fixture();
+        let tags = vec![2, 3, 3, 1, 4, 5];
+        let words = words_v(&["Caroline", "and", "Mel", "ate", "big", "apples"]);
+        let frame = decode_srl_frame(&tags, &words, &labels, 3);
+        let arg0 = frame.args.iter().find(|a| a.role == "ARG0").unwrap();
+        assert_eq!(arg0.text, "Caroline and Mel");
+        let arg1 = frame.args.iter().find(|a| a.role == "ARG1").unwrap();
+        assert_eq!(arg1.text, "big apples");
+    }
+
+    #[test]
+    fn decode_srl_frame_no_args_returns_empty() {
+        // All `O` — predicate alone with no recognised arguments.
+        let labels = srl_labels_fixture();
+        let tags = vec![0, 1, 0];
+        let words = words_v(&["aa", "ate", "bb"]);
+        let frame = decode_srl_frame(&tags, &words, &labels, 1);
+        assert_eq!(frame.predicate_word, "ate");
+        assert!(frame.args.is_empty());
+    }
+
+    #[test]
+    fn decode_srl_frame_consecutive_b_role_starts_new_span() {
+        // Two adjacent ARG1 spans with B- markers — second B- flushes
+        // the first.
+        let labels = srl_labels_fixture();
+        let tags = vec![4, 4]; // B-ARG1, B-ARG1
+        let words = words_v(&["x", "y"]);
+        let frame = decode_srl_frame(&tags, &words, &labels, 0);
+        assert_eq!(frame.args.len(), 2, "two B- starts produce two spans");
+        assert_eq!(frame.args[0].text, "x");
+        assert_eq!(frame.args[1].text, "y");
     }
 }

@@ -158,6 +158,10 @@ fn default_rrf_k() -> f64 {
     60.0
 }
 
+fn default_nlp_srl_enabled() -> bool {
+    true
+}
+
 impl RerankerConfig {
     /// BAAI/bge-reranker-base — 278M params, accurate, CPU-feasible.
     pub fn bge_base() -> Self {
@@ -381,6 +385,16 @@ pub struct UnikoConfig {
     /// Overlap tokens between adjacent chunks (0 = auto: 10% of max, capped at 50).
     pub chunk_overlap_tokens: usize,
 
+    // NLP cascade
+    /// Whether to compute SRL frames (one extra ONNX forward per VERB
+    /// per sentence). Phase A landed inert SRL plumbing — when `false`,
+    /// `NlpResult.srl_frames` stays empty and downstream extraction
+    /// behaves exactly as before. Default `true` so the model's SRL
+    /// head is actually used; flip to `false` if profiling shows the
+    /// per-verb re-forward cost is unacceptable for a given workload.
+    #[serde(default = "default_nlp_srl_enabled")]
+    pub nlp_srl_enabled: bool,
+
     // Recall parameters
     /// Maximum items returned from recall.
     pub recall_limit: usize,
@@ -455,6 +469,7 @@ impl Default for UnikoConfig {
             recall_min_score: 0.001,
             recall_vector_weight: 0.5,
             recall_bm25_weight: 0.5,
+            nlp_srl_enabled: default_nlp_srl_enabled(),
             query_variants: Vec::new(),
             rrf_k: default_rrf_k(),
             recall_per_variant_limit: None,

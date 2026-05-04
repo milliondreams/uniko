@@ -41,6 +41,47 @@ pub struct NlpResult {
 
     /// Sentence-level classification result.
     pub sentence_class: SentenceClass,
+
+    /// Semantic-role-labelling frames, one per recognised predicate
+    /// (typically VERB tokens). Empty when SRL is disabled via
+    /// `UnikoConfig.nlp_srl_enabled = false` or when the cascade
+    /// found no predicates. Each frame carries the predicate's word
+    /// index plus a list of role-typed [`SrlArg`] spans
+    /// (`ARG0`, `ARG1`, `ARGM-TMP`, `ARGM-LOC`, …).
+    #[serde(default)]
+    pub srl_frames: Vec<SrlFrame>,
+}
+
+/// One PropBank-style semantic role frame anchored on a predicate.
+///
+/// Produced by [`crate::nlp::decode::decode_srl_frame`] from the
+/// model's `srl_logits` output for a specific `predicate_idx`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SrlFrame {
+    /// Word index of the predicate (matches the `predicate_idx` input
+    /// fed to the model for this frame).
+    pub predicate_idx: usize,
+    /// Surface form of the predicate (typically the verb).
+    pub predicate_word: String,
+    /// Argument spans grouped by role. Empty for predicates with no
+    /// recognised arguments (e.g. an isolated verb with no nsubj/obj).
+    pub args: Vec<SrlArg>,
+}
+
+/// One argument of an [`SrlFrame`], identified by its PropBank role
+/// label and the contiguous word span it covers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SrlArg {
+    /// Role label without the BIO prefix — e.g. `"ARG0"`, `"ARG1"`,
+    /// `"ARGM-TMP"`, `"ARGM-LOC"`. The predicate itself is excluded
+    /// from the args list (its `V` tag identifies it instead).
+    pub role: String,
+    /// Surface text of the argument span (words joined by single space).
+    pub text: String,
+    /// Start word index (inclusive).
+    pub start_word: usize,
+    /// End word index (exclusive).
+    pub end_word: usize,
 }
 
 /// A contiguous named-entity span merged from BIO tags.

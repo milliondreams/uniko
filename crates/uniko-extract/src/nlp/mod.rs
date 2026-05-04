@@ -35,6 +35,11 @@ use types::NlpResult;
 #[derive(Clone)]
 pub struct NlpPipeline {
     runner: Arc<dyn RawTensorModel>,
+    /// Mirror of `UnikoConfig.nlp_srl_enabled`. When `true`, after the
+    /// main forward pass `analyze` runs one extra inference per VERB
+    /// token with `predicate_idx` set, and decodes the resulting
+    /// `srl_logits` into `NlpResult.srl_frames`.
+    srl_enabled: bool,
 }
 
 impl std::fmt::Debug for NlpPipeline {
@@ -58,7 +63,11 @@ impl NlpPipeline {
                 return None;
             }
         };
-        Some(Self { runner })
+        let srl_enabled = kb.config().nlp_srl_enabled;
+        Some(Self {
+            runner,
+            srl_enabled,
+        })
     }
 
     /// Run full NLP analysis on a text string.
@@ -153,6 +162,28 @@ impl NlpPipeline {
         );
         let sentence_class = decode::decode_cls(cls_index, &labels.cls_labels);
 
+        // 8. SRL frames — one extra forward per VERB token. The cascade
+        // takes `predicate_idx: i64[1]` and emits `srl_logits` for that
+        // predicate; we identify VERBs from the POS argmax we just
+        // decoded, then iterate. Skipped when the kill-switch
+        // `nlp_srl_enabled = false` is set on UnikoConfig.
+        let srl_frames = if self.srl_enabled {
+            let srl_input_ids: Vec<i64> = ids.iter().map(|&x| x as i64).collect();
+            let srl_attention: Vec<i64> = attention.iter().map(|&x| x as i64).collect();
+            self.compute_srl_frames(
+                &srl_input_ids,
+                &srl_attention,
+                &word_ids,
+                &words,
+                &pos_indices,
+                &labels.pos_labels,
+                &labels.srl_labels,
+            )
+            .await
+        } else {
+            Vec::new()
+        };
+
         Ok(NlpResult {
             words,
             ner_indices,
@@ -163,7 +194,91 @@ impl NlpPipeline {
             entities,
             dep_arcs,
             sentence_class,
+            srl_frames,
         })
+    }
+
+    /// Run one SRL re-forward per VERB token in the sentence.
+    ///
+    /// The model accepts `predicate_idx: i64[batch]`; we re-use the
+    /// already-tokenised input and only swap that one tensor. Each
+    /// re-forward is a full cascade pass — this is conservative; a
+    /// future optimisation could batch all predicates for one sentence
+    /// into a single forward by replicating the row.
+    #[allow(clippy::too_many_arguments)]
+    async fn compute_srl_frames(
+        &self,
+        input_ids: &[i64],
+        attention_mask: &[i64],
+        word_ids: &[Option<u32>],
+        words: &[String],
+        pos_indices: &[usize],
+        pos_labels: &[String],
+        srl_labels: &[String],
+    ) -> Vec<types::SrlFrame> {
+        let mut frames = Vec::new();
+        let seq_len = input_ids.len();
+
+        // Identify VERB-tagged words. POS indices are word-aligned —
+        // each entry corresponds to one word, in order.
+        let verb_word_indices: Vec<usize> = pos_indices
+            .iter()
+            .enumerate()
+            .filter_map(|(word_idx, &pos_idx)| {
+                let pos = pos_labels.get(pos_idx).map(String::as_str).unwrap_or("");
+                if pos == "VERB" { Some(word_idx) } else { None }
+            })
+            .collect();
+
+        if verb_word_indices.is_empty() {
+            return frames;
+        }
+
+        // Map word_idx → first matching subword index for the
+        // `predicate_idx` input (which is subword-indexed).
+        let word_to_subword = first_subword_per_word(word_ids);
+
+        for &word_idx in &verb_word_indices {
+            let Some(&subword_idx) = word_to_subword.get(&word_idx) else {
+                continue;
+            };
+            let mut inputs = TensorBatch::default();
+            let Ok(ids_arr) = ArrayD::from_shape_vec(vec![1, seq_len], input_ids.to_vec()) else {
+                continue;
+            };
+            let Ok(mask_arr) =
+                ArrayD::from_shape_vec(vec![1, seq_len], attention_mask.to_vec())
+            else {
+                continue;
+            };
+            inputs.insert("input_ids", TensorValue::I64(ids_arr));
+            inputs.insert("attention_mask", TensorValue::I64(mask_arr));
+            let Ok(pred_arr) = ArrayD::from_shape_vec(vec![1], vec![subword_idx as i64]) else {
+                continue;
+            };
+            inputs.insert("predicate_idx", TensorValue::I64(pred_arr));
+
+            let outputs = match self.runner.run(&inputs).await {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::debug!(error = %e, word_idx, "SRL re-forward failed; skipping");
+                    continue;
+                }
+            };
+            let Ok(srl_logits) = extract_f32_2d(&outputs, "srl_logits") else {
+                continue;
+            };
+            let srl_subword = decode::argmax_rows(&srl_logits.view());
+            let srl_word_indices = decode::align_to_words(&srl_subword, word_ids);
+            frames.push(decode::decode_srl_frame(
+                &srl_word_indices,
+                words,
+                srl_labels,
+                word_idx,
+            ));
+        }
+
+        frames
     }
 
     /// Analyze text by splitting into sentences first.
@@ -312,6 +427,27 @@ impl NlpPipeline {
             );
             let sentence_class = decode::decode_cls(cls_index, &labels.cls_labels);
 
+            // SRL frames: one extra forward per VERB token. Each
+            // sentence is independent here (its own row.ids /
+            // row.attention / row.word_ids); we don't attempt to batch
+            // predicates across sentences in v1.
+            let srl_frames = if self.srl_enabled {
+                let srl_input_ids: Vec<i64> = r.ids.iter().map(|&x| x as i64).collect();
+                let srl_attention: Vec<i64> = r.attention.iter().map(|&x| x as i64).collect();
+                self.compute_srl_frames(
+                    &srl_input_ids,
+                    &srl_attention,
+                    &r.word_ids,
+                    &words,
+                    &pos_indices,
+                    &labels.pos_labels,
+                    &labels.srl_labels,
+                )
+                .await
+            } else {
+                Vec::new()
+            };
+
             results.push(NlpResult {
                 words,
                 ner_indices,
@@ -322,6 +458,7 @@ impl NlpPipeline {
                 entities,
                 dep_arcs,
                 sentence_class,
+                srl_frames,
             });
         }
 
@@ -626,4 +763,21 @@ fn extract_f32_4d(
         }
         _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
     }
+}
+
+/// Build a `word_idx → first_subword_idx` map from the tokenizer's
+/// per-token word_id alignment. The model takes `predicate_idx` as a
+/// subword index (it indexes encoder hidden states), so we project our
+/// word-level VERB indices back into subword space before each SRL
+/// re-forward.
+fn first_subword_per_word(
+    word_ids: &[Option<u32>],
+) -> std::collections::HashMap<usize, usize> {
+    let mut map = std::collections::HashMap::new();
+    for (subword_idx, &wid) in word_ids.iter().enumerate() {
+        if let Some(w) = wid {
+            map.entry(w as usize).or_insert(subword_idx);
+        }
+    }
+    map
 }
