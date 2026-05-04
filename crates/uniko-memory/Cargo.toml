@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
+futures = { workspace = true }
 
 [features]
 onnx = ["uniko-extract/onnx"]

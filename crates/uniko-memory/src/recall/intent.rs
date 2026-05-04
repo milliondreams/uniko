@@ -2,6 +2,7 @@
 
 // Rust guideline compliant
 
+use futures::future::join_all;
 use uniko_extract::ner::rules::extract_entities_rule_based;
 use uniko_store::{KnowledgeBase, UnikoError};
 
@@ -9,15 +10,37 @@ use uniko_store::{KnowledgeBase, UnikoError};
 /// NOUN, VERB, PROPN, ADJ, NUM — drop function words.
 const CONTENT_POS: &[&str] = &["NOUN", "VERB", "PROPN", "ADJ", "NUM"];
 
+/// Variant labels recognised when building an [`IntentProfile`].
+pub const VARIANT_KEYWORDS: &str = "keywords";
+pub const VARIANT_ORIGINAL: &str = "original";
+pub const VARIANT_DECLARATIVE: &str = "declarative";
+pub const VARIANT_TYPE_ANCHORED: &str = "type_anchored";
+
+/// One query reformulation. Each variant runs through the full recall
+/// pipeline (hybrid + entity-scoped Cypher fan-out) on its own and is
+/// fused with the others via reciprocal-rank fusion in the caller.
+#[derive(Debug, Clone)]
+pub struct QueryVariant {
+    /// Stable label (`"original"`, `"keywords"`, `"declarative"`,
+    /// `"type_anchored"`). Used for tracing and CLI selection.
+    pub label: &'static str,
+    /// Human-readable form. Doubles as the BM25 query string (`$qtxt`)
+    /// inside the Cypher templates.
+    pub text: String,
+    /// Embedding of `text`. Empty when the embedder failed; downstream
+    /// code falls back to BM25-only paths in that case.
+    pub vector: Vec<f32>,
+}
+
 /// Structured representation of a recall query.
 #[derive(Debug, Clone)]
 pub struct IntentProfile {
-    /// Embedding of the full query text.
-    pub intent_vec: Vec<f32>,
-    /// Content keywords extracted from query via POS filtering.
-    /// Used as the fulltext search query instead of the raw question.
-    pub keywords: String,
-    /// Entity names extracted from the query.
+    /// Per-variant `(text, embedding)` pairs. Always non-empty: at
+    /// minimum the `keywords` variant is present (or `original` as a
+    /// fallback when keyword stripping yields nothing).
+    pub variants: Vec<QueryVariant>,
+    /// Entity names extracted from the query, used for entity-scoped
+    /// Cypher fan-out across all variants.
     pub entity_refs: Vec<String>,
     /// Number of facets: `max(entity_refs.len(), 1)`.
     pub facet_count: usize,
@@ -29,26 +52,45 @@ pub struct IntentProfile {
     pub expected_answer_type: Option<&'static str>,
 }
 
+impl IntentProfile {
+    /// First variant's vector. Kept for back-compat with callers that
+    /// expect a single embedding (e.g. legacy tests). New code should
+    /// iterate `variants`.
+    pub fn intent_vec(&self) -> &[f32] {
+        self.variants
+            .first()
+            .map(|v| v.vector.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// First variant's text. Same back-compat reason as [`intent_vec`].
+    pub fn keywords(&self) -> &str {
+        self.variants
+            .first()
+            .map(|v| v.text.as_str())
+            .unwrap_or("")
+    }
+}
+
 /// Build an [`IntentProfile`] from a query string.
 ///
-/// Embeds the query via Xervo and extracts entity references + keywords
-/// using the ONNX NLP pipeline (when available) with rule-based fallback.
+/// Runs the NLP cascade once on the question, then derives 1–4 query
+/// variants whose embeddings are computed concurrently via `join_all`.
+/// `enabled_variants` filters which variants get built — pass an empty
+/// slice to build the full default set
+/// (`keywords`, `original`, `declarative`, `type_anchored`).
 ///
 /// # Errors
 ///
 /// Returns [`UnikoError::Embedding`] if the embedding runtime is
-/// unavailable.
-pub async fn build_intent(kb: &KnowledgeBase, query: &str) -> Result<IntentProfile, UnikoError> {
-    // Extract entities and keywords via NLP first.
-    let (entity_refs, keywords) = analyze_query(kb, query).await;
-
-    // Embed the keywords (not the raw question) — keyword-stripped text
-    // embeds closer to statement-form content in the index.
-    let embed_text = if keywords != query { &keywords } else { query };
-    let intent_vec = uniko_extract::embedding::embed_query(kb, embed_text)
-        .await
-        .unwrap_or_default();
-
+/// unavailable for *every* requested variant.
+pub async fn build_intent(
+    kb: &KnowledgeBase,
+    query: &str,
+    enabled_variants: &[String],
+) -> Result<IntentProfile, UnikoError> {
+    let analysis = analyze_query(kb, query).await;
+    let entity_refs = analysis.entity_refs.clone();
     let facet_count = entity_refs.len().max(1);
     let expected_answer_type = predict_answer_type(query);
 
@@ -56,13 +98,155 @@ pub async fn build_intent(kb: &KnowledgeBase, query: &str) -> Result<IntentProfi
         tracing::info!(expected_answer_type = %t, query = %query, "intent: answer type predicted");
     }
 
+    // Build the variant text list. Order matters for back-compat:
+    // `intent_vec()` and `keywords()` return the first variant.
+    //
+    // Empty `enabled_variants` is the *legacy single-variant* default
+    // (just the POS-stripped `keywords` variant). The full 4-variant
+    // multi-query reformulation must be opted in explicitly, e.g.
+    // `--variants keywords,original,declarative,type_anchored`. This
+    // is because measured A/B on full LoCoMo (757 questions, 4 of 10
+    // conversations, MiniLM cross-encoder reranker on GPU, 2026-05-04)
+    // showed multi-variant regressing overall evidence% by 2.1 points
+    // and tripling per-query latency vs single-variant. The variant
+    // infrastructure stays in place for future experimentation; the
+    // *default* is the safe choice.
+    let want = |name: &str| {
+        if enabled_variants.is_empty() {
+            name == VARIANT_KEYWORDS
+        } else {
+            enabled_variants.iter().any(|s| s == name)
+        }
+    };
+
+    let mut variant_texts: Vec<(&'static str, String)> = Vec::new();
+
+    if want(VARIANT_KEYWORDS) && !analysis.keywords.is_empty() {
+        variant_texts.push((VARIANT_KEYWORDS, analysis.keywords.clone()));
+    }
+    if want(VARIANT_ORIGINAL) {
+        variant_texts.push((VARIANT_ORIGINAL, query.to_string()));
+    }
+    if want(VARIANT_DECLARATIVE)
+        && let Some(text) = build_declarative_text(&analysis)
+    {
+        variant_texts.push((VARIANT_DECLARATIVE, text));
+    }
+    if want(VARIANT_TYPE_ANCHORED)
+        && let Some(text) = build_type_anchored_text(&entity_refs, expected_answer_type)
+    {
+        variant_texts.push((VARIANT_TYPE_ANCHORED, text));
+    }
+
+    // Always make sure we have at least one variant; the embedded text
+    // is the safety net.
+    if variant_texts.is_empty() {
+        variant_texts.push((VARIANT_ORIGINAL, query.to_string()));
+    }
+
+    // Dedup on text — variants that happen to produce identical strings
+    // (e.g. POS-stripping a 3-word question) waste an embedder call.
+    variant_texts.dedup_by(|a, b| a.1 == b.1);
+
+    // Embed every variant concurrently.
+    let embed_futures = variant_texts.iter().map(|(_, text)| {
+        let text = text.clone();
+        async move {
+            uniko_extract::embedding::embed_query(kb, &text)
+                .await
+                .unwrap_or_default()
+        }
+    });
+    let vectors: Vec<Vec<f32>> = join_all(embed_futures).await;
+
+    let variants: Vec<QueryVariant> = variant_texts
+        .into_iter()
+        .zip(vectors)
+        .map(|((label, text), vector)| {
+            tracing::info!(
+                variant = label,
+                text = %text,
+                vec_len = vector.len(),
+                "intent: variant built",
+            );
+            QueryVariant { label, text, vector }
+        })
+        .collect();
+
     Ok(IntentProfile {
-        intent_vec,
-        keywords,
+        variants,
         entity_refs,
         facet_count,
         expected_answer_type,
     })
+}
+
+/// Bundle of derived facts about a question, used by variant builders.
+#[derive(Debug, Clone, Default)]
+struct QueryAnalysis {
+    /// POS-filtered keywords (NOUN/VERB/PROPN/ADJ/NUM joined by spaces).
+    /// Empty when the NLP pipeline is unavailable.
+    keywords: String,
+    /// Normalised entity names from NER.
+    entity_refs: Vec<String>,
+    /// SVO triples extracted from the question's DEP tree (only when
+    /// the ONNX cascade ran). Empty otherwise.
+    #[cfg(feature = "onnx")]
+    svo_triples: Vec<uniko_extract::nlp::decode::SvoTriple>,
+}
+
+/// Build a declarative-form variant from the question's SVO structure.
+///
+/// For *"What pet does Caroline have?"* the DEP parse gives
+/// `Caroline -[nsubj]-> have` and `pet -[obj]-> have`. The active form
+/// is *"Caroline have pet"* — strips the WH-leader, keeps the slot
+/// filler. Embeds closer to statement-form content in the index than
+/// the question form does.
+fn build_declarative_text(analysis: &QueryAnalysis) -> Option<String> {
+    #[cfg(feature = "onnx")]
+    {
+        let triple = analysis.svo_triples.first()?;
+        let mut parts: Vec<&str> = Vec::with_capacity(3);
+        if !triple.subject.is_empty() {
+            parts.push(triple.subject.as_str());
+        }
+        parts.push(triple.verb.as_str());
+        if !triple.object.is_empty() {
+            parts.push(triple.object.as_str());
+        }
+        let joined = parts.join(" ");
+        if joined.split_whitespace().count() >= 2 {
+            Some(joined)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(feature = "onnx"))]
+    {
+        let _ = analysis;
+        None
+    }
+}
+
+/// Build a type-anchored variant by joining entity names with a token
+/// hinting at the expected answer's entity type.
+///
+/// For *"What pet does Caroline have?"* with `entity_refs=["Caroline"]`
+/// and `expected_answer_type=Some("other")`, returns *"Caroline other"*.
+/// The type word doubles as both a BM25 keyword bias and a vector-space
+/// nudge toward observations mentioning that category.
+fn build_type_anchored_text(
+    entity_refs: &[String],
+    expected_answer_type: Option<&'static str>,
+) -> Option<String> {
+    let t = expected_answer_type?;
+    if entity_refs.is_empty() {
+        return None;
+    }
+    let mut s = entity_refs.join(" ");
+    s.push(' ');
+    s.push_str(t);
+    Some(s)
 }
 
 /// Predict the expected entity_type of a question's answer from its
@@ -157,13 +341,80 @@ mod tests {
             None,
         );
     }
+
+    #[test]
+    fn variant_type_anchored_with_known_type() {
+        let entity_refs = vec!["Caroline".to_string()];
+        let got = build_type_anchored_text(&entity_refs, Some("other"));
+        assert_eq!(got.as_deref(), Some("Caroline other"));
+
+        let multi = vec!["Caroline".to_string(), "Sweden".to_string()];
+        let got = build_type_anchored_text(&multi, Some("date"));
+        assert_eq!(got.as_deref(), Some("Caroline Sweden date"));
+    }
+
+    #[test]
+    fn variant_type_anchored_skipped_when_inputs_missing() {
+        // No expected type → no variant.
+        let entity_refs = vec!["Caroline".to_string()];
+        assert!(build_type_anchored_text(&entity_refs, None).is_none());
+        // No entities → no variant.
+        let empty: Vec<String> = vec![];
+        assert!(build_type_anchored_text(&empty, Some("person")).is_none());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn variant_declarative_from_svo_triple() {
+        use uniko_extract::nlp::decode::SvoTriple;
+        let analysis = QueryAnalysis {
+            keywords: "pet Caroline have".to_string(),
+            entity_refs: vec!["Caroline".to_string()],
+            svo_triples: vec![SvoTriple {
+                subject: "Caroline".to_string(),
+                verb: "have".to_string(),
+                object: "pet".to_string(),
+            }],
+        };
+        let got = build_declarative_text(&analysis);
+        assert_eq!(got.as_deref(), Some("Caroline have pet"));
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn variant_declarative_skipped_when_no_svo() {
+        let analysis = QueryAnalysis {
+            keywords: "pet".to_string(),
+            entity_refs: vec![],
+            svo_triples: vec![],
+        };
+        assert!(build_declarative_text(&analysis).is_none());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn variant_declarative_skipped_when_too_short() {
+        // Only a verb, no subject and no object → fewer than 2 tokens.
+        use uniko_extract::nlp::decode::SvoTriple;
+        let analysis = QueryAnalysis {
+            keywords: String::new(),
+            entity_refs: vec![],
+            svo_triples: vec![SvoTriple {
+                subject: String::new(),
+                verb: "go".to_string(),
+                object: String::new(),
+            }],
+        };
+        assert!(build_declarative_text(&analysis).is_none());
+    }
 }
 
-/// Analyze query with NLP pipeline to extract entities and content keywords.
+/// Analyze query with NLP pipeline to extract entities, content
+/// keywords, and SVO triples that downstream variant builders consume.
 ///
-/// Returns `(entity_refs, keywords)`. Keywords are content words (NOUN,
-/// VERB, PROPN, ADJ) joined by spaces — suitable for BM25 fulltext search.
-async fn analyze_query(kb: &KnowledgeBase, query: &str) -> (Vec<String>, String) {
+/// Falls back to rule-based NER + raw query text when the ONNX cascade
+/// is unavailable.
+async fn analyze_query(kb: &KnowledgeBase, query: &str) -> QueryAnalysis {
     #[cfg(feature = "onnx")]
     {
         let pipeline_opt = uniko_extract::nlp::NlpPipeline::try_new(kb).await;
@@ -205,15 +456,34 @@ async fn analyze_query(kb: &KnowledgeBase, query: &str) -> (Vec<String>, String)
                 })
                 .collect();
 
-            if !keywords.is_empty() {
-                let kw_str = keywords.join(" ");
-                tracing::info!(
-                    entities = ?entity_refs,
-                    keywords = %kw_str,
-                    "NLP query analysis",
-                );
-                return (entity_refs, kw_str);
-            }
+            // Walk the DEP tree to pull SVO triples for the declarative
+            // variant. Empty for short questions with no parsable verb
+            // — the declarative variant builder will then skip itself.
+            let svo_triples = uniko_extract::nlp::decode::extract_svo_triples(
+                &result.words,
+                &result.pos_indices,
+                &result.dep_arcs,
+                &labels.pos_labels,
+            );
+
+            let kw_str = if keywords.is_empty() {
+                String::new()
+            } else {
+                keywords.join(" ")
+            };
+
+            tracing::info!(
+                entities = ?entity_refs,
+                keywords = %kw_str,
+                svo_count = svo_triples.len(),
+                "NLP query analysis",
+            );
+
+            return QueryAnalysis {
+                keywords: kw_str,
+                entity_refs,
+                svo_triples,
+            };
         }
     }
 
@@ -223,7 +493,12 @@ async fn analyze_query(kb: &KnowledgeBase, query: &str) -> (Vec<String>, String)
         .into_iter()
         .filter_map(|e| normalize_entity_text(&e.canonical_name))
         .collect();
-    (entity_refs, query.to_string())
+    QueryAnalysis {
+        keywords: query.to_string(),
+        entity_refs,
+        #[cfg(feature = "onnx")]
+        svo_triples: Vec::new(),
+    }
 }
 
 /// Normalize an entity span captured from a question for matching

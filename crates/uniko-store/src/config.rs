@@ -154,6 +154,10 @@ fn default_reranker_style() -> String {
     "cross-encoder".to_string()
 }
 
+fn default_rrf_k() -> f64 {
+    60.0
+}
+
 impl RerankerConfig {
     /// BAAI/bge-reranker-base — 278M params, accurate, CPU-feasible.
     pub fn bge_base() -> Self {
@@ -388,6 +392,23 @@ pub struct UnikoConfig {
     pub recall_vector_weight: f64,
     /// BM25 fulltext weight in hybrid fusion \[0.0–1.0\].
     pub recall_bm25_weight: f64,
+    /// Variant labels for multi-query reformulation. Empty = use the
+    /// default 4-variant set (`keywords`, `original`, `declarative`,
+    /// `type_anchored`). Pass `vec!["keywords".into()]` to reproduce
+    /// the legacy single-query behaviour. See
+    /// `uniko_memory::recall::intent::QueryVariant` for the catalogue.
+    #[serde(default)]
+    pub query_variants: Vec<String>,
+    /// `k` constant for reciprocal rank fusion across query variants.
+    /// Higher values flatten the weight given to top ranks.
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: f64,
+    /// LIMIT applied to each per-variant Cypher query. `None` means
+    /// "use `recall_limit`" (the recall layer falls back to it). Set
+    /// to a smaller value when running 4 variants to keep the candidate
+    /// union manageable.
+    #[serde(default)]
+    pub recall_per_variant_limit: Option<usize>,
 
     // Memory decay
     /// Half-life in days for importance decay: `importance * exp(-ln(2) / half_life * age_days)`.
@@ -434,6 +455,9 @@ impl Default for UnikoConfig {
             recall_min_score: 0.001,
             recall_vector_weight: 0.5,
             recall_bm25_weight: 0.5,
+            query_variants: Vec::new(),
+            rrf_k: default_rrf_k(),
+            recall_per_variant_limit: None,
             half_life_days: 30.0,
             prune_below: 0.05,
             phase1_coverage_threshold: 0.75,

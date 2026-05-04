@@ -125,6 +125,13 @@ struct Cli {
     /// `>= recall_limit` when reranker is enabled.
     #[arg(long, default_value = "50")]
     reranker_top_n: usize,
+
+    /// Comma-separated list of query-reformulation variants to enable.
+    /// Recognised: `keywords`, `original`, `declarative`, `type_anchored`.
+    /// Empty / unset uses the default 4-variant configuration. Pass
+    /// `keywords` alone for legacy single-query behaviour.
+    #[arg(long, default_value = "")]
+    variants: String,
 }
 
 #[tokio::main]
@@ -220,6 +227,14 @@ async fn main() -> Result<()> {
         config.reranker.enabled = true;
         config.reranker.model_id = cli.reranker_model.clone();
         config.reranker.top_n = cli.reranker_top_n;
+    }
+    if !cli.variants.trim().is_empty() {
+        config.query_variants = cli
+            .variants
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
 
     // Build LLM catalog.

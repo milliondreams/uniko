@@ -14,6 +14,7 @@ pub use intent::{IntentProfile, build_intent};
 
 use std::collections::HashMap;
 
+use futures::future::join_all;
 use serde::Serialize;
 
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
@@ -120,6 +121,20 @@ pub struct RecallConfig {
     /// Cap on how many top items are checked for the boost (one Cypher
     /// lookup per item — avoid scaling badly when limit is large).
     pub answer_type_top_n: usize,
+    /// Variant labels to enable for multi-query reformulation. Empty
+    /// vec means "all default variants" (`keywords`, `original`,
+    /// `declarative`, `type_anchored`). To reproduce legacy
+    /// single-query behaviour, pass `vec!["keywords".into()]`.
+    pub query_variants: Vec<String>,
+    /// `k` constant for reciprocal rank fusion across variants. Higher
+    /// values flatten the weight given to top ranks (k=60 is the
+    /// canonical default).
+    pub rrf_k: f64,
+    /// LIMIT applied to each per-variant Cypher query. Larger values
+    /// keep more candidates per variant in the fusion pool at the
+    /// cost of latency. Defaults to `limit` when constructed via
+    /// `from_uniko_config`.
+    pub per_variant_limit: usize,
 }
 
 impl Default for RecallConfig {
@@ -142,6 +157,9 @@ impl Default for RecallConfig {
             // 1.05 if used as a tiebreaker, or leave at 1.0.
             answer_type_boost: 1.0,
             answer_type_top_n: 50,
+            query_variants: Vec::new(),
+            rrf_k: 60.0,
+            per_variant_limit: 15,
         }
     }
 }
@@ -167,6 +185,9 @@ impl RecallConfig {
             // 1.05 if used as a tiebreaker, or leave at 1.0.
             answer_type_boost: 1.0,
             answer_type_top_n: 50,
+            query_variants: cfg.query_variants.clone(),
+            rrf_k: cfg.rrf_k,
+            per_variant_limit: cfg.recall_per_variant_limit.unwrap_or(cfg.recall_limit),
         }
     }
 }
@@ -197,242 +218,47 @@ pub async fn recall(
         return Ok(empty_bundle());
     }
 
-    let intent = build_intent(kb, query).await?;
+    let intent = build_intent(kb, query, &config.query_variants).await?;
     tracing::debug!(
-        intent_vec_len = intent.intent_vec.len(),
+        variant_count = intent.variants.len(),
         entity_refs = ?intent.entity_refs,
         "recall intent built",
     );
 
-    let session = kb.db().session();
-    let mut scored: HashMap<NodeId, (String, String, f64)> = HashMap::new(); // (label, content, combined_score)
-
-    // ── Hybrid similar_to: vector + fulltext per node type ─────
-    // For node types with both embedding and fulltext indexes,
-    // combine both scores so items matching on both signals rank highest.
-
-    let has_vec = !intent.intent_vec.is_empty();
-
-    // Retrieval substrate (per-question, hybrid vector + BM25):
-    // - Session Chunks: full-context dialogue snippets — best for
-    //   questions whose answer needs surrounding conversation.
-    // - Observation Chunks: per-session aggregations of extracted
-    //   facts (one chunk lists all observations from that session).
-    // - Observation nodes: individual extracted facts in claim form
-    //   ("Caroline tough breakup", "Melanie play clarinet"). These
-    //   are usually the closest match to a question's answer because
-    //   they're already in claim-form, not embedded in dialogue.
-    //
-    // (label, embed_field, fts_field, content_field, where_clause)
-    let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str, &str)] = &[
-        (
-            "Chunk",
-            Some("embedding"),
-            Some("text"),
-            "text",
-            "m.chunk_type = 'session'",
-        ),
-        (
-            "Chunk",
-            Some("embedding"),
-            Some("text"),
-            "text",
-            "m.chunk_type = 'observation'",
-        ),
-        // Observations are intentionally NOT in the global hybrid path.
-        // They flood the bundle when ungated (short claim-form text
-        // scores higher than long dialogue chunks). Observations are
-        // surfaced via entity-scoped paths below, where the entity
-        // anchor keeps them topical.
-    ];
-
-    for &(label, embed_field, fts_field, content_field, where_clause) in hybrid_targets {
-        // Build the multi-source similar_to with proper RRF fusion.
-        let (sources, queries, fusion, params_needed) =
-            match (embed_field.filter(|_| has_vec), fts_field) {
-                (Some(ef), Some(ff)) => (
-                    format!("[m.{ef}, m.{ff}]"),
-                    "[$qvec, $qtxt]".to_string(),
-                    format!(
-                        ", {{method: 'weighted', weights: [{}, {}]}}",
-                        config.vector_weight, config.bm25_weight
-                    ),
-                    (true, true),
-                ),
-                (Some(ef), None) => (
-                    format!("m.{ef}"),
-                    "$qvec".to_string(),
-                    String::new(),
-                    (true, false),
-                ),
-                (None, Some(ff)) => (
-                    format!("m.{ff}"),
-                    "$qtxt".to_string(),
-                    String::new(),
-                    (false, true),
-                ),
-                (None, None) => continue,
-            };
-
-        let where_part = if where_clause.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {where_clause}")
-        };
-
-        let cypher = format!(
-            "MATCH (m:{label}){where_part} \
-             RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                    m.{content_field} AS content, \
-                    similar_to({sources}, {queries}{fusion}) AS score \
-             ORDER BY score DESC LIMIT $lim"
-        );
-
-        let mut builder = session.query_with(&cypher);
-        builder = builder.param("lim", config.limit as i64);
-        if params_needed.0 {
-            builder = builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
-        }
-        if params_needed.1 {
-            builder = builder.param("qtxt", intent.keywords.as_str());
-        }
-
-        match builder.fetch_all().await {
-            Ok(result) => {
-                for row in result.rows() {
-                    let nid: i64 = row.get("nid").unwrap_or(0);
-                    let lbl: String = row.get("lbl").unwrap_or_default();
-                    let content: String = row.get("content").unwrap_or_default();
-                    let score: f64 = row.get("score").unwrap_or(0.0);
-                    scored
-                        .entry(nid)
-                        .and_modify(|(_, _, s)| *s = s.max(score))
-                        .or_insert((lbl, content, score));
-                }
+    // Per-variant fan-out: each query variant runs the full hybrid +
+    // entity-scoped pipeline; the resulting per-variant ranked lists
+    // are RRF-fused to produce the final candidate set. Variants run
+    // concurrently — each future is independent I/O against lance.
+    let variant_futures: Vec<_> = intent
+        .variants
+        .iter()
+        .map(|variant| {
+            let entity_refs = intent.entity_refs.clone();
+            async move {
+                let ranked = run_recall_for_variant(
+                    kb,
+                    variant.vector.as_slice(),
+                    variant.text.as_str(),
+                    &entity_refs,
+                    config,
+                )
+                .await;
+                (variant.label, ranked)
             }
-            Err(e) => tracing::debug!(label, error = %e, "hybrid similar_to failed"),
-        }
+        })
+        .collect();
+    let variant_results: Vec<(&'static str, Vec<RankedHit>)> = join_all(variant_futures).await;
+
+    for (label, hits) in &variant_results {
+        tracing::info!(variant = label, hits = hits.len(), "variant complete");
     }
 
-    // ── Entity-scoped search ─────────────────────────────────────
-    // For each entity in the query, find Messages, session Chunks,
-    // and observation Chunks connected to that entity, then rank
-    // by similar_to within the scoped set.
-
-    // (label, content_field, embed_field, entity_pattern)
-    // Entity-scoped anchors. Each is a different graph hop into the
-    // entity-relevant subset; `similar_to` then ranks within it.
-    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
-        // Loose: chunks in any session the participant was in. Wide net
-        // when the participant is a frequent participant (e.g. Caroline
-        // in conv-26 — every session).
-        (
-            "Chunk",
-            "text",
-            "embedding",
-            "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
-        ),
-        // Tight: observation chunks directly ABOUT the named participant.
-        // Anchored via Observation→ABOUT→Participant edges propagated to
-        // the chunk by `chunk_session_observations`. This is the path
-        // multi-hop questions about a person should hit.
-        (
-            "Chunk",
-            "text",
-            "embedding",
-            "(m)-[:ABOUT]->(:Participant {name: $ename})",
-        ),
-        // Tight: observation chunks directly ABOUT a named entity (e.g.
-        // a place, organization, work-of-art).
-        (
-            "Chunk",
-            "text",
-            "embedding",
-            "(m)-[:ABOUT]->(:Entity {name: $ename})",
-        ),
-        // Observation nodes anchored on a named participant. Highest
-        // precision for entity-attribute questions because each
-        // observation is a single claim ("Melanie play clarinet").
-        (
-            "Observation",
-            "content",
-            "embedding",
-            "(m)-[:ABOUT]->(:Participant {name: $ename})",
-        ),
-        // Observation nodes anchored on a named entity (place, org…).
-        (
-            "Observation",
-            "content",
-            "embedding",
-            "(m)-[:ABOUT]->(:Entity {name: $ename})",
-        ),
-        // Observations whose extracted subject literally matches the
-        // entity name — catches cases where the speaker context
-        // resolved the subject before we wrote the ABOUT edge, but
-        // the same speaker name appears as the structured subject.
-        (
-            "Observation",
-            "content",
-            "embedding",
-            "m.subject = $ename",
-        ),
-    ];
-
-    for entity_name in &intent.entity_refs {
-        for &(label, content_field, embed_field, pattern) in entity_scoped_targets {
-            let cypher = if has_vec {
-                format!(
-                    "MATCH (m:{label}) \
-                     WHERE {pattern} \
-                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                            m.{content_field} AS content, \
-                            similar_to([m.{embed_field}, m.{content_field}], [$qvec, $qtxt]) AS score \
-                     ORDER BY score DESC LIMIT $lim"
-                )
-            } else {
-                format!(
-                    "MATCH (m:{label}) \
-                     WHERE {pattern} \
-                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                            m.{content_field} AS content, \
-                            similar_to(m.{content_field}, $qtxt) AS score \
-                     ORDER BY score DESC LIMIT $lim"
-                )
-            };
-
-            let mut builder = session.query_with(&cypher);
-            builder = builder
-                .param("ename", entity_name.as_str())
-                .param("qtxt", intent.keywords.as_str())
-                .param("lim", config.limit as i64);
-            if has_vec {
-                builder = builder.param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()));
-            }
-
-            match builder.fetch_all().await {
-                Ok(result) => {
-                    for row in result.rows() {
-                        let nid: i64 = row.get("nid").unwrap_or(0);
-                        let lbl: String = row.get("lbl").unwrap_or_default();
-                        let content: String = row.get("content").unwrap_or_default();
-                        let score: f64 = row.get("score").unwrap_or(0.0);
-                        scored
-                            .entry(nid)
-                            .and_modify(|(_, _, s)| *s = s.max(score))
-                            .or_insert((lbl, content, score));
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!(
-                        entity = entity_name,
-                        label,
-                        error = %e,
-                        "entity-scoped search failed"
-                    )
-                }
-            }
-        }
-    }
+    // RRF fusion across variants. Pure function so it can be unit
+    // tested with synthetic ranked lists.
+    let scored = rrf_fuse(
+        variant_results.iter().map(|(_, hits)| hits.as_slice()),
+        config.rrf_k,
+    );
 
     tracing::debug!(candidates = scored.len(), "recall candidates");
 
@@ -606,11 +432,336 @@ async fn entity_type_match(
     }
 }
 
+/// One scored hit returned by [`run_recall_for_variant`]. The order
+/// of the returned `Vec<RankedHit>` is `score`-descending; downstream
+/// RRF fusion uses the *index* (= rank) rather than `raw_score`.
+#[derive(Debug, Clone)]
+struct RankedHit {
+    node_id: NodeId,
+    label: String,
+    content: String,
+    raw_score: f64,
+}
+
+/// Run the full hybrid + entity-scoped recall pipeline for a single
+/// query variant. Returns a deduped, score-descending list ready for
+/// RRF fusion against the other variants' lists.
+///
+/// Per-node deduplication uses `score.max()` *within* a single
+/// variant's queries (same semantics as the legacy single-query code).
+/// Cross-variant fusion is done by the caller via reciprocal rank.
+async fn run_recall_for_variant(
+    kb: &KnowledgeBase,
+    qvec: &[f32],
+    qtxt: &str,
+    entity_refs: &[String],
+    config: &RecallConfig,
+) -> Vec<RankedHit> {
+    let session = kb.db().session();
+    let mut scored: HashMap<NodeId, (String, String, f64)> = HashMap::new();
+    let has_vec = !qvec.is_empty();
+
+    // Hybrid (vector + BM25) over chunk types.
+    let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str, &str)] = &[
+        (
+            "Chunk",
+            Some("embedding"),
+            Some("text"),
+            "text",
+            "m.chunk_type = 'session'",
+        ),
+        (
+            "Chunk",
+            Some("embedding"),
+            Some("text"),
+            "text",
+            "m.chunk_type = 'observation'",
+        ),
+    ];
+
+    for &(label, embed_field, fts_field, content_field, where_clause) in hybrid_targets {
+        let (sources, queries, fusion, params_needed) =
+            match (embed_field.filter(|_| has_vec), fts_field) {
+                (Some(ef), Some(ff)) => (
+                    format!("[m.{ef}, m.{ff}]"),
+                    "[$qvec, $qtxt]".to_string(),
+                    format!(
+                        ", {{method: 'weighted', weights: [{}, {}]}}",
+                        config.vector_weight, config.bm25_weight
+                    ),
+                    (true, true),
+                ),
+                (Some(ef), None) => (
+                    format!("m.{ef}"),
+                    "$qvec".to_string(),
+                    String::new(),
+                    (true, false),
+                ),
+                (None, Some(ff)) => (
+                    format!("m.{ff}"),
+                    "$qtxt".to_string(),
+                    String::new(),
+                    (false, true),
+                ),
+                (None, None) => continue,
+            };
+
+        let where_part = if where_clause.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {where_clause}")
+        };
+
+        let cypher = format!(
+            "MATCH (m:{label}){where_part} \
+             RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                    m.{content_field} AS content, \
+                    similar_to({sources}, {queries}{fusion}) AS score \
+             ORDER BY score DESC LIMIT $lim"
+        );
+
+        let mut builder = session.query_with(&cypher);
+        builder = builder.param("lim", config.per_variant_limit as i64);
+        if params_needed.0 {
+            builder = builder.param("qvec", uni_db::Value::Vector(qvec.to_vec()));
+        }
+        if params_needed.1 {
+            builder = builder.param("qtxt", qtxt);
+        }
+
+        match builder.fetch_all().await {
+            Ok(result) => {
+                for row in result.rows() {
+                    let nid: i64 = row.get("nid").unwrap_or(0);
+                    let lbl: String = row.get("lbl").unwrap_or_default();
+                    let content: String = row.get("content").unwrap_or_default();
+                    let score: f64 = row.get("score").unwrap_or(0.0);
+                    scored
+                        .entry(nid)
+                        .and_modify(|(_, _, s)| *s = s.max(score))
+                        .or_insert((lbl, content, score));
+                }
+            }
+            Err(e) => tracing::debug!(label, error = %e, "hybrid similar_to failed"),
+        }
+    }
+
+    // Entity-scoped fan-out.
+    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
+        (
+            "Chunk",
+            "text",
+            "embedding",
+            "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
+        ),
+        (
+            "Chunk",
+            "text",
+            "embedding",
+            "(m)-[:ABOUT]->(:Participant {name: $ename})",
+        ),
+        (
+            "Chunk",
+            "text",
+            "embedding",
+            "(m)-[:ABOUT]->(:Entity {name: $ename})",
+        ),
+        (
+            "Observation",
+            "content",
+            "embedding",
+            "(m)-[:ABOUT]->(:Participant {name: $ename})",
+        ),
+        (
+            "Observation",
+            "content",
+            "embedding",
+            "(m)-[:ABOUT]->(:Entity {name: $ename})",
+        ),
+        (
+            "Observation",
+            "content",
+            "embedding",
+            "m.subject = $ename",
+        ),
+    ];
+
+    for entity_name in entity_refs {
+        for &(label, content_field, embed_field, pattern) in entity_scoped_targets {
+            let cypher = if has_vec {
+                format!(
+                    "MATCH (m:{label}) \
+                     WHERE {pattern} \
+                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                            m.{content_field} AS content, \
+                            similar_to([m.{embed_field}, m.{content_field}], [$qvec, $qtxt]) AS score \
+                     ORDER BY score DESC LIMIT $lim"
+                )
+            } else {
+                format!(
+                    "MATCH (m:{label}) \
+                     WHERE {pattern} \
+                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                            m.{content_field} AS content, \
+                            similar_to(m.{content_field}, $qtxt) AS score \
+                     ORDER BY score DESC LIMIT $lim"
+                )
+            };
+
+            let mut builder = session.query_with(&cypher);
+            builder = builder
+                .param("ename", entity_name.as_str())
+                .param("qtxt", qtxt)
+                .param("lim", config.per_variant_limit as i64);
+            if has_vec {
+                builder = builder.param("qvec", uni_db::Value::Vector(qvec.to_vec()));
+            }
+
+            match builder.fetch_all().await {
+                Ok(result) => {
+                    for row in result.rows() {
+                        let nid: i64 = row.get("nid").unwrap_or(0);
+                        let lbl: String = row.get("lbl").unwrap_or_default();
+                        let content: String = row.get("content").unwrap_or_default();
+                        let score: f64 = row.get("score").unwrap_or(0.0);
+                        scored
+                            .entry(nid)
+                            .and_modify(|(_, _, s)| *s = s.max(score))
+                            .or_insert((lbl, content, score));
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        entity = entity_name,
+                        label,
+                        error = %e,
+                        "entity-scoped search failed"
+                    )
+                }
+            }
+        }
+    }
+
+    let mut hits: Vec<RankedHit> = scored
+        .into_iter()
+        .filter(|(_, (_, content, _))| !content.is_empty())
+        .map(|(node_id, (label, content, raw_score))| RankedHit {
+            node_id,
+            label,
+            content,
+            raw_score,
+        })
+        .collect();
+    hits.sort_by(|a, b| {
+        b.raw_score
+            .partial_cmp(&a.raw_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    hits
+}
+
+/// Reciprocal-rank fusion across a set of per-variant ranked lists.
+///
+/// Each variant contributes `1 / (k + rank)` to a per-node accumulator.
+/// Nodes appearing across multiple variants accumulate score; no
+/// single variant dominates because the contribution is rank-based,
+/// not raw-score based. The first variant that mentions a node
+/// supplies the `(label, content)` returned to the caller.
+fn rrf_fuse<'a, I>(per_variant: I, k: f64) -> HashMap<NodeId, (String, String, f64)>
+where
+    I: IntoIterator<Item = &'a [RankedHit]>,
+{
+    let mut fused: HashMap<NodeId, (String, String, f64)> = HashMap::new();
+    for ranked in per_variant {
+        for (rank, hit) in ranked.iter().enumerate() {
+            let contribution = 1.0 / (k + rank as f64);
+            fused
+                .entry(hit.node_id)
+                .and_modify(|(_, _, s)| *s += contribution)
+                .or_insert((hit.label.clone(), hit.content.clone(), contribution));
+        }
+    }
+    fused
+}
+
 fn empty_bundle() -> ContextBundle {
     ContextBundle {
         items: Vec::new(),
         total_tokens: 0,
         phase1_only: false,
         coverage: 0.0,
+    }
+}
+
+#[cfg(test)]
+mod rrf_tests {
+    use super::*;
+
+    fn hit(node_id: i64, score: f64) -> RankedHit {
+        RankedHit {
+            node_id,
+            label: "Chunk".to_string(),
+            content: format!("doc {node_id}"),
+            raw_score: score,
+        }
+    }
+
+    fn fused_sorted(per_variant: Vec<Vec<RankedHit>>, k: f64) -> Vec<(NodeId, f64)> {
+        let slices: Vec<&[RankedHit]> = per_variant.iter().map(|v| v.as_slice()).collect();
+        let mut pairs: Vec<(NodeId, f64)> = rrf_fuse(slices.into_iter(), k)
+            .into_iter()
+            .map(|(nid, (_, _, s))| (nid, s))
+            .collect();
+        pairs.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        pairs
+    }
+
+    #[test]
+    fn rrf_one_variant_orders_by_input_rank() {
+        // Single variant — fused order should match the input's
+        // descending raw_score order (i.e. input rank).
+        let v0 = vec![hit(1, 0.9), hit(2, 0.5), hit(3, 0.1)];
+        let pairs = fused_sorted(vec![v0], 60.0);
+        let nids: Vec<i64> = pairs.iter().map(|(n, _)| *n).collect();
+        assert_eq!(nids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn rrf_fuses_three_variants() {
+        // Item 1 appears in variants 0 and 2 (rank 0 in both).
+        // Item 2 appears only in variant 1 (rank 0).
+        // Item 1 should outrank item 2 in fused order because it
+        // accumulates two contributions (1/60 + 1/60) vs one (1/60).
+        let v0 = vec![hit(1, 0.9), hit(3, 0.5)];
+        let v1 = vec![hit(2, 0.9), hit(4, 0.5)];
+        let v2 = vec![hit(1, 0.9), hit(5, 0.5)];
+        let pairs = fused_sorted(vec![v0, v1, v2], 60.0);
+        let nids: Vec<i64> = pairs.iter().map(|(n, _)| *n).collect();
+        assert_eq!(nids[0], 1, "item 1 hit by 2 variants must rank first");
+        // The remaining four items each got one rank-0 or rank-1
+        // contribution; their order between them doesn't matter for
+        // this assertion.
+    }
+
+    #[test]
+    fn rrf_robust_to_noisy_variant() {
+        // Two variants put gold (id=42) at ranks 0, 1.
+        // A third variant returns junk and gold is absent there.
+        // Gold must still win because its accumulated 1/60 + 1/61
+        // exceeds any junk item's 1/60 from one variant.
+        let v0 = vec![hit(42, 1.0), hit(7, 0.5)];
+        let v1 = vec![hit(8, 1.0), hit(42, 0.6)];
+        let v2 = vec![hit(99, 1.0), hit(98, 0.5)];
+        let pairs = fused_sorted(vec![v0, v1, v2], 60.0);
+        assert_eq!(pairs[0].0, 42, "gold should rank first across noisy variants");
+    }
+
+    #[test]
+    fn rrf_empty_input_returns_empty_map() {
+        let empty: Vec<Vec<RankedHit>> = vec![];
+        let pairs = fused_sorted(empty, 60.0);
+        assert!(pairs.is_empty());
     }
 }
