@@ -166,3 +166,62 @@ patterns:
             capture: identifier
             collect: noun_phrase
     template: "{subject}: {anchor} = {identifier}"
+
+# SRL-anchored patterns. Each runs against every SrlFrame on
+# NlpResult.srl_frames (one per recognised verb predicate). PropBank
+# role labels: ARG0=agent, ARG1=theme/object, ARG2..ARG4=role-specific
+# (recipient, beneficiary, source, destination), ARGM-TMP=time,
+# ARGM-LOC=location, ARGM-MNR=manner, ARGM-CAU=cause, etc.
+#
+# `{predicate}` is auto-injected from the frame; `{subject}` defaults
+# to the speaker so templates can always reference it.
+srl_patterns:
+  # Clean SVO from any verb frame with a recognised agent and theme.
+  # Emits the most-specific applicable template — e.g. with both
+  # ARGM-TMP and ARGM-LOC present, the *fully-modified* template wins.
+  # The renderer skips alternatives whose referenced captures are
+  # empty, so missing roles silently degrade to the next-best shape.
+  - name: srl_action
+    description: "ARG0 + V + ARG1 (+ optional ARGM-TMP / ARGM-LOC)"
+    captures:
+      - role: ARG0
+        as: agent
+        required: true
+      - role: ARG1
+        as: theme
+      - role: ARGM-TMP
+        as: time
+      - role: ARGM-LOC
+        as: location
+    template: "{agent} {predicate} {theme}"
+    template_alternatives:
+      - "{agent} {predicate} {theme} {time}"
+      - "{agent} {predicate} {theme} {location}"
+      - "{agent} {predicate} {theme} {time} {location}"
+
+  # Frames whose ARG1/theme is implicit (intransitive verb) but with a
+  # bound time — e.g. *"I went yesterday"*. Lower-precision than
+  # `srl_action` but useful for temporal-anchored events.
+  - name: srl_action_temporal_only
+    description: "ARG0 + V + ARGM-TMP, no ARG1"
+    captures:
+      - role: ARG0
+        as: agent
+        required: true
+      - role: ARGM-TMP
+        as: time
+        required: true
+    template: "{agent} {predicate} {time}"
+
+  # Symmetric to the temporal-only pattern: intransitive verb with a
+  # bound location.
+  - name: srl_action_locative_only
+    description: "ARG0 + V + ARGM-LOC, no ARG1"
+    captures:
+      - role: ARG0
+        as: agent
+        required: true
+      - role: ARGM-LOC
+        as: location
+        required: true
+    template: "{agent} {predicate} {location}"

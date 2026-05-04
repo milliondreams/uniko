@@ -60,6 +60,7 @@ fn assert_parity(
         &pos_indices,
         &dep_arcs,
         &pos_labels(),
+        &[],
         speaker,
         &mut ctx_new,
     );
@@ -181,6 +182,7 @@ fn run_new_matcher(
         &pos_indices,
         &dep_arcs,
         &pos_labels(),
+        &[],
         speaker,
         &mut ctx,
     )

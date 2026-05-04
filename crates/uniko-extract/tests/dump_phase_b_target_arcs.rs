@@ -98,6 +98,7 @@ mod onnx_dump {
                     &r.pos_indices,
                     &r.dep_arcs,
                     &labels.pos_labels,
+                    &r.srl_frames,
                     "Caroline",
                     &mut ctx,
                 );

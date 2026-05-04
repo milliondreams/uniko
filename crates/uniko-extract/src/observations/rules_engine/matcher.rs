@@ -9,33 +9,41 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::ingest::context::SentenceContext;
 use crate::nlp::decode::DepObservation;
-use crate::nlp::types::DepArc;
+use crate::nlp::types::{DepArc, SrlFrame};
 
 use super::resolver::{
     ResolvedSubject, collect_subtree, collect_with_relations, resolve_subject, strip_trailing_punct,
     update_sentence_context,
 };
-use super::rules::{ChildSpec, Pattern, PhraseCollector, Rules};
+use super::rules::{ChildSpec, Pattern, PhraseCollector, Rules, SrlPattern};
 use super::template::render;
 
 const SUBJECT_CAPTURE: &str = "subject";
 const ANCHOR_CAPTURE: &str = "anchor";
 
 /// Apply every pattern in `rules` to the sentence and return the
-/// resulting observations. Updates `ctx` with antecedents at the end
-/// (matching the legacy pipeline's behaviour).
+/// resulting observations. Runs both DEP-anchored patterns
+/// (`rules.patterns`) over the dependency tree and SRL-anchored
+/// patterns (`rules.srl_patterns`) over `srl_frames`. Output is
+/// deduplicated by rendered text, so DEP and SRL paths producing the
+/// same observation collapse to one entry. Updates `ctx` with
+/// antecedents at the end (matching the legacy pipeline's behaviour).
+#[allow(clippy::too_many_arguments)]
 pub fn extract_with_rules(
     rules: &Rules,
     words: &[String],
     pos_indices: &[usize],
     dep_arcs: &[DepArc],
     pos_labels: &[String],
+    srl_frames: &[SrlFrame],
     speaker: &str,
     ctx: &mut SentenceContext,
 ) -> Vec<DepObservation> {
     let mut out = Vec::new();
     let mut seen_text: BTreeSet<String> = BTreeSet::new();
 
+    // DEP-anchored patterns: walk every word, test every pattern whose
+    // anchor POS matches.
     for anchor_idx in 0..words.len() {
         let anchor_pos = pos_at(anchor_idx, pos_indices, pos_labels);
         for pattern in &rules.patterns {
@@ -51,6 +59,20 @@ pub fn extract_with_rules(
         }
     }
 
+    // SRL-anchored patterns: every SrlFrame from the cascade × every
+    // SrlPattern. Frames with no recognised arguments still get tested
+    // (a pattern with all-optional captures may still render via its
+    // {predicate} variable).
+    for frame in srl_frames {
+        for pattern in &rules.srl_patterns {
+            if let Some(obs) = try_match_srl(pattern, frame, speaker, &rules.filters)
+                && seen_text.insert(obs.content.clone())
+            {
+                out.push(obs);
+            }
+        }
+    }
+
     let np_relations = rules
         .phrase_collectors
         .get("noun_phrase")
@@ -59,6 +81,105 @@ pub fn extract_with_rules(
     update_sentence_context(ctx, words, pos_indices, dep_arcs, pos_labels, &np_relations);
 
     out
+}
+
+/// Match a single SRL frame against a single SRL pattern.
+///
+/// `{predicate}` is auto-populated from `frame.predicate_word`.
+/// `{subject}` defaults to `speaker` so templates can always include
+/// it without an explicit ARG0 capture.
+///
+/// Template selection: the renderer picks the longest of
+/// `[template, ...template_alternatives]` whose referenced variables
+/// are *all* non-empty. This lets one pattern emit the right
+/// observation shape based on which optional ARGM-* roles fired.
+fn try_match_srl(
+    pattern: &SrlPattern,
+    frame: &SrlFrame,
+    speaker: &str,
+    filters: &super::rules::Filters,
+) -> Option<DepObservation> {
+    let mut captures: HashMap<String, String> = HashMap::new();
+    captures.insert("predicate".into(), frame.predicate_word.clone());
+    captures.insert(SUBJECT_CAPTURE.into(), speaker.to_string());
+
+    for cap in &pattern.captures {
+        let arg_text = frame
+            .args
+            .iter()
+            .find(|a| a.role == cap.role)
+            .map(|a| a.text.clone());
+        match arg_text {
+            Some(text) => {
+                captures.insert(cap.as_name.clone(), text);
+            }
+            None => {
+                if cap.required {
+                    return None;
+                }
+            }
+        }
+    }
+
+    // Pick the most specific (longest non-empty) template. Walk
+    // templates in declared order so the base `template` is the
+    // fallback.
+    let mut best: Option<String> = None;
+    for tmpl in std::iter::once(&pattern.template).chain(pattern.template_alternatives.iter()) {
+        let rendered = render(tmpl, &captures);
+        if rendered.is_empty() {
+            continue;
+        }
+        // Reject this rendering if any referenced template variable
+        // resolved to empty (gives the alternatives a chance to
+        // produce a cleaner shape).
+        if template_has_unresolved_vars(tmpl, &captures) {
+            continue;
+        }
+        match &best {
+            Some(prev) if prev.split_whitespace().count() >= rendered.split_whitespace().count() => {}
+            _ => best = Some(rendered),
+        }
+    }
+    let content = best?;
+
+    if content.split_whitespace().count() < filters.min_content_words {
+        return None;
+    }
+
+    let subject = captures
+        .get(SUBJECT_CAPTURE)
+        .cloned()
+        .unwrap_or_else(|| speaker.to_string());
+    Some(DepObservation {
+        content,
+        subject,
+        confidence: 0.85,
+    })
+}
+
+/// Returns `true` if `tmpl` contains a `{var}` whose value in
+/// `captures` is missing or empty. Used by [`try_match_srl`] to skip
+/// alternatives whose slots aren't filled by the current frame.
+fn template_has_unresolved_vars(tmpl: &str, captures: &HashMap<String, String>) -> bool {
+    let mut iter = tmpl.chars().peekable();
+    while let Some(c) = iter.next() {
+        if c != '{' {
+            continue;
+        }
+        let mut name = String::new();
+        for next in iter.by_ref() {
+            if next == '}' {
+                break;
+            }
+            name.push(next);
+        }
+        let val = captures.get(&name).map(String::as_str).unwrap_or("");
+        if val.is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 #[allow(clippy::too_many_arguments)]

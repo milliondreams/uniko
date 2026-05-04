@@ -16,8 +16,16 @@ pub struct Rules {
     pub filters: Filters,
     #[serde(default)]
     pub phrase_collectors: std::collections::HashMap<String, PhraseCollector>,
+    /// DEP-tree anchored patterns. Each runs against every word whose
+    /// POS matches the anchor.
     #[serde(default)]
     pub patterns: Vec<Pattern>,
+    /// SRL-frame anchored patterns. Each runs against every
+    /// `SrlFrame` on `NlpResult.srl_frames` (one per recognised
+    /// predicate). Captures select arguments by PropBank role label
+    /// (`ARG0`, `ARG1`, `ARGM-TMP`, `ARGM-LOC`, …).
+    #[serde(default)]
+    pub srl_patterns: Vec<SrlPattern>,
 }
 
 /// Vocabulary that drives pronoun resolution. Lookup logic against
@@ -207,6 +215,53 @@ impl StringOrList {
             StringOrList::Many(xs) => xs.iter().any(|x| x == s),
         }
     }
+}
+
+/// SRL-frame anchored extraction pattern.
+///
+/// Unlike [`Pattern`] (which walks DEP arcs from a POS-typed anchor
+/// word), an `SrlPattern` matches against an entire `SrlFrame` from
+/// the cascade. Every frame is tested against every pattern; captures
+/// select arguments by role label, the predicate's surface text is
+/// always available as `{predicate}`, and the speaker is the default
+/// fallback for `{subject}`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SrlPattern {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Argument captures, each mapping a PropBank role to a template
+    /// variable name. Order matters only for human readability.
+    #[serde(default)]
+    pub captures: Vec<SrlCapture>,
+    /// Render template, e.g. `"{subject} {predicate} {object}"`.
+    /// `{predicate}` and `{subject}` are always available; other
+    /// variables come from `captures[*].as_name`.
+    pub template: String,
+    /// Optional secondary templates conditional on which captures
+    /// were filled. The matcher picks the longest template whose
+    /// referenced captures are all non-empty. Lets a single pattern
+    /// emit *"X gave Y"*, *"X gave Y on D"*, *"X gave Y at L"*, and
+    /// *"X gave Y on D at L"* without four separate patterns.
+    #[serde(default)]
+    pub template_alternatives: Vec<String>,
+}
+
+/// One argument capture in an [`SrlPattern`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct SrlCapture {
+    /// PropBank role to match (`"ARG0"`, `"ARGM-TMP"`, etc.). Special
+    /// value `"V"` captures the predicate's surface text — usually
+    /// redundant with the auto-injected `{predicate}` variable.
+    pub role: String,
+    /// Template variable name to expose this argument under.
+    #[serde(rename = "as")]
+    pub as_name: String,
+    /// When `true`, the pattern is dropped if this role is missing
+    /// from the frame. When `false`, missing → empty `{var}` and the
+    /// template's whitespace squeeze handles the gap.
+    #[serde(default)]
+    pub required: bool,
 }
 
 /// Bundled default rules — parsed once and cached.

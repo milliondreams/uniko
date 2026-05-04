@@ -141,6 +141,7 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                     &nlp_result.pos_indices,
                     &nlp_result.dep_arcs,
                     &labels.pos_labels,
+                    &nlp_result.srl_frames,
                     speaker,
                     &mut sent_ctx,
                 );
