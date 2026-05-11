@@ -19,6 +19,14 @@ pub(crate) fn register_labels<'a>(
         .property("observation_id", DataType::String)
         .property("content", DataType::String)
         .property_nullable("subject", DataType::String)
+        // Structured triple surfaced from the P3 matcher (DEP/SRL paths
+        // already produce `(subject, anchor=verb, object, modifiers)` —
+        // we now persist the verb and object so P4 Consolidation can
+        // group observations by `(subject, predicate)` without
+        // re-parsing `content`).  Nullable because rule fallbacks and
+        // CLS-only pathways cannot always produce a triple.
+        .property_nullable("predicate", DataType::String)
+        .property_nullable("object", DataType::String)
         .property_nullable("observed_at", DataType::DateTime)
         .property_nullable("confidence", DataType::Float64)
         .property_nullable(
@@ -29,6 +37,7 @@ pub(crate) fn register_labels<'a>(
         )
         .index("observation_id", IndexType::Scalar(ScalarType::Hash))
         .index("subject", IndexType::Scalar(ScalarType::Hash))
+        .index("predicate", IndexType::Scalar(ScalarType::Hash))
         .index("content", IndexType::FullText)
         .index(
             "embedding",

@@ -64,6 +64,11 @@ pub fn extract_observations_rule_based(
         observations.push(RawObservation {
             content,
             subject: subject.clone(),
+            // Rule-based fallback path doesn't extract structured
+            // triples — Fact derivation will skip these observations
+            // (its query filters on predicate IS NOT NULL).
+            predicate: None,
+            object: None,
             observed_at,
             confidence,
         });
@@ -237,6 +242,8 @@ pub fn extract_observations_from_dep_tree(
         observations.push(RawObservation {
             content,
             subject: entity_name,
+            predicate: None,
+            object: None,
             observed_at: timestamp,
             confidence: 0.85, // dep-tree extraction is more reliable than regex
         });

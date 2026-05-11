@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod id;
 pub mod locy;
+pub mod operations;
 pub mod schema;
 pub mod search;
 pub mod storage;

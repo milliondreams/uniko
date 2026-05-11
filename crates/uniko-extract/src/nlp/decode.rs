@@ -10,6 +10,23 @@ use ndarray::{ArrayView1, ArrayView2, ArrayView3};
 
 use super::types::{DepArc, NerEntityType, NerSpan, SentenceClass, SrlArg, SrlFrame};
 
+// ── Predicate normalization ────────────────────────────────────────
+
+/// Normalize a verb token (or short verb phrase) to snake_case.
+///
+/// Used by P3 to canonicalize the `predicate` field surfaced on
+/// Observation nodes so P4 Consolidation can group by `(subject,
+/// predicate)` without re-tokenizing.  Lowercases, strips trailing
+/// punctuation, replaces whitespace with `_`, and drops empty results.
+pub fn normalize_predicate(verb: impl AsRef<str>) -> String {
+    let trimmed: String = verb
+        .as_ref()
+        .trim()
+        .trim_end_matches(|c: char| c.is_ascii_punctuation())
+        .to_ascii_lowercase();
+    trimmed.split_whitespace().collect::<Vec<_>>().join("_")
+}
+
 // ── Argmax helpers ─────────────────────────────────────────────────
 
 /// Argmax along the last axis of a 2D logits array.
@@ -493,6 +510,15 @@ pub struct DepObservation {
     pub content: String,
     /// Subject of the observation (speaker name for first-person).
     pub subject: String,
+    /// Normalized verb predicate (snake_case, e.g., "got", "going_to").
+    ///
+    /// `None` when the matcher did not capture an explicit anchor verb
+    /// (e.g., copular fallbacks rendered without a clean verb token).
+    pub predicate: Option<String>,
+    /// Direct/indirect object phrase, joined and trimmed.
+    ///
+    /// `None` when the matcher captured no object children.
+    pub object: Option<String>,
     /// Confidence score.
     pub confidence: f64,
 }
@@ -610,9 +636,33 @@ pub fn extract_dep_observations(
             continue;
         }
 
+        // Build the structured object phrase (joined trimmed objects;
+        // modifiers are excluded — they're sentence colour, not the
+        // primary patient role).
+        let obj_phrase = if objects.is_empty() {
+            None
+        } else {
+            let joined: String = objects
+                .iter()
+                .map(|o| strip_trailing_punct(o))
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!joined.trim().is_empty()).then_some(joined)
+        };
+        let pred_norm = normalize_predicate(if is_copular_pred && has_cop {
+            // Copular fallback: surface the copula explicitly so
+            // downstream Fact derivation groups "is happy" with "is
+            // happy" rather than mixing copular + verb predicates.
+            format!("is_{pred_word}")
+        } else {
+            pred_word.clone()
+        });
+
         observations.push(DepObservation {
             content,
             subject: subj.clone(),
+            predicate: (!pred_norm.is_empty()).then_some(pred_norm),
+            object: obj_phrase,
             confidence: 0.85,
         });
     }

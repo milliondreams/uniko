@@ -151,9 +151,29 @@ fn try_match_srl(
         .get(SUBJECT_CAPTURE)
         .cloned()
         .unwrap_or_else(|| speaker.to_string());
+    let predicate_raw = captures
+        .get("predicate")
+        .cloned()
+        .unwrap_or_else(|| frame.predicate_word.clone());
+    let predicate = crate::nlp::decode::normalize_predicate(&predicate_raw);
+    // Object: prefer the explicit "object" capture; fall back to the
+    // ARG1 frame argument (the canonical patient role).
+    let object = captures
+        .get("object")
+        .cloned()
+        .or_else(|| {
+            frame
+                .args
+                .iter()
+                .find(|a| a.role == "ARG1")
+                .map(|a| a.text.clone())
+        })
+        .filter(|s| !s.trim().is_empty());
     Some(DepObservation {
         content,
         subject,
+        predicate: (!predicate.is_empty()).then_some(predicate),
+        object,
         confidence: 0.85,
     })
 }
@@ -294,9 +314,24 @@ fn try_match(
         .unwrap_or_else(|| speaker.to_string());
 
     let _ = anchor_pos; // kept for future per-POS routing; presently unused
+
+    // Surface the (predicate, object) triple alongside content so P4
+    // Consolidation can group observations by `(subject, predicate)`
+    // without re-parsing.  Predicate = the matched anchor verb token
+    // (already normalized); object = first non-empty among the
+    // canonical capture names.
+    let predicate = crate::nlp::decode::normalize_predicate(
+        captures.get(ANCHOR_CAPTURE).map(String::as_str).unwrap_or(""),
+    );
+    let object = ["object", "obj", "target", "complement"]
+        .iter()
+        .find_map(|key| captures.get(*key).cloned())
+        .filter(|s| !s.trim().is_empty());
     Some(DepObservation {
         content,
         subject,
+        predicate: (!predicate.is_empty()).then_some(predicate),
+        object,
         confidence: subject_confidence.unwrap_or(0.85),
     })
 }

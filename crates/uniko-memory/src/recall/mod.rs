@@ -38,10 +38,16 @@ pub enum RecallTier {
 
 impl RecallTier {
     /// Scoring weight for this tier.
+    ///
+    /// Matches the values published in the v6 spec (Part IX,
+    /// "Hybrid Scoring").  The previous local tuning (Semantic 0.9,
+    /// Procedural 0.8) was reverted when Phase 1 (Compact) shipped:
+    /// suppressing the top tiers had been a workaround for the
+    /// missing Fact retrieval surface.
     fn weight(self) -> f64 {
         match self {
-            Self::Semantic => 0.9,
-            Self::Procedural => 0.8,
+            Self::Semantic => 1.0,
+            Self::Procedural => 0.9,
             Self::Episodic => 0.7,
             Self::KnowledgeBase => 0.5,
             Self::Provenance => 0.4,
@@ -225,6 +231,46 @@ pub async fn recall(
         "recall intent built",
     );
 
+    // ── Phase 1: Compact ────────────────────────────────────────────
+    // Vector search over the consolidated Semantic / Procedural tier
+    // (Facts, Procedures, Topics).  When the corpus has been
+    // consolidated and the top hits cover the question's facets, this
+    // alone suffices and we skip the heavier Phase 3 broaden.
+    let phase1_items = phase1_compact(kb, &intent, config).await;
+    let phase1_coverage = compute_coverage(&phase1_items, intent.facet_count);
+    let phase1_sufficient =
+        phase1_coverage >= COVERAGE_GATE_PHASE1 && phase1_items.len() >= 3;
+
+    if phase1_sufficient {
+        tracing::info!(
+            phase1_items = phase1_items.len(),
+            coverage = phase1_coverage,
+            "phase 1 (compact) sufficient — skipping phase 3"
+        );
+        let mut items = phase1_items;
+        items.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        items.truncate(config.limit);
+        let mut total_tokens = 0usize;
+        let mut final_items = Vec::new();
+        for item in items {
+            total_tokens += TOKENS_PER_ITEM;
+            if total_tokens > config.token_budget {
+                break;
+            }
+            final_items.push(item);
+        }
+        return Ok(ContextBundle {
+            total_tokens,
+            items: final_items,
+            phase1_only: true,
+            coverage: phase1_coverage,
+        });
+    }
+
     // Per-variant fan-out: each query variant runs the full hybrid +
     // entity-scoped pipeline; the resulting per-variant ranked lists
     // are RRF-fused to produce the final candidate set. Variants run
@@ -361,6 +407,42 @@ pub async fn recall(
         );
     }
 
+    // Merge a small slice of Phase 1 hits into the Phase 3 bundle.
+    //
+    // When Phase 1 missed its 0.75 coverage gate, the Facts on offer
+    // are weaker signals — but a top few may still strengthen the
+    // bundle.  Capped because Facts are tier-weighted at Semantic=1.0
+    // (vs KnowledgeBase=0.5 for Chunks); without a cap, low-quality
+    // Facts drown out Chunks that contain the actual gold answer
+    // text.  Measured 87% → 1.5% LoCoMo evidence drop on conv-30
+    // when un-capped (probe_kb showed bundles became 100% Facts).
+    const PHASE1_FALLBACK_CAP: usize = 3;
+    let mut phase1_top = phase1_items;
+    phase1_top.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    phase1_top.truncate(PHASE1_FALLBACK_CAP);
+
+    let mut merged: HashMap<NodeId, RecallItem> = HashMap::new();
+    for item in items.drain(..).chain(phase1_top) {
+        merged
+            .entry(item.node_id)
+            .and_modify(|existing| {
+                if item.score > existing.score {
+                    *existing = item.clone();
+                }
+            })
+            .or_insert(item);
+    }
+    let mut items: Vec<RecallItem> = merged.into_values().collect();
+    items.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     items.truncate(config.limit);
 
     let mut total_tokens = 0;
@@ -373,26 +455,134 @@ pub async fn recall(
         final_items.push(item);
     }
 
-    // Coverage scoring (simplified for Phase 1).
-    let mean_score = if final_items.is_empty() {
-        0.0
-    } else {
-        final_items.iter().map(|i| i.score).sum::<f64>() / final_items.len() as f64
-    };
-    let distinct_tiers = final_items
-        .iter()
-        .map(|i| std::mem::discriminant(&i.tier))
-        .collect::<std::collections::HashSet<_>>()
-        .len();
-    let diversity = distinct_tiers as f64 / 5.0;
-    let coverage = 0.3 * mean_score + 0.3 * diversity; // facet_coverage = 0 at cold start.
+    let coverage = compute_coverage(&final_items, intent.facet_count);
 
     Ok(ContextBundle {
         total_tokens,
         items: final_items,
-        phase1_only: false, // Always false in Phase 1.
+        phase1_only: false,
         coverage,
     })
+}
+
+/// Phase 1 (Compact) coverage threshold from spec §IX.
+///
+/// When Phase 1 alone clears this, we skip the heavier Phase 3
+/// (Broaden) search entirely — a Mem0-style "extracted fact" hit is
+/// dense enough on its own.
+const COVERAGE_GATE_PHASE1: f64 = 0.75;
+
+/// Phase 1 (Compact): vector search over consolidated knowledge tiers.
+///
+/// Searches `Fact.embedding` (top-20), `Procedure.embedding` (top-10),
+/// and `Topic.embedding` (top-5) using the intent's primary embedding.
+/// Until P5/P6 ship the Procedure and Topic queries return zero rows;
+/// the implementation runs them anyway so activating those tiers is a
+/// pure data-side change with no recall code modifications required.
+///
+/// Returns an empty vec on any error — Phase 1 is opportunistic and
+/// must never break the cascade.
+async fn phase1_compact(
+    kb: &KnowledgeBase,
+    intent: &IntentProfile,
+    config: &RecallConfig,
+) -> Vec<RecallItem> {
+    let qvec = intent.intent_vec();
+    if qvec.is_empty() {
+        return Vec::new();
+    }
+
+    let session = kb.db().session();
+    let targets: &[(&str, &str, &str, i64)] = &[
+        // (label, embedding field, content field, top_k)
+        ("Fact", "embedding", "object", 20),
+        ("Procedure", "embedding", "name", 10),
+        ("Topic", "embedding", "name", 5),
+    ];
+
+    let mut out: HashMap<NodeId, RecallItem> = HashMap::new();
+    for &(label, embed_field, content_field, top_k) in targets {
+        let cypher = format!(
+            "MATCH (m:{label}) \
+             WHERE m.{embed_field} IS NOT NULL \
+             RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                    coalesce(m.{content_field}, '') AS content, \
+                    similar_to(m.{embed_field}, $qvec) AS score \
+             ORDER BY score DESC LIMIT $lim"
+        );
+        let result = session
+            .query_with(&cypher)
+            .param("qvec", uni_db::Value::Vector(qvec.to_vec()))
+            .param("lim", top_k)
+            .fetch_all()
+            .await;
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(label, error = %e, "phase1 compact query failed");
+                continue;
+            }
+        };
+        for row in result.rows() {
+            let Ok(nid) = row.get::<i64>("nid") else {
+                continue;
+            };
+            let lbl: String = row.get("lbl").unwrap_or_default();
+            let content: String = row.get("content").unwrap_or_default();
+            let score: f64 = row.get("score").unwrap_or(0.0);
+            if score < config.min_score {
+                continue;
+            }
+            let tier = RecallTier::from_label(&lbl);
+            let weighted = score * tier.weight();
+            // Same node could appear from multiple targets if labels
+            // overlap (they don't today, but be safe): keep the higher
+            // weighted score.
+            out.entry(nid)
+                .and_modify(|existing| {
+                    if weighted > existing.score {
+                        existing.score = weighted;
+                    }
+                })
+                .or_insert(RecallItem {
+                    node_id: nid,
+                    node_type: lbl,
+                    score: weighted,
+                    content,
+                    tier,
+                });
+        }
+    }
+    out.into_values().collect()
+}
+
+/// Spec §IX coverage formula:
+/// `0.4 · facet_coverage + 0.3 · mean_score + 0.3 · diversity`.
+///
+/// `facet_coverage` is the share of the intent's named entities that
+/// appear in any retrieved Semantic/Procedural item via the
+/// (subject|predicate|content) text — proxied here as
+/// `min(items_in_top_tiers, facet_count) / facet_count` to avoid a
+/// per-item Cypher round-trip.  `diversity` counts distinct tiers in
+/// the bundle (max 5).
+fn compute_coverage(items: &[RecallItem], facet_count: usize) -> f64 {
+    if items.is_empty() {
+        return 0.0;
+    }
+    let mean_score = items.iter().map(|i| i.score).sum::<f64>() / items.len() as f64;
+    let distinct_tiers = items
+        .iter()
+        .map(|i| std::mem::discriminant(&i.tier))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let diversity = (distinct_tiers as f64) / 5.0;
+    let semantic_or_procedural = items
+        .iter()
+        .filter(|i| matches!(i.tier, RecallTier::Semantic | RecallTier::Procedural))
+        .count();
+    let facets = facet_count.max(1) as f64;
+    let facet_coverage = (semantic_or_procedural as f64).min(facets) / facets;
+    0.4 * facet_coverage + 0.3 * mean_score + 0.3 * diversity
 }
 
 /// Does any Entity reachable from `node_id` (via the relationships

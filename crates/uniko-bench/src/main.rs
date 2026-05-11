@@ -321,6 +321,30 @@ async fn main() -> Result<()> {
             kb
         };
 
+        // P4 Consolidation: derive Facts from the just-ingested
+        // Observations so the recall cascade has a Phase 1 (Compact)
+        // surface to query.  Idempotent — `--reuse` paths re-enter
+        // here and only the freshly-added Observations get processed.
+        // Cap is generous because per-conversation observation counts
+        // can run into the thousands; spec default 500 would force
+        // multiple cycles.
+        let cycle_start = Instant::now();
+        match uniko_memory::consolidation::run_cycle(&kb, &sample.sample_id, Some(10_000)).await {
+            Ok(stats) => tracing::info!(
+                sample_id = %sample.sample_id,
+                processed = stats.observations_processed,
+                facts_created = stats.facts_created,
+                facts_reinforced = stats.facts_reinforced,
+                duration_ms = cycle_start.elapsed().as_millis(),
+                "consolidation cycle complete",
+            ),
+            Err(e) => tracing::warn!(
+                sample_id = %sample.sample_id,
+                error = %e,
+                "consolidation cycle failed (continuing without Facts)",
+            ),
+        }
+
         // Build evidence lookup for retrieval evaluation.
         let evidence_lookup = build_evidence_lookup(&sessions);
 

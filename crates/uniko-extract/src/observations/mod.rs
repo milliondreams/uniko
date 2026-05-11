@@ -150,6 +150,8 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                     all_obs.push(RawObservation {
                         content: obs.content,
                         subject: obs.subject,
+                        predicate: obs.predicate,
+                        object: obs.object,
                         observed_at: timestamp,
                         confidence: obs.confidence,
                     });
@@ -198,6 +200,12 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 props.insert("observation_id".into(), Value::String(obs_id));
                 props.insert("content".into(), Value::String(raw.content.clone()));
                 props.insert("subject".into(), Value::String(raw.subject.clone()));
+                if let Some(pred) = &raw.predicate {
+                    props.insert("predicate".into(), Value::String(pred.clone()));
+                }
+                if let Some(obj) = &raw.object {
+                    props.insert("object".into(), Value::String(obj.clone()));
+                }
                 props.insert(
                     "observed_at".into(),
                     Value::String(raw.observed_at.to_rfc3339()),

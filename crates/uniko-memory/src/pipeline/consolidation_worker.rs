@@ -25,13 +25,14 @@ pub(crate) struct ConsolidationWorker {
     )]
     semaphore: Arc<Semaphore>,
     cancel: CancellationToken,
-    #[expect(dead_code, reason = "used by consolidation cycle steps in Phase 2")]
     kb: Arc<KnowledgeBase>,
     health: Arc<Mutex<HealthTracker>>,
     /// Observation count that triggers consolidation.
     threshold: u32,
     /// Periodic consolidation interval.
     interval: Duration,
+    /// Maximum observations to derive Facts from per cycle.
+    batch_size: u32,
     /// Per-agent observation counters since last consolidation.
     agent_counters: HashMap<String, u32>,
 }
@@ -53,6 +54,7 @@ impl ConsolidationWorker {
             health,
             threshold: config.consolidation_threshold,
             interval: Duration::from_secs(config.consolidation_interval_secs),
+            batch_size: config.consolidation_batch_size,
             agent_counters: HashMap::new(),
         }
     }
@@ -126,26 +128,50 @@ impl ConsolidationWorker {
         tracing::info!("consolidation worker stopped");
     }
 
-    /// Execute a consolidation cycle for one agent.
+    /// Execute one consolidation cycle for `agent_id`.
     ///
-    /// In Phase 4 this is a placeholder — actual consolidation logic
-    /// (P4 fact derivation, contradiction detection, etc.) ships in
-    /// Phase 2.
+    /// Delegates to [`crate::consolidation::run_cycle`], which derives
+    /// Facts from unprocessed Observations and records a
+    /// `ConsolidationCycle` audit node.  Errors are logged but never
+    /// propagated — a failed cycle marks unhealthy and waits for the
+    /// next trigger.
     async fn run_consolidation_cycle(&self, agent_id: &str) {
         let start = std::time::Instant::now();
-        tracing::info!(agent = %agent_id, "consolidation cycle triggered (placeholder)");
+        tracing::info!(agent = %agent_id, "consolidation cycle starting");
 
         metrics::emit_consolidation_cycle(agent_id);
 
-        // Phase 4: no-op placeholder.  Phase 2 will wire in:
-        // - Locy stdlib rule execution
-        // - Fact derivation from observations
-        // - Contradiction detection and BTIC invalidation
-        // - Drift detection
-
-        let elapsed_ms = start.elapsed().as_millis() as f64;
-        metrics::emit_consolidation_duration(elapsed_ms);
-
-        self.health.lock().unwrap().record_success(elapsed_ms);
+        match crate::consolidation::run_cycle(
+            &self.kb,
+            agent_id,
+            Some(self.batch_size as i64),
+        )
+        .await
+        {
+            Ok(stats) => {
+                let elapsed_ms = start.elapsed().as_millis() as f64;
+                metrics::emit_consolidation_duration(elapsed_ms);
+                self.health.lock().unwrap().record_success(elapsed_ms);
+                tracing::info!(
+                    agent = %agent_id,
+                    processed = stats.observations_processed,
+                    created = stats.facts_created,
+                    reinforced = stats.facts_reinforced,
+                    duration_ms = elapsed_ms,
+                    "consolidation cycle complete",
+                );
+            }
+            Err(e) => {
+                let elapsed_ms = start.elapsed().as_millis() as f64;
+                metrics::emit_consolidation_duration(elapsed_ms);
+                self.health.lock().unwrap().record_failure();
+                tracing::error!(
+                    agent = %agent_id,
+                    error = %e,
+                    duration_ms = elapsed_ms,
+                    "consolidation cycle failed",
+                );
+            }
+        }
     }
 }
