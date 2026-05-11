@@ -1,5 +1,6 @@
 //! Recall and answer generation for benchmark questions.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -115,11 +116,16 @@ async fn generate_answer(
 ) -> Result<String> {
     use uni_db::xervo::{GenerationOptions, Message};
 
-    let context = uniko_bench::format_context(bundle);
+    let node_ids: Vec<i64> = bundle.items.iter().map(|i| i.node_id).collect();
+    let session_dates = fetch_session_dates(kb, &node_ids).await;
+    let context = uniko_bench::format_context(bundle, &session_dates);
 
     let system = "You are a helpful assistant answering questions about conversations. \
-        Use ONLY the provided context to answer. If the information is not available \
-        in the context, say 'The information is not mentioned in the conversation.' \
+        Answer using the provided context. You may paraphrase or make direct \
+        inferences from what the context says, including using the `session_date` \
+        field to resolve relative dates like 'yesterday' or 'next month'. \
+        If the answer is genuinely not present in the context, say \
+        'The information is not mentioned in the conversation.' \
         Answer concisely in one or two sentences.";
 
     let user = format!("Context:\n{context}\n\nQuestion: {question}\n\nAnswer:");
@@ -142,4 +148,41 @@ async fn generate_answer(
         .generate(llm_alias, &messages, options)
         .await?;
     Ok(result.text.trim().to_string())
+}
+
+/// Resolve the originating Session.started_at for each recalled node.
+///
+/// Walks the same edge set as `longmemeval::query::extract_session_ids`
+/// (Message →IN_SESSION, Session →HAS_CHUNK, Observation →OBSERVED_IN
+/// →Message →IN_SESSION) but projects `started_at` instead of
+/// `session_id`. Nodes with no Session ancestor (e.g. label types not
+/// anchored in a session) are simply absent from the returned map.
+///
+/// One query per item — matches the per-item pattern already used for
+/// session_id extraction. Cheap relative to the LLM call that follows.
+async fn fetch_session_dates(kb: &KnowledgeBase, node_ids: &[i64]) -> HashMap<i64, String> {
+    let mut out = HashMap::new();
+    let session = kb.db().session();
+    for &nid in node_ids {
+        let q = format!(
+            "MATCH (n) WHERE id(n) = {nid} \
+             OPTIONAL MATCH (n)-[:IN_SESSION]->(s1:Session) \
+             OPTIONAL MATCH (s2:Session)-[:HAS_CHUNK]->(n) \
+             OPTIONAL MATCH (n)-[:OBSERVED_IN]->(:Message)-[:IN_SESSION]->(s3:Session) \
+             RETURN coalesce(s1.started_at, s2.started_at, s3.started_at) AS ts \
+             LIMIT 1"
+        );
+        if let Ok(res) = session.query_with(&q).fetch_all().await {
+            for row in res.rows() {
+                if let Ok(ts) = row.get::<String>("ts") {
+                    // uni-db formats DateTime as "YYYY-MM-DDTHH:MM:SS±HHMM"; the
+                    // model only needs the date for relative-date resolution.
+                    let date = ts.split('T').next().unwrap_or(&ts).to_string();
+                    out.insert(nid, date);
+                    break;
+                }
+            }
+        }
+    }
+    out
 }

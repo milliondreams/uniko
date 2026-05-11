@@ -113,12 +113,17 @@ async fn generate_answer(
 ) -> Result<String> {
     use uni_db::xervo::{GenerationOptions, Message};
 
-    let context = crate::format_context(bundle);
+    // LongMemEval does not yet inject session timestamps; pass an empty
+    // map so the date suffix is omitted. Wire this up in a follow-up if
+    // the conv-30 lift confirms the approach.
+    let session_dates = std::collections::HashMap::new();
+    let context = crate::format_context(bundle, &session_dates);
 
     let system = "You are a helpful assistant answering questions about past conversations. \
-        Use ONLY the provided context to answer. If the information is not available \
-        in the context, say 'The information is not mentioned in the conversation.' \
-        Answer concisely in one or two sentences.";
+        Answer using the provided context. You may paraphrase or make direct \
+        inferences from what the context says. If the answer is genuinely not \
+        present in the context, say 'The information is not mentioned in the \
+        conversation.' Answer concisely in one or two sentences.";
 
     let user = format!("Context:\n{context}\n\nQuestion: {question}\n\nAnswer:");
 
