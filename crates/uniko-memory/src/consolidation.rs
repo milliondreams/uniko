@@ -27,6 +27,8 @@ use chrono::{DateTime, Utc};
 use uniko_extract::embedding::embed_document;
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
+use crate::llm_triples::{ObservationInput, refine_triples};
+
 /// Number of Facts created and reinforced in one cycle.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CycleStats {
@@ -44,7 +46,30 @@ pub struct CycleStats {
 /// agents.  Spillover is picked up on the next sweep.
 const DEFAULT_BATCH_SIZE: i64 = 500;
 
-/// Run one consolidation cycle for `agent_id`.
+/// Source of `(subject, predicate, object)` triples for grouping.
+///
+/// Selects whether to trust the cheap rule-based triples already on
+/// the Observation node or to call an LLM at consolidation time to
+/// refine them.  The LLM path costs one model call per Observation
+/// per cycle but yields markedly cleaner predicates and objects.
+#[derive(Debug, Clone, Default)]
+pub enum TripleSource {
+    /// Use the `predicate` and `object` columns P3 stored on the
+    /// Observation node (SRL/DEP matcher output).  Default — no LLM
+    /// dependency.
+    #[default]
+    SrlDep,
+    /// Refine each Observation's triple via the LLM at the given
+    /// alias before grouping.  Falls back to the SRL/DEP triple when
+    /// the LLM declines or the response fails to parse.
+    Llm {
+        /// Xervo alias of the model to use for triple extraction.
+        alias: String,
+    },
+}
+
+/// Run one consolidation cycle for `agent_id` with the default
+/// (SRL/DEP) triple source.
 ///
 /// Idempotent across runs: Observations already wired via `PROCESSED`
 /// from any prior `ConsolidationCycle` are excluded by the query.
@@ -61,10 +86,73 @@ pub async fn run_cycle(
     agent_id: &str,
     batch_size: Option<i64>,
 ) -> Result<CycleStats, UnikoError> {
+    run_cycle_with(kb, agent_id, batch_size, &TripleSource::SrlDep).await
+}
+
+/// Run one consolidation cycle, choosing the triple source explicitly.
+///
+/// See [`run_cycle`] for the default-source convenience wrapper.  Use
+/// this entry point when callers want LLM-refined triples (typically
+/// the bench harness behind a `--extract-triples-llm-alias` flag).
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Storage`] on any database failure.
+pub async fn run_cycle_with(
+    kb: &KnowledgeBase,
+    agent_id: &str,
+    batch_size: Option<i64>,
+    triple_source: &TripleSource,
+) -> Result<CycleStats, UnikoError> {
     let started_at = Utc::now();
     let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE).max(1);
 
-    let observations = fetch_unprocessed_observations(kb, batch_size).await?;
+    let mut observations = fetch_unprocessed_observations(kb, batch_size).await?;
+
+    // Optionally refine each Observation's triple via the LLM.  Done
+    // before grouping so the LLM's cleaner predicates collapse near-
+    // duplicates the SRL/DEP path leaves spread across distinct keys
+    // (e.g. "got" vs "got_a" vs "received" all collapsing to "received").
+    if let TripleSource::Llm { alias } = triple_source
+        && !observations.is_empty()
+    {
+        // Borrow observations immutably to build the input batch,
+        // then drop the borrow before mutating below.
+        let (inputs, requested) = {
+            let inputs: Vec<ObservationInput> = observations
+                .iter()
+                .map(|o| ObservationInput {
+                    node_id: o.node_id,
+                    content: o.content.clone(),
+                    speaker_hint: Some(o.subject.clone()),
+                })
+                .collect();
+            let len = inputs.len();
+            (inputs, len)
+        };
+        let refined = refine_triples(kb, alias, &inputs).await?;
+        drop(inputs);
+        let mut by_id: HashMap<NodeId, crate::llm_triples::LlmTriple> =
+            HashMap::with_capacity(refined.len());
+        for t in refined {
+            by_id.insert(t.node_id, t);
+        }
+        let mut overwritten = 0usize;
+        for obs in &mut observations {
+            if let Some(t) = by_id.remove(&obs.node_id) {
+                obs.subject = t.subject;
+                obs.predicate = t.predicate;
+                obs.object = t.object;
+                overwritten += 1;
+            }
+        }
+        tracing::info!(
+            requested,
+            refined = overwritten,
+            dropped = requested - overwritten,
+            "llm triple refinement complete",
+        );
+    }
     if observations.is_empty() {
         // Empty cycles are still recorded so the audit trail is
         // contiguous and metrics show a heartbeat.

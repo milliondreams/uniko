@@ -6,6 +6,7 @@
 //! Depends on `uniko-extract` only. This is the memory management brain.
 
 pub mod consolidation;
+pub mod llm_triples;
 pub mod pipeline;
 pub mod recall;
 pub mod rules;

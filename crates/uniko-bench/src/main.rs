@@ -105,6 +105,14 @@ struct Cli {
     #[arg(long)]
     reuse: bool,
 
+    /// When set, P4 Consolidation refines each Observation's
+    /// `(subject, predicate, object)` triple via the LLM at this
+    /// alias (typically the `--llm-alias` value) before grouping
+    /// into Facts.  Off by default — keeps the SRL/DEP triple P3
+    /// produces.  Adds one LLM call per Observation per cycle.
+    #[arg(long)]
+    extract_triples_llm_alias: Option<String>,
+
     /// Path to xervo model catalog JSON file.
     #[arg(long)]
     catalog: Option<PathBuf>,
@@ -329,7 +337,20 @@ async fn main() -> Result<()> {
         // can run into the thousands; spec default 500 would force
         // multiple cycles.
         let cycle_start = Instant::now();
-        match uniko_memory::consolidation::run_cycle(&kb, &sample.sample_id, Some(10_000)).await {
+        let triple_source = match cli.extract_triples_llm_alias.as_deref() {
+            Some(alias) => uniko_memory::consolidation::TripleSource::Llm {
+                alias: alias.to_string(),
+            },
+            None => uniko_memory::consolidation::TripleSource::SrlDep,
+        };
+        match uniko_memory::consolidation::run_cycle_with(
+            &kb,
+            &sample.sample_id,
+            Some(10_000),
+            &triple_source,
+        )
+        .await
+        {
             Ok(stats) => tracing::info!(
                 sample_id = %sample.sample_id,
                 processed = stats.observations_processed,
