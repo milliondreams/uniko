@@ -155,10 +155,13 @@ fn try_match_srl(
         .get("predicate")
         .cloned()
         .unwrap_or_else(|| frame.predicate_word.clone());
-    let predicate = crate::nlp::decode::normalize_predicate(&predicate_raw);
+    // Phase B: normalize → lemmatize so `got`/`getting`/`gets` all
+    // collapse to `get` for consolidation grouping.
+    let predicate_normalized = crate::nlp::decode::normalize_predicate(&predicate_raw);
+    let predicate = crate::observations::cleanup::lemmatize_predicate(&predicate_normalized);
     // Object: prefer the explicit "object" capture; fall back to the
     // ARG1 frame argument (the canonical patient role).
-    let object = captures
+    let object_raw = captures
         .get("object")
         .cloned()
         .or_else(|| {
@@ -169,11 +172,36 @@ fn try_match_srl(
                 .map(|a| a.text.clone())
         })
         .filter(|s| !s.trim().is_empty());
+    // Phase B: strip leading prepositions/articles + trailing punct,
+    // reject pure stop-words / pronouns / temporal deictics.
+    let object = object_raw
+        .as_deref()
+        .and_then(crate::observations::cleanup::clean_object_phrase);
+    // Phase B: reject light-verb-only triples (`(Jon | do | what)`).
+    if crate::observations::cleanup::is_light_verb_only(&predicate, object.as_deref()) {
+        return None;
+    }
+    // Phase A: surface ARGM-TMP captures as a structured slot.  Prefer
+    // the explicit `time` capture from the rule template, fall back to
+    // the ARGM-TMP role text on the frame directly so SRL patterns
+    // without a named template variable still propagate the value.
+    let temporal = captures
+        .get("time")
+        .cloned()
+        .or_else(|| {
+            frame
+                .args
+                .iter()
+                .find(|a| a.role == "ARGM-TMP")
+                .map(|a| a.text.clone())
+        })
+        .filter(|s| !s.trim().is_empty());
     Some(DepObservation {
         content,
         subject,
         predicate: (!predicate.is_empty()).then_some(predicate),
         object,
+        temporal,
         confidence: 0.85,
     })
 }
@@ -317,13 +345,25 @@ fn try_match(
 
     // Surface the (predicate, object) triple alongside content so P4
     // Consolidation can group observations by `(subject, predicate)`
-    // without re-parsing.  Predicate = the matched anchor verb token
-    // (already normalized); object = first non-empty among the
-    // canonical capture names.
-    let predicate = crate::nlp::decode::normalize_predicate(
+    // without re-parsing.  Phase B: normalize → lemmatize predicate;
+    // clean object phrase; reject light-verb-only triples.
+    let predicate_normalized = crate::nlp::decode::normalize_predicate(
         captures.get(ANCHOR_CAPTURE).map(String::as_str).unwrap_or(""),
     );
-    let object = ["object", "obj", "target", "complement"]
+    let predicate = crate::observations::cleanup::lemmatize_predicate(&predicate_normalized);
+    let object_raw = ["object", "obj", "target", "complement"]
+        .iter()
+        .find_map(|key| captures.get(*key).cloned())
+        .filter(|s| !s.trim().is_empty());
+    let object = object_raw
+        .as_deref()
+        .and_then(crate::observations::cleanup::clean_object_phrase);
+    if crate::observations::cleanup::is_light_verb_only(&predicate, object.as_deref()) {
+        return None;
+    }
+    // DEP-anchored patterns occasionally bind a `time` template var
+    // via `advmod`/`obl:tmod` children — surface it when present.
+    let temporal = ["time", "temporal", "when"]
         .iter()
         .find_map(|key| captures.get(*key).cloned())
         .filter(|s| !s.trim().is_empty());
@@ -332,6 +372,7 @@ fn try_match(
         subject,
         predicate: (!predicate.is_empty()).then_some(predicate),
         object,
+        temporal,
         confidence: subject_confidence.unwrap_or(0.85),
     })
 }

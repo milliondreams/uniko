@@ -519,6 +519,12 @@ pub struct DepObservation {
     ///
     /// `None` when the matcher captured no object children.
     pub object: Option<String>,
+    /// Temporal phrase captured from ARGM-TMP (SRL) when available.
+    ///
+    /// `None` when no temporal modifier was identified.  Surface form
+    /// only — absolute-date resolution happens at the observation
+    /// insert site via [`crate::observations::temporal::resolve_temporal`].
+    pub temporal: Option<String>,
     /// Confidence score.
     pub confidence: f64,
 }
@@ -638,7 +644,8 @@ pub fn extract_dep_observations(
 
         // Build the structured object phrase (joined trimmed objects;
         // modifiers are excluded — they're sentence colour, not the
-        // primary patient role).
+        // primary patient role).  Phase B: clean the joined phrase
+        // (strip leading prepositions/articles, reject pure stop-words).
         let obj_phrase = if objects.is_empty() {
             None
         } else {
@@ -647,7 +654,11 @@ pub fn extract_dep_observations(
                 .map(|o| strip_trailing_punct(o))
                 .collect::<Vec<_>>()
                 .join(" ");
-            (!joined.trim().is_empty()).then_some(joined)
+            if joined.trim().is_empty() {
+                None
+            } else {
+                crate::observations::cleanup::clean_object_phrase(&joined)
+            }
         };
         let pred_norm = normalize_predicate(if is_copular_pred && has_cop {
             // Copular fallback: surface the copula explicitly so
@@ -657,12 +668,22 @@ pub fn extract_dep_observations(
         } else {
             pred_word.clone()
         });
+        // Phase B: lemmatize → collapse `got/getting/gets` → `get`.
+        let pred_lemma = crate::observations::cleanup::lemmatize_predicate(&pred_norm);
+        // Phase B: reject light-verb-only triples.
+        if crate::observations::cleanup::is_light_verb_only(&pred_lemma, obj_phrase.as_deref()) {
+            continue;
+        }
 
         observations.push(DepObservation {
             content,
             subject: subj.clone(),
-            predicate: (!pred_norm.is_empty()).then_some(pred_norm),
+            predicate: (!pred_lemma.is_empty()).then_some(pred_lemma),
             object: obj_phrase,
+            // Direct-DEP fallback path doesn't track ARGM-TMP — only
+            // the SRL matcher in `observations::rules_engine::matcher`
+            // surfaces temporal captures today.
+            temporal: None,
             confidence: 0.85,
         });
     }

@@ -117,7 +117,8 @@ async fn generate_answer(
     // map so the date suffix is omitted. Wire this up in a follow-up if
     // the conv-30 lift confirms the approach.
     let session_dates = std::collections::HashMap::new();
-    let context = crate::format_context(bundle, &session_dates);
+    let temporal_anchors = std::collections::HashMap::new();
+    let context = crate::format_context(bundle, &session_dates, &temporal_anchors);
 
     let system = "You are a helpful assistant answering questions about past conversations. \
         Answer using the provided context. You may paraphrase or make direct \

@@ -162,6 +162,14 @@ fn default_nlp_srl_enabled() -> bool {
     true
 }
 
+fn default_phase1_strategy() -> String {
+    "merge".to_string()
+}
+
+fn default_phase1_boost_alpha() -> f64 {
+    0.3
+}
+
 impl RerankerConfig {
     /// BAAI/bge-reranker-base — 278M params, accurate, CPU-feasible.
     pub fn bge_base() -> Self {
@@ -423,6 +431,16 @@ pub struct UnikoConfig {
     /// union manageable.
     #[serde(default)]
     pub recall_per_variant_limit: Option<usize>,
+    /// Phase 1 (Compact) contribution strategy: `merge` (default),
+    /// `boost`, or `off`.  See `uniko_memory::recall::Phase1Strategy`.
+    /// Stored as a string so deserialised configs stay compatible
+    /// across feature flags.
+    #[serde(default = "default_phase1_strategy")]
+    pub phase1_strategy: String,
+    /// Multiplicative weight for Fact scores when computing the
+    /// session-chunk boost under `phase1_strategy = "boost"`.
+    #[serde(default = "default_phase1_boost_alpha")]
+    pub phase1_boost_alpha: f64,
 
     // Memory decay
     /// Half-life in days for importance decay: `importance * exp(-ln(2) / half_life * age_days)`.
@@ -473,6 +491,8 @@ impl Default for UnikoConfig {
             query_variants: Vec::new(),
             rrf_k: default_rrf_k(),
             recall_per_variant_limit: None,
+            phase1_strategy: default_phase1_strategy(),
+            phase1_boost_alpha: default_phase1_boost_alpha(),
             half_life_days: 30.0,
             prune_below: 0.05,
             phase1_coverage_threshold: 0.75,

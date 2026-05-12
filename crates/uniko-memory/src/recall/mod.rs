@@ -99,6 +99,26 @@ pub struct ContextBundle {
     pub coverage: f64,
 }
 
+/// How Phase 1 (Compact) results contribute to the final bundle.
+///
+/// Tested on conv-26/conv-30 ablations and documented in the
+/// `rfe-p4-recall-evolution` RFE.  `Merge` is the legacy default
+/// (cap=3 interleave by score); `Boost` is the architectural v2 where
+/// Facts/Observations only influence chunk ranking and never occupy
+/// bundle slots; `Off` disables Phase 1 contributions entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Phase1Strategy {
+    /// Merge top-N Phase 1 Facts into the Phase 3 bundle by score
+    /// (default — current best-known stack: conv-26 → 0.750).
+    #[default]
+    Merge,
+    /// Use Phase 1 Facts (and top Observation hits) as a session-level
+    /// boost signal on Chunk scores.  Bundle stays 100% Chunks.
+    Boost,
+    /// Skip Phase 1 entirely — no merge and no boost.
+    Off,
+}
+
 /// Recall query configuration.
 #[derive(Debug, Clone)]
 pub struct RecallConfig {
@@ -141,6 +161,13 @@ pub struct RecallConfig {
     /// cost of latency. Defaults to `limit` when constructed via
     /// `from_uniko_config`.
     pub per_variant_limit: usize,
+    /// Phase 1 (Compact) contribution strategy.  See [`Phase1Strategy`].
+    pub phase1_strategy: Phase1Strategy,
+    /// Multiplicative weight applied to Fact scores when computing the
+    /// session-chunk boost under [`Phase1Strategy::Boost`].  Small (0.1-0.3)
+    /// — large enough to nudge a chunk by ~one rank position, small
+    /// enough not to overwhelm the cross-encoder ranking.
+    pub phase1_boost_alpha: f64,
 }
 
 impl Default for RecallConfig {
@@ -166,6 +193,8 @@ impl Default for RecallConfig {
             query_variants: Vec::new(),
             rrf_k: 60.0,
             per_variant_limit: 15,
+            phase1_strategy: Phase1Strategy::Merge,
+            phase1_boost_alpha: 0.3,
         }
     }
 }
@@ -194,6 +223,27 @@ impl RecallConfig {
             query_variants: cfg.query_variants.clone(),
             rrf_k: cfg.rrf_k,
             per_variant_limit: cfg.recall_per_variant_limit.unwrap_or(cfg.recall_limit),
+            phase1_strategy: parse_phase1_strategy(&cfg.phase1_strategy),
+            phase1_boost_alpha: cfg.phase1_boost_alpha,
+        }
+    }
+}
+
+/// Parse the string form stored in `UnikoConfig` into [`Phase1Strategy`].
+///
+/// Unknown values fall back to `Merge` with a warning — keeps the
+/// recall path live on malformed config rather than panicking.
+fn parse_phase1_strategy(s: &str) -> Phase1Strategy {
+    match s.to_ascii_lowercase().as_str() {
+        "merge" => Phase1Strategy::Merge,
+        "boost" => Phase1Strategy::Boost,
+        "off" | "none" | "disabled" => Phase1Strategy::Off,
+        other => {
+            tracing::warn!(
+                value = other,
+                "unknown phase1_strategy, defaulting to 'merge'",
+            );
+            Phase1Strategy::Merge
         }
     }
 }
@@ -407,41 +457,77 @@ pub async fn recall(
         );
     }
 
-    // Merge a small slice of Phase 1 hits into the Phase 3 bundle.
+    // Phase 1 contribution: one of three strategies (Merge / Boost / Off).
     //
-    // When Phase 1 missed its 0.75 coverage gate, the Facts on offer
-    // are weaker signals — but a top few may still strengthen the
-    // bundle.  Capped because Facts are tier-weighted at Semantic=1.0
-    // (vs KnowledgeBase=0.5 for Chunks); without a cap, low-quality
-    // Facts drown out Chunks that contain the actual gold answer
-    // text.  Measured 87% → 1.5% LoCoMo evidence drop on conv-30
-    // when un-capped (probe_kb showed bundles became 100% Facts).
-    const PHASE1_FALLBACK_CAP: usize = 3;
-    let mut phase1_top = phase1_items;
-    phase1_top.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    phase1_top.truncate(PHASE1_FALLBACK_CAP);
+    // - Merge: cap=3 interleave by score (best on conv-26 in v1
+    //   ablations; conv-26 0.750 / conv-30 0.802 with the rest of the
+    //   stack).
+    // - Boost: Facts/Obs influence the Phase-3 chunks' scores via a
+    //   session-level walk (Phase C, RFE rfe-p4-recall-evolution).
+    //   Bundle remains 100% chunks; gold-bearing text always present.
+    // - Off: skip Phase 1 contributions entirely.
+    match config.phase1_strategy {
+        Phase1Strategy::Merge => {
+            const PHASE1_FALLBACK_CAP: usize = 3;
+            let mut phase1_top = phase1_items;
+            phase1_top.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            phase1_top.truncate(PHASE1_FALLBACK_CAP);
 
-    let mut merged: HashMap<NodeId, RecallItem> = HashMap::new();
-    for item in items.drain(..).chain(phase1_top) {
-        merged
-            .entry(item.node_id)
-            .and_modify(|existing| {
-                if item.score > existing.score {
-                    *existing = item.clone();
+            let mut merged: HashMap<NodeId, RecallItem> = HashMap::new();
+            for item in items.drain(..).chain(phase1_top) {
+                merged
+                    .entry(item.node_id)
+                    .and_modify(|existing| {
+                        if item.score > existing.score {
+                            *existing = item.clone();
+                        }
+                    })
+                    .or_insert(item);
+            }
+            items = merged.into_values().collect();
+            items.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        Phase1Strategy::Boost => {
+            let boost_map = session_boost_signals(
+                kb,
+                &phase1_items,
+                config.phase1_boost_alpha,
+            )
+            .await;
+            let mut boosted = 0usize;
+            for item in &mut items {
+                if let Some(delta) = boost_map.get(&item.node_id) {
+                    item.score += delta;
+                    boosted += 1;
                 }
-            })
-            .or_insert(item);
+            }
+            if boosted > 0 {
+                items.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            tracing::info!(
+                phase1_facts = phase1_items.len(),
+                boost_targets = boost_map.len(),
+                boosted_items = boosted,
+                "phase 1 session boost applied",
+            );
+        }
+        Phase1Strategy::Off => {
+            // No Phase 1 contribution.  Items list stays as Phase 3 +
+            // reranker output untouched.
+        }
     }
-    let mut items: Vec<RecallItem> = merged.into_values().collect();
-    items.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
 
     items.truncate(config.limit);
 
@@ -554,6 +640,57 @@ async fn phase1_compact(
         }
     }
     out.into_values().collect()
+}
+
+/// Phase C session-boost: walk each Phase 1 Fact to its containing
+/// session chunks and aggregate boost signals per chunk node id.
+///
+/// Edge walk: `Fact <-[:SUPPORTED_BY]- Observation -[:OBSERVED_IN]->
+/// Message -[:IN_SESSION]-> Session -[:HAS_CHUNK]-> Chunk`
+///
+/// Returns a map from chunk node id → score delta (`alpha · fact_score`,
+/// summed across all Facts whose evidence touches that session).  Empty
+/// when no Facts or when the walks return nothing.
+async fn session_boost_signals(
+    kb: &KnowledgeBase,
+    phase1_items: &[RecallItem],
+    alpha: f64,
+) -> HashMap<NodeId, f64> {
+    let mut boosts: HashMap<NodeId, f64> = HashMap::new();
+    if phase1_items.is_empty() || alpha <= 0.0 {
+        return boosts;
+    }
+
+    let session = kb.db().session();
+    for fact in phase1_items {
+        if !matches!(fact.tier, RecallTier::Semantic | RecallTier::Procedural) {
+            continue;
+        }
+        // One Cypher round-trip per Fact.  Cheap relative to the LLM
+        // call that follows; could be batched if profiling shows it.
+        let cypher = format!(
+            "MATCH (f) WHERE id(f) = {nid} \
+             MATCH (f)<-[:SUPPORTED_BY]-(:Observation)-[:OBSERVED_IN]->(:Message) \
+                  -[:IN_SESSION]->(:Session)-[:HAS_CHUNK]->(c:Chunk) \
+             RETURN DISTINCT id(c) AS chunk_id",
+            nid = fact.node_id,
+        );
+        let result = session.query_with(&cypher).fetch_all().await;
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(error = %e, fact_id = fact.node_id, "session_boost walk failed");
+                continue;
+            }
+        };
+        let delta = fact.score * alpha;
+        for row in result.rows() {
+            if let Ok(cid) = row.get::<i64>("chunk_id") {
+                *boosts.entry(cid).or_insert(0.0) += delta;
+            }
+        }
+    }
+    boosts
 }
 
 /// Spec §IX coverage formula:

@@ -182,6 +182,17 @@ pub async fn run_cycle_with(
             Some(prev) => prev.min(obs.observed_at),
             None => obs.observed_at,
         });
+        // Phase A: track the earliest `temporal_anchor` across
+        // contributors so derived Facts get a BTIC `valid_at_lo` that
+        // reflects when the claim first held, not just when it was
+        // observed.  Falls back to `first_observed_at` when no
+        // contributor carried a resolved anchor.
+        if let Some(anchor) = obs.temporal_anchor {
+            entry.first_temporal_anchor = Some(match entry.first_temporal_anchor {
+                Some(prev) => prev.min(anchor),
+                None => anchor,
+            });
+        }
         entry.object_votes.push(ObjectVote {
             text: obs.object.clone(),
             observed_at: obs.observed_at,
@@ -194,8 +205,14 @@ pub async fn run_cycle_with(
 
     for ((subject, predicate), group) in groups {
         let canonical = canonical_object(&group.object_votes);
+        // Prefer the earliest resolved `temporal_anchor` (when the
+        // claim first held) over `observed_at` (when the message was
+        // recorded).  This propagates to Fact.valid_at_lo via
+        // `upsert_fact_by_triple`, so BTIC intervals match the claim
+        // timeline rather than the conversation timeline.
         let first_observed = group
-            .first_observed_at
+            .first_temporal_anchor
+            .or(group.first_observed_at)
             .unwrap_or(started_at);
 
         // Compute the embedding text from the canonical (subject,
@@ -277,7 +294,9 @@ async fn fetch_unprocessed_observations(
                   WHERE o.subject IS NOT NULL AND o.predicate IS NOT NULL \
                   AND NOT EXISTS { MATCH (:ConsolidationCycle)-[:PROCESSED]->(o) } \
                   RETURN id(o) AS nid, o.subject AS subject, o.predicate AS predicate, \
-                         o.object AS object, o.content AS content, o.observed_at AS observed_at \
+                         o.object AS object, o.content AS content, \
+                         o.observed_at AS observed_at, \
+                         o.temporal_anchor AS temporal_anchor \
                   ORDER BY o.observed_at ASC \
                   LIMIT $lim";
     let result = session
@@ -306,6 +325,11 @@ async fn fetch_unprocessed_observations(
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(Utc::now);
+        let temporal_anchor = row
+            .get::<String>("temporal_anchor")
+            .ok()
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
         out.push(UnprocessedObs {
             node_id: nid,
             subject,
@@ -313,6 +337,7 @@ async fn fetch_unprocessed_observations(
             object,
             content,
             observed_at,
+            temporal_anchor,
         });
     }
     Ok(out)
@@ -368,6 +393,10 @@ struct UnprocessedObs {
     object: Option<String>,
     content: String,
     observed_at: DateTime<Utc>,
+    /// Resolved absolute date from `ARGM-TMP` (Phase A).  Absent when
+    /// the source observation had no temporal modifier or used the
+    /// rule-based fallback path.
+    temporal_anchor: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Default)]
@@ -375,6 +404,10 @@ struct GroupBuilder {
     contributing: Vec<NodeId>,
     object_votes: Vec<ObjectVote>,
     first_observed_at: Option<DateTime<Utc>>,
+    /// Earliest `temporal_anchor` across this group's contributors.
+    /// Used as the Fact's `valid_at_lo` when present so the BTIC
+    /// interval reflects the claim timeline.
+    first_temporal_anchor: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug)]

@@ -164,6 +164,27 @@ struct Cli {
     #[arg(long, default_value = "50")]
     reranker_top_n: usize,
 
+    /// Maximum items in the recall bundle (overrides `recall_limit`
+    /// in the embedding config).  Larger values give the gen LLM more
+    /// context at the cost of token budget.  Mem0's published runs
+    /// use 30; uniko's spec default is 15.
+    #[arg(long)]
+    recall_limit: Option<usize>,
+
+    /// Phase 1 (Compact) contribution strategy:
+    /// - `merge` (default) — cap=3 interleave Facts by score into the
+    ///   Phase 3 bundle.
+    /// - `boost` — Facts/Observations only influence chunk ranking via
+    ///   a session-level boost; bundle stays 100% Chunks.
+    /// - `off` — skip Phase 1 entirely.
+    #[arg(long, default_value = "merge")]
+    phase1_strategy: String,
+
+    /// Multiplicative weight applied to Fact scores when computing the
+    /// session-chunk boost under `--phase1-strategy boost`.
+    #[arg(long, default_value = "0.3")]
+    phase1_boost_alpha: f64,
+
     /// Comma-separated list of query-reformulation variants to enable.
     /// Recognised: `keywords`, `original`, `declarative`, `type_anchored`.
     /// Empty / unset uses the default 4-variant configuration. Pass
@@ -234,6 +255,17 @@ async fn main() -> Result<()> {
         config.reranker.style = cli.reranker_style.clone();
         config.reranker.top_n = cli.reranker_top_n;
     }
+    if let Some(limit) = cli.recall_limit {
+        config.recall_limit = limit;
+        // Reranker top_n must be >= recall_limit per UnikoConfig
+        // validation; bump it when the caller raised the limit
+        // without explicitly choosing a top_n.
+        if config.reranker.enabled && config.reranker.top_n < limit {
+            config.reranker.top_n = limit;
+        }
+    }
+    config.phase1_strategy = cli.phase1_strategy.clone();
+    config.phase1_boost_alpha = cli.phase1_boost_alpha;
     if !cli.variants.trim().is_empty() {
         config.query_variants = cli
             .variants

@@ -26,6 +26,18 @@ pub struct RawObservation {
     pub predicate: Option<String>,
     /// Object phrase (direct/indirect/complement), when extractable.
     pub object: Option<String>,
+    /// Temporal phrase captured from ARGM-TMP (SRL) — surface form,
+    /// e.g. `"Last Fri"` / `"two weekends ago"`.
+    ///
+    /// Stored on the Observation as `temporal_phrase` for traceability
+    /// alongside the absolute resolution in [`Self::temporal_anchor`].
+    pub temporal_phrase: Option<String>,
+    /// Absolute resolution of [`Self::temporal_phrase`] against the
+    /// message timestamp via
+    /// [`crate::observations::temporal::resolve_temporal`].
+    ///
+    /// `None` when no temporal phrase was extracted.
+    pub temporal_anchor: Option<DateTime<Utc>>,
     /// When the observation was true in the real world.
     pub observed_at: DateTime<Utc>,
     /// Extraction confidence in \[0.0, 1.0\].

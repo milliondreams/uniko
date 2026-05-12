@@ -69,6 +69,11 @@ pub fn extract_observations_rule_based(
             // (its query filters on predicate IS NOT NULL).
             predicate: None,
             object: None,
+            // Rule fallback already folds temporal resolution into
+            // `observed_at` (legacy behavior).  No surface form is
+            // preserved on this path; SRL is the canonical source.
+            temporal_phrase: None,
+            temporal_anchor: None,
             observed_at,
             confidence,
         });
@@ -244,6 +249,8 @@ pub fn extract_observations_from_dep_tree(
             subject: entity_name,
             predicate: None,
             object: None,
+            temporal_phrase: None,
+            temporal_anchor: None,
             observed_at: timestamp,
             confidence: 0.85, // dep-tree extraction is more reliable than regex
         });

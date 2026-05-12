@@ -118,14 +118,22 @@ async fn generate_answer(
 
     let node_ids: Vec<i64> = bundle.items.iter().map(|i| i.node_id).collect();
     let session_dates = fetch_session_dates(kb, &node_ids).await;
-    let context = uniko_bench::format_context(bundle, &session_dates);
+    let temporal_anchors = fetch_temporal_anchors(kb, &node_ids).await;
+    let context = uniko_bench::format_context(bundle, &session_dates, &temporal_anchors);
 
     let system = "You are a helpful assistant answering questions about conversations. \
         Answer using the provided context. You may paraphrase or make direct \
         inferences from what the context says, including using the `session_date` \
         field to resolve relative dates like 'yesterday' or 'next month'. \
-        If the answer is genuinely not present in the context, say \
-        'The information is not mentioned in the conversation.' \
+        When an item carries a `temporal` field, treat that date as the \
+        resolved anchor for the claim — prefer it over relative phrases like \
+        'last Friday' that appear inside the content. \
+        For speculative questions phrased as 'Would X likely…?' or 'What would X \
+        think about…?', reason from the speaker's stated preferences, beliefs, \
+        and behaviors in the context to give a reasoned inference rather than \
+        abstaining. Only say 'The information is not mentioned in the \
+        conversation' when no relevant preferences or behaviors appear in the \
+        context. \
         Answer concisely in one or two sentences.";
 
     let user = format!("Context:\n{context}\n\nQuestion: {question}\n\nAnswer:");
@@ -177,6 +185,41 @@ async fn fetch_session_dates(kb: &KnowledgeBase, node_ids: &[i64]) -> HashMap<i6
                 if let Ok(ts) = row.get::<String>("ts") {
                     // uni-db formats DateTime as "YYYY-MM-DDTHH:MM:SS±HHMM"; the
                     // model only needs the date for relative-date resolution.
+                    let date = ts.split('T').next().unwrap_or(&ts).to_string();
+                    out.insert(nid, date);
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Resolve the per-Observation `temporal_anchor` for each recalled node.
+///
+/// Phase A surfaces ARGM-TMP captures from SRL as a resolved absolute
+/// date at ingest.  This helper pulls that field for any Observation in
+/// the bundle so the LLM sees the resolved anchor rather than the raw
+/// `"Last Fri"` phrase buried in chunk text.
+///
+/// Returns an empty entry for non-Observation node types or for
+/// Observations whose `temporal_anchor` is null.
+async fn fetch_temporal_anchors(
+    kb: &KnowledgeBase,
+    node_ids: &[i64],
+) -> HashMap<i64, String> {
+    let mut out = HashMap::new();
+    let session = kb.db().session();
+    for &nid in node_ids {
+        let q = format!(
+            "MATCH (n:Observation) WHERE id(n) = {nid} \
+             AND n.temporal_anchor IS NOT NULL \
+             RETURN n.temporal_anchor AS ts \
+             LIMIT 1"
+        );
+        if let Ok(res) = session.query_with(&q).fetch_all().await {
+            for row in res.rows() {
+                if let Ok(ts) = row.get::<String>("ts") {
                     let date = ts.split('T').next().unwrap_or(&ts).to_string();
                     out.insert(nid, date);
                     break;

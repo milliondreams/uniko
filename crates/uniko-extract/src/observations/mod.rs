@@ -11,6 +11,7 @@
 
 // Rust guideline compliant
 
+pub mod cleanup;
 pub mod contradiction;
 pub mod filter;
 pub mod llm;
@@ -147,11 +148,23 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 );
 
                 for obs in dep_obs {
+                    // Phase A: resolve ARGM-TMP surface form to an
+                    // absolute date relative to the message timestamp.
+                    // `resolve_temporal()` returns the reference
+                    // unchanged on no-match; gate on parse success by
+                    // requiring the resolved date to differ from the
+                    // reference *or* a known temporal token to appear.
+                    let temporal_phrase = obs.temporal.clone();
+                    let temporal_anchor = temporal_phrase
+                        .as_deref()
+                        .map(|s| temporal::resolve_temporal(s, timestamp));
                     all_obs.push(RawObservation {
                         content: obs.content,
                         subject: obs.subject,
                         predicate: obs.predicate,
                         object: obs.object,
+                        temporal_phrase,
+                        temporal_anchor,
                         observed_at: timestamp,
                         confidence: obs.confidence,
                     });
@@ -205,6 +218,18 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 }
                 if let Some(obj) = &raw.object {
                     props.insert("object".into(), Value::String(obj.clone()));
+                }
+                if let Some(phrase) = &raw.temporal_phrase {
+                    props.insert(
+                        "temporal_phrase".into(),
+                        Value::String(phrase.clone()),
+                    );
+                }
+                if let Some(anchor) = raw.temporal_anchor {
+                    props.insert(
+                        "temporal_anchor".into(),
+                        Value::String(anchor.to_rfc3339()),
+                    );
                 }
                 props.insert(
                     "observed_at".into(),

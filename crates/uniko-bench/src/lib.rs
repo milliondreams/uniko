@@ -123,39 +123,36 @@ fn provider_options(provider: &str, base_url: Option<&str>) -> serde_json::Value
 
 /// Format recall items into a numbered context string for LLM prompts.
 ///
-/// `session_dates` maps `node_id` → ISO date (e.g. `2023-01-19`) of the
-/// originating Session.started_at. Items without a known date (e.g. from
-/// label types not anchored to a Session) emit no date field. Pass an
-/// empty map to skip date injection entirely.
+/// `session_dates` maps `node_id` → ISO date of the originating
+/// Session.started_at.  `temporal_anchors` maps `node_id` → ISO date of
+/// the resolved `Observation.temporal_anchor` (Phase A — surface form
+/// like `"Last Fri"` is resolved at ingest and stored as an absolute
+/// date so the LLM doesn't need to re-resolve it).  Items missing
+/// either lookup emit no corresponding field.
+///
+/// Pass empty maps to skip the respective injection.
 pub fn format_context(
     bundle: &ContextBundle,
     session_dates: &HashMap<i64, String>,
+    temporal_anchors: &HashMap<i64, String>,
 ) -> String {
     let mut ctx = String::new();
     for (i, item) in bundle.items.iter().enumerate() {
-        match session_dates.get(&item.node_id) {
-            Some(date) => {
-                let _ = writeln!(
-                    &mut ctx,
-                    "[{}] ({}, score={:.3}, session_date={}): {}",
-                    i + 1,
-                    item.node_type,
-                    item.score,
-                    date,
-                    item.content,
-                );
-            }
-            None => {
-                let _ = writeln!(
-                    &mut ctx,
-                    "[{}] ({}, score={:.3}): {}",
-                    i + 1,
-                    item.node_type,
-                    item.score,
-                    item.content,
-                );
-            }
+        let session_date = session_dates.get(&item.node_id);
+        let temporal = temporal_anchors.get(&item.node_id);
+        let mut header = format!(
+            "[{}] ({}, score={:.3}",
+            i + 1,
+            item.node_type,
+            item.score,
+        );
+        if let Some(date) = session_date {
+            header.push_str(&format!(", session_date={date}"));
         }
+        if let Some(t) = temporal {
+            header.push_str(&format!(", temporal={t}"));
+        }
+        let _ = writeln!(&mut ctx, "{header}): {}", item.content);
     }
     ctx
 }
