@@ -117,6 +117,7 @@ async fn test_ingest_and_recall() {
         min_score: 0.001,
         vector_weight: 0.5,
         bm25_weight: 0.5,
+        ..Default::default()
     };
 
     let bundle = recall(&kb, "When did Jon lose his job?", &config)

@@ -24,6 +24,11 @@ pub struct RecalledItem {
 /// Result of querying a single question.
 #[derive(Debug)]
 pub struct QueryResult {
+    /// Conversation sample this question belongs to (LoCoMo `sample_id`).
+    pub sample_id: String,
+    /// Position of this question within `sample.qa` (post-category filter).
+    /// Reproducible across runs because question order is stable.
+    pub question_index: usize,
     /// Original question text.
     pub question: String,
     /// Gold answer from the dataset.
@@ -45,6 +50,12 @@ pub struct QueryResult {
     pub recall_latency_ms: u64,
     /// Answer generation latency in milliseconds (0 if retrieval-only).
     pub generation_latency_ms: u64,
+    /// Whether the recall cascade exited early from Phase 1 (Compact).
+    pub phase1_only: bool,
+    /// Coverage score reported by the recall cascade (0.0–1.0).
+    pub coverage: f64,
+    /// Estimated total tokens in the recall bundle.
+    pub total_tokens: usize,
 }
 
 /// Run recall for a question and optionally generate an answer.
@@ -53,6 +64,8 @@ pub struct QueryResult {
 /// content of the top recall items.
 pub async fn run_query(
     kb: &KnowledgeBase,
+    sample_id: &str,
+    question_index: usize,
     qa: &QaPair,
     evidence_texts: &[String],
     llm_alias: Option<&str>,
@@ -94,6 +107,8 @@ pub async fn run_query(
         .collect();
 
     Ok(QueryResult {
+        sample_id: sample_id.to_string(),
+        question_index,
         question: qa.question.clone(),
         gold_answer: qa.gold_answer().to_string(),
         predicted_answer,
@@ -104,6 +119,9 @@ pub async fn run_query(
         recall_bundle,
         recall_latency_ms,
         generation_latency_ms,
+        phase1_only: bundle.phase1_only,
+        coverage: bundle.coverage,
+        total_tokens: bundle.total_tokens,
     })
 }
 

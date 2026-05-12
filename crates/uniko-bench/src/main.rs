@@ -423,7 +423,15 @@ async fn main() -> Result<()> {
             }
 
             let evidence_texts = resolve_evidence(qa, &evidence_lookup);
-            let qr = query::run_query(&kb, qa, &evidence_texts, llm_alias).await?;
+            let qr = query::run_query(
+                &kb,
+                &sample.sample_id,
+                q_idx,
+                qa,
+                &evidence_texts,
+                llm_alias,
+            )
+            .await?;
 
             // Compute token-level F1.
             let f1 = eval::token_f1(&qr.predicted_answer, &qr.gold_answer, qr.category);
