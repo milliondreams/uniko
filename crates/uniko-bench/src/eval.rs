@@ -71,9 +71,18 @@ fn multi_hop_f1(prediction: &str, gold: &str) -> f64 {
 }
 
 /// Adversarial scoring: 1.0 if prediction indicates "no information".
+///
+/// Matches both past-participle ("not mentioned") and active-voice
+/// ("does not mention") forms — earlier versions of the whitelist
+/// missed verb-form abstentions, scoring otherwise-correct answers
+/// like "The context does not mention any gift from grandma to
+/// Melanie; it only describes a necklace that Caroline received" as
+/// F1=0 confabulations.  See RFE rfe-p4-recall-evolution open-question
+/// follow-up.
 fn adversarial_score(prediction: &str) -> f64 {
     let lower = prediction.to_lowercase();
     let negation_phrases = [
+        // Past-participle abstentions (canonical wording).
         "no information",
         "not mentioned",
         "not available",
@@ -82,6 +91,27 @@ fn adversarial_score(prediction: &str) -> f64 {
         "not in the conversation",
         "not discussed",
         "no record",
+        "not specified",
+        "not stated",
+        "not provided",
+        // Verb-form abstentions (the model often says these instead).
+        "does not mention",
+        "doesn't mention",
+        "does not specify",
+        "doesn't specify",
+        "does not state",
+        "doesn't state",
+        "does not provide",
+        "doesn't provide",
+        "no mention of",
+        "no specific mention",
+        // Defensive variations.
+        "context does not",
+        "is not present in",
+        "is not specified",
+        "not appear in",
+        "cannot find",
+        "no such information",
     ];
     if negation_phrases.iter().any(|p| lower.contains(p)) {
         1.0
