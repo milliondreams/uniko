@@ -6,3 +6,22 @@ target/
 .DS_Store
 proptest-regressions/
 *.uni_cache*
+
+# Bench artifacts: KB stores can be GB-scale (lance datasets), result
+# JSONs are MB-scale.  Keep both out of git; preserve specific results
+# manually when needed.
+data/kb*/
+data/lme_kb*/
+data/locomo*.json
+data/longmemeval*.json
+data/cls_*.tsv
+data/nlp_obs_test_diagnostics.txt
+
+# Agent runtime state (claude-code, codex)
+.claude/
+.codex
+.codex/
+
+# Working notes that haven't been promoted to initial-docs/
+NLP_REQUIREMENTS.md
+locomo_results.json
