@@ -121,17 +121,20 @@ struct Cli {
     #[arg(long)]
     schema: Option<PathBuf>,
 
-    /// Override embedding dimensions (default 768 for Nomic, use 384 for MiniLM).
+    /// Override embedding dimensions (default 384 for BGE-small / MiniLM,
+    /// 768 for Nomic, 1024 for BGE-large).
     #[arg(long)]
     embedding_dim: Option<usize>,
 
     /// Embedding preset to use. One of:
-    /// - `nomic` (default, 768d)
+    /// - `bge-small` (default, 384d, BGE-small-en-v1.5)
     /// - `minilm` (384d, BERT-based)
-    /// - `bge-small` (384d, BGE-small-en-v1.5)
+    /// - `nomic` (768d, Nomic-embed-text-v1.5)
     /// - `bge-large` (1024d, BGE-large-en-v1.5)
     /// Selects the full preset (model_id + dimensions + prefixes).
-    #[arg(long, default_value = "nomic")]
+    /// `bge-small` is the Pareto winner on conv-26 — highest evidence
+    /// hit / F1 across the preset sweep with the lowest recall latency.
+    #[arg(long, default_value = "bge-small")]
     embedding: String,
 
     /// Enable the reranker to re-score the top recall candidates before
