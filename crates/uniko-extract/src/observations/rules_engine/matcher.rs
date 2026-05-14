@@ -177,10 +177,6 @@ fn try_match_srl(
     let object = object_raw
         .as_deref()
         .and_then(crate::observations::cleanup::clean_object_phrase);
-    // Phase B: reject light-verb-only triples (`(Jon | do | what)`).
-    if crate::observations::cleanup::is_light_verb_only(&predicate, object.as_deref()) {
-        return None;
-    }
     // Phase A: surface ARGM-TMP captures as a structured slot.  Prefer
     // the explicit `time` capture from the rule template, fall back to
     // the ARGM-TMP role text on the frame directly so SRL patterns
@@ -196,6 +192,24 @@ fn try_match_srl(
                 .map(|a| a.text.clone())
         })
         .filter(|s| !s.trim().is_empty());
+    let location = captures.get("location").cloned().or_else(|| {
+        frame
+            .args
+            .iter()
+            .find(|a| a.role == "ARGM-LOC")
+            .map(|a| a.text.clone())
+    });
+    // Phase B: reject light-verb-only triples (`(Jon | do | what)`),
+    // but only when no specifying complement is present.  The intransitive
+    // patterns srl_action_temporal_only / srl_action_locative_only
+    // exist precisely to capture (I, go, yesterday) — the time or
+    // location IS the specifying complement, so don't kill them.
+    let has_complement = temporal.is_some() || location.is_some();
+    if !has_complement
+        && crate::observations::cleanup::is_light_verb_only(&predicate, object.as_deref())
+    {
+        return None;
+    }
     Some(DepObservation {
         content,
         subject,

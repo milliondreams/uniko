@@ -501,6 +501,41 @@ pub async fn recall(
     tracing::debug!(candidates = scored.len(), "recall candidates");
 
     if scored.is_empty() {
+        // Phase 3 (Broaden) found nothing — but Phase 2 (Expand) may
+        // have populated `phase2_items` that we'd otherwise silently
+        // discard.  Fall back to those rather than returning an empty
+        // bundle.  Common on tiny KBs (no Chunks consolidated) and on
+        // queries whose facet count under-counts coverage.
+        if !phase2_items.is_empty() {
+            tracing::info!(
+                phase2_items = phase2_items.len(),
+                "phase 3 empty — returning phase 2 fallback bundle"
+            );
+            let mut items = phase2_items;
+            items.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            items.truncate(config.limit);
+            let mut total_tokens = 0usize;
+            let mut final_items = Vec::new();
+            for item in items {
+                total_tokens += TOKENS_PER_ITEM;
+                if total_tokens > config.token_budget {
+                    break;
+                }
+                final_items.push(item);
+            }
+            let coverage = compute_coverage(&final_items, intent.facet_count);
+            return Ok(ContextBundle {
+                total_tokens,
+                items: final_items,
+                phase1_only: false,
+                phase2_only: true,
+                coverage,
+            });
+        }
         return Ok(empty_bundle());
     }
 
