@@ -20,7 +20,7 @@ use uniko_store::{KnowledgeBase, NodeId};
 /// # Errors
 ///
 /// Returns a storage error if the graph operation fails.
-pub(crate) async fn get_or_create_session(
+pub async fn get_or_create_session(
     kb: &KnowledgeBase,
     session_id: &str,
     timestamp: &DateTime<Utc>,

@@ -43,6 +43,8 @@ async fn similar_to_fts_zero_with_auto_embed() {
                     alias: "embed/default".to_string(),
                     source_properties: vec!["content".to_string()],
                     batch_size: 32,
+                    document_prefix: None,
+                    query_prefix: None,
                 }),
             }),
         )

@@ -296,16 +296,16 @@ async fn debug_chunk_existence() {
 
     // Test vector search on Chunk separately
     eprintln!();
-    let intent = uniko_memory::recall::build_intent(&kb, "favorite style of dance")
+    let intent = uniko_memory::recall::build_intent(&kb, "favorite style of dance", &[])
         .await
         .unwrap();
-    eprintln!("Intent keywords: '{}'", intent.keywords);
-    eprintln!("Intent vec len: {}", intent.intent_vec.len());
+    eprintln!("Intent keywords: '{}'", intent.keywords());
+    eprintln!("Intent vec len: {}", intent.intent_vec().len());
 
-    if !intent.intent_vec.is_empty() {
+    if !intent.intent_vec().is_empty() {
         let result = session
             .query_with("MATCH (c:Chunk) RETURN c.text AS text, similar_to(c.embedding, $qvec) AS score ORDER BY score DESC LIMIT 3")
-            .param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()))
+            .param("qvec", uni_db::Value::Vector(intent.intent_vec().to_vec()))
             .fetch_all()
             .await;
         match result {
@@ -342,7 +342,7 @@ async fn debug_chunk_existence() {
     }
 
     // Test hybrid similar_to on Chunk (same as recall does)
-    if !intent.intent_vec.is_empty() {
+    if !intent.intent_vec().is_empty() {
         let result = session
             .query_with(
                 "MATCH (m:Chunk) \
@@ -350,8 +350,8 @@ async fn debug_chunk_existence() {
                         similar_to([m.embedding, m.text], [$qvec, $qtxt], {method: 'weighted', weights: [0.5, 0.5]}) AS score \
                  ORDER BY score DESC LIMIT 5"
             )
-            .param("qvec", uni_db::Value::Vector(intent.intent_vec.clone()))
-            .param("qtxt", intent.keywords.as_str())
+            .param("qvec", uni_db::Value::Vector(intent.intent_vec().to_vec()))
+            .param("qtxt", intent.keywords())
             .fetch_all()
             .await;
         match result {

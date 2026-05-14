@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use uni_db::ModelAliasSpec;
+use uniko_extract::ingest::context::SessionContext;
 use uniko_extract::ingest::message::ingest_message;
+use uniko_extract::ingest::session::get_or_create_session;
 use uniko_pipes::types::IngestMessage;
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
@@ -32,7 +34,13 @@ async fn similar_to_fts_with_real_uniko_schema() {
         timestamp: Utc::now(),
         metadata: HashMap::new(),
     };
-    ingest_message(&kb, &msg).await.unwrap();
+    // ingest_message now requires a SessionContext (W1 Episode work);
+    // bootstrap one over a fresh Session node so the message can land.
+    let session_nid = get_or_create_session(&kb, &msg.session_id, &msg.timestamp)
+        .await
+        .unwrap();
+    let mut session_ctx = SessionContext::new(msg.session_id.clone(), session_nid);
+    ingest_message(&kb, &msg, &mut session_ctx).await.unwrap();
 
     // Test flush
     match kb.db().flush().await {
