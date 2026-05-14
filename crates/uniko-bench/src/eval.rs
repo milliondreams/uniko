@@ -289,21 +289,49 @@ pub async fn llm_judge(
 ) -> anyhow::Result<f64> {
     use uni_db::xervo::{GenerationOptions, Message};
 
+    // Verbatim Mem0 LoCoMo judge prompt (mem0ai/mem0
+    // evaluation/metrics/llm_judge.py).  Using this directly so our judge
+    // scores are comparable to published Mem0 numbers — substituting our
+    // own prompt would invalidate the comparison.
     let prompt = format!(
-        "You are evaluating an answer to a question about a conversation.\n\n\
+        "Your task is to label an answer to a question as 'CORRECT' or 'WRONG'. \
+         You will be given the following data:\n\
+             (1) a question (posed by one user to another user), \n\
+             (2) a 'gold' (ground truth) answer, \n\
+             (3) a generated answer\n\
+         which you will score as CORRECT/WRONG.\n\n\
+         The point of the question is to ask about something one user should know \
+         about the other user based on their prior conversations.\n\
+         The gold answer will usually be a concise and short answer that includes \
+         the referenced topic, for example:\n\
+         Question: Do you remember what I got the last time I went to Hawaii?\n\
+         Gold answer: A shell necklace\n\
+         The generated answer might be much longer, but you should be generous \
+         with your grading - as long as it touches on the same topic as the gold \
+         answer, it should be counted as CORRECT. \n\n\
+         For time related questions, the gold answer will be a specific date, \
+         month, year, etc. The generated answer might be much longer or use \
+         relative time references (like \"last Tuesday\" or \"next month\"), but \
+         you should be generous with your grading - as long as it refers to the \
+         same date or time period as the gold answer, it should be counted as \
+         CORRECT. Even if the format differs (e.g., \"May 7th\" vs \"7 May\"), \
+         consider it CORRECT if it's the same date.\n\n\
+         Now it's time for the real question:\n\
          Question: {question}\n\
-         Correct Answer: {gold_answer}\n\
-         Generated Answer: {predicted_answer}\n\n\
-         Is the generated answer correct? It doesn't need to match word-for-word, \
-         but it must convey the same core information as the correct answer.\n\
-         Respond with ONLY the word 'correct' or 'wrong'."
+         Gold answer: {gold_answer}\n\
+         Generated answer: {predicted_answer}\n\n\
+         First, provide a short (one sentence) explanation of your reasoning, \
+         then finish with CORRECT or WRONG. \n\
+         Do NOT include both CORRECT and WRONG in your response, or it will \
+         break the evaluation script.\n\n\
+         Just return the label CORRECT or WRONG in a json format with the key \
+         as \"label\".\n"
     );
 
     let messages = vec![Message::user(&prompt)];
     // Use provider defaults: GPT-5 rejects `max_tokens` (requires
     // `max_completion_tokens`) and `temperature: 0` (only accepts the
-    // default 1.0). The judge prompt constrains the response to a
-    // single word, so neither parameter is load-bearing.
+    // default 1.0).
     let options = GenerationOptions::default();
 
     let result = kb
@@ -311,12 +339,55 @@ pub async fn llm_judge(
         .xervo()
         .generate(judge_alias, &messages, options)
         .await?;
-    let response = result.text.trim().to_lowercase();
-    Ok(if response.contains("correct") {
-        1.0
-    } else {
-        0.0
-    })
+    Ok(parse_mem0_judge_label(&result.text))
+}
+
+/// Parse the Mem0 judge's response into 1.0 (CORRECT) or 0.0 (WRONG).
+///
+/// The Mem0 prompt asks for a one-sentence explanation followed by a
+/// JSON object `{"label": "CORRECT"}` or `{"label": "WRONG"}`.  In
+/// practice models also produce variants like bare `CORRECT` /
+/// `WRONG`, markdown-fenced JSON, or `"label": "correct"`.  We accept
+/// any of those by:
+/// 1. Looking for the JSON `label` field first (canonical path).
+/// 2. Falling back to a last-token check for "CORRECT" / "WRONG" in
+///    the trimmed response.
+///
+/// Defaults to WRONG (0.0) on any ambiguity — the prompt explicitly
+/// forbids including both, so an ambiguous response is itself a fail.
+fn parse_mem0_judge_label(text: &str) -> f64 {
+    let lower = text.to_lowercase();
+
+    // 1. JSON `label` field — the canonical Mem0 output format.
+    if let Some(idx) = lower.find("\"label\"") {
+        let tail = &lower[idx..];
+        if let Some(c) = tail.find("correct") {
+            if let Some(w) = tail.find("wrong") {
+                return if c < w { 1.0 } else { 0.0 };
+            }
+            return 1.0;
+        }
+        if tail.contains("wrong") {
+            return 0.0;
+        }
+    }
+
+    // 2. Last-occurrence fallback — Mem0 prompt asks the label to come
+    //    LAST, so the last keyword wins on freeform responses.
+    let c = lower.rfind("correct");
+    let w = lower.rfind("wrong");
+    match (c, w) {
+        (Some(c), Some(w)) => {
+            if c > w {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        (Some(_), None) => 1.0,
+        (None, Some(_)) => 0.0,
+        (None, None) => 0.0,
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────
