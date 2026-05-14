@@ -45,8 +45,15 @@ mod audit {
         }
         let lower = trimmed.to_lowercase();
         const PHATIC: &[&str] = &[
-            "hi ", "hello", "hey ", "thanks", "thank you", "good morning",
-            "good night", "bye", "see you",
+            "hi ",
+            "hello",
+            "hey ",
+            "thanks",
+            "thank you",
+            "good morning",
+            "good night",
+            "bye",
+            "see you",
         ];
         if PHATIC.iter().any(|p| lower.contains(p)) {
             return false;
@@ -66,8 +73,15 @@ mod audit {
             return false;
         }
         const PHATIC: &[&str] = &[
-            "hi ", "hello", "hey ", "thanks", "thank you", "good morning",
-            "good night", "bye!", "see you",
+            "hi ",
+            "hello",
+            "hey ",
+            "thanks",
+            "thank you",
+            "good morning",
+            "good night",
+            "bye!",
+            "see you",
         ];
         PHATIC.iter().any(|p| lower.contains(p))
     }
@@ -96,10 +110,9 @@ mod audit {
         let pipeline = NlpPipeline::try_new(&kb).await.expect("pipeline");
 
         // Load conv-26 messages.
-        let data: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(ws.join("data/locomo10.json")).unwrap(),
-        )
-        .unwrap();
+        let data: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(ws.join("data/locomo10.json")).unwrap())
+                .unwrap();
         let conv = data
             .as_array()
             .unwrap()
@@ -212,9 +225,7 @@ mod audit {
         for (s, c, conf) in decl_misclass {
             by_class.entry(c).or_default().push((s, conf));
         }
-        println!(
-            "\n=== Long-declarative sentences misclassified (loss for extraction) ===",
-        );
+        println!("\n=== Long-declarative sentences misclassified (loss for extraction) ===",);
         let mut keys: Vec<&&'static str> = by_class.keys().collect();
         keys.sort();
         for k in keys {

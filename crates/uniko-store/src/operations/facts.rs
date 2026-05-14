@@ -15,7 +15,7 @@ use uni_db::common::{TemporalValue, uni_btic::Btic};
 
 use crate::error::Result;
 use crate::id::new_id;
-use crate::schema::btic::{btic_active, btic_upgrade_certainty, CERTAINTY_THRESHOLD};
+use crate::schema::btic::{CERTAINTY_THRESHOLD, btic_active, btic_upgrade_certainty};
 use crate::schema::constants::{edges, labels};
 use crate::storage::KnowledgeBase;
 use crate::types::NodeId;
@@ -331,9 +331,7 @@ fn btic_to_value(b: &Btic) -> Value {
 /// for a column declared as [`uni_db::DataType::Btic`]).
 fn extract_btic(value: Option<&Value>) -> Option<Btic> {
     match value? {
-        Value::Temporal(TemporalValue::Btic { lo, hi, meta }) => {
-            Btic::new(*lo, *hi, *meta).ok()
-        }
+        Value::Temporal(TemporalValue::Btic { lo, hi, meta }) => Btic::new(*lo, *hi, *meta).ok(),
         _ => None,
     }
 }
@@ -554,7 +552,10 @@ impl KnowledgeBase {
         // entity.  Falls back to the cumulative count when the windowed
         // query yields nothing (e.g., no INVALIDATES edges yet because
         // the caller hasn't wired one for the current invalidation).
-        let window_count = self.count_recent_invalidations(key, now).await?.max(new_count);
+        let window_count = self
+            .count_recent_invalidations(key, now)
+            .await?
+            .max(new_count);
         let now_unstable = window_count > drift_threshold;
         updates.insert("unstable".into(), Value::Bool(now_unstable));
         self.update_node(nid, &updates).await?;

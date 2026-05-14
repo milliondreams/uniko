@@ -120,7 +120,10 @@ async fn repro_label_disjunction_in_match() {
     eprintln!("found edge to :DestA = {found_a}");
     eprintln!("found edge to :DestB = {found_b}");
 
-    assert!(found_a, "single-label match should have created Source→DestA edge");
+    assert!(
+        found_a,
+        "single-label match should have created Source→DestA edge"
+    );
     assert!(
         found_b,
         "label disjunction (:DestA|DestB) should have matched :DestB and created the edge — but it did not"

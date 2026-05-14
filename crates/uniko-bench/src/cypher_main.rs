@@ -124,8 +124,9 @@ async fn main() -> Result<()> {
         // Source the query from --query, --file, or stdin.
         let query = match (&cli.query, &cli.file) {
             (Some(q), None) => q.clone(),
-            (None, Some(p)) => std::fs::read_to_string(p)
-                .with_context(|| format!("reading {}", p.display()))?,
+            (None, Some(p)) => {
+                std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?
+            }
             (Some(_), Some(_)) => anyhow::bail!("--query and --file are mutually exclusive"),
             (None, None) => read_stdin()?,
         };

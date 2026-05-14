@@ -107,9 +107,7 @@ async fn create_message(db: &Uni, turn: usize) -> i64 {
     let session = db.session();
     let tx = session.tx().await.unwrap();
     let result = tx
-        .query_with(
-            "CREATE (n:Message {message_id: $id, content: $c}) RETURN id(n) AS vid",
-        )
+        .query_with("CREATE (n:Message {message_id: $id, content: $c}) RETURN id(n) AS vid")
         .param("id", Value::String(format!("msg-{turn:04}")))
         .param("c", Value::String(format!("{MESSAGE_TEXT} (turn {turn})")))
         .fetch_all()
@@ -221,8 +219,7 @@ async fn repro_observed_in_query_time_grows() {
         }
     }
 
-    let first_50_mean: f64 =
-        samples[..50].iter().map(|v| *v as f64).sum::<f64>() / 50.0 / 1000.0;
+    let first_50_mean: f64 = samples[..50].iter().map(|v| *v as f64).sum::<f64>() / 50.0 / 1000.0;
     let last_50_mean: f64 = samples[samples.len() - 50..]
         .iter()
         .map(|v| *v as f64)

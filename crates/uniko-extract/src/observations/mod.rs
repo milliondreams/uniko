@@ -220,10 +220,7 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                     props.insert("object".into(), Value::String(obj.clone()));
                 }
                 if let Some(phrase) = &raw.temporal_phrase {
-                    props.insert(
-                        "temporal_phrase".into(),
-                        Value::String(phrase.clone()),
-                    );
+                    props.insert("temporal_phrase".into(), Value::String(phrase.clone()));
                 }
                 if let Some(anchor) = raw.temporal_anchor {
                     props.insert(
@@ -382,8 +379,9 @@ fn load_observation_rules(
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
-    static EXTERNAL: OnceLock<Mutex<HashMap<PathBuf, &'static crate::observations::rules_engine::Rules>>> =
-        OnceLock::new();
+    static EXTERNAL: OnceLock<
+        Mutex<HashMap<PathBuf, &'static crate::observations::rules_engine::Rules>>,
+    > = OnceLock::new();
 
     let cfg_path = ctx.kb.config().observation_rules_path.clone();
     if let Some(path) = cfg_path {

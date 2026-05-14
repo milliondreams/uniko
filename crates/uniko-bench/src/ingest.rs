@@ -119,10 +119,7 @@ pub async fn ingest_conversation(
                 let artifact_content = format!("{caption} {query_text}").trim().to_string();
 
                 if !artifact_content.is_empty() {
-                    let img_path = turn
-                        .img_url
-                        .as_ref()
-                        .and_then(|urls| urls.first().cloned());
+                    let img_path = turn.img_url.as_ref().and_then(|urls| urls.first().cloned());
 
                     let artifact = IngestArtifact {
                         artifact_id: format!("{}-{}-img", sample.sample_id, turn.dia_id),

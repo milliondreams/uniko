@@ -176,24 +176,20 @@ async fn insert_loop(
         let start = Instant::now();
 
         if with_timestamp {
-            tx.execute_with(
-                "CREATE (:Message {message_id: $p0, content: $p1, timestamp: $p2})",
-            )
-            .param("p0", Value::String(format!("msg-{i:04}")))
-            .param("p1", Value::String(MESSAGE_TEXT.into()))
-            .param("p2", Value::String(chrono::Utc::now().to_rfc3339()))
-            .run()
-            .await
-            .unwrap();
+            tx.execute_with("CREATE (:Message {message_id: $p0, content: $p1, timestamp: $p2})")
+                .param("p0", Value::String(format!("msg-{i:04}")))
+                .param("p1", Value::String(MESSAGE_TEXT.into()))
+                .param("p2", Value::String(chrono::Utc::now().to_rfc3339()))
+                .run()
+                .await
+                .unwrap();
         } else {
-            tx.execute_with(
-                "CREATE (:Message {message_id: $p0, content: $p1})",
-            )
-            .param("p0", Value::String(format!("msg-{i:04}")))
-            .param("p1", Value::String(MESSAGE_TEXT.into()))
-            .run()
-            .await
-            .unwrap();
+            tx.execute_with("CREATE (:Message {message_id: $p0, content: $p1})")
+                .param("p0", Value::String(format!("msg-{i:04}")))
+                .param("p1", Value::String(MESSAGE_TEXT.into()))
+                .run()
+                .await
+                .unwrap();
         }
 
         tx.commit().await.unwrap();
@@ -213,10 +209,26 @@ fn report(title: &str, latencies_ms: &[f64]) {
     let max = |s: &[f64]| s.iter().cloned().fold(0.0_f64, f64::max);
 
     eprintln!("\n=== {title} ({n} nodes) ===");
-    eprintln!("  First 20:  avg {:.1}ms  max {:.1}ms", avg(first), max(first));
-    eprintln!("  Mid 20:    avg {:.1}ms  max {:.1}ms", avg(middle), max(middle));
-    eprintln!("  Last 20:   avg {:.1}ms  max {:.1}ms", avg(last), max(last));
-    eprintln!("  Overall:   avg {:.1}ms  max {:.1}ms", avg(latencies_ms), max(latencies_ms));
+    eprintln!(
+        "  First 20:  avg {:.1}ms  max {:.1}ms",
+        avg(first),
+        max(first)
+    );
+    eprintln!(
+        "  Mid 20:    avg {:.1}ms  max {:.1}ms",
+        avg(middle),
+        max(middle)
+    );
+    eprintln!(
+        "  Last 20:   avg {:.1}ms  max {:.1}ms",
+        avg(last),
+        max(last)
+    );
+    eprintln!(
+        "  Overall:   avg {:.1}ms  max {:.1}ms",
+        avg(latencies_ms),
+        max(latencies_ms)
+    );
 
     eprintln!("\n  Per-insert trend:");
     for i in (0..n).step_by(20) {

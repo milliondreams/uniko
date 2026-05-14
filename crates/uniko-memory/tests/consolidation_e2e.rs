@@ -144,15 +144,17 @@ async fn cycle_derives_one_fact_per_triple_cluster() {
     let stats = run_cycle(&kb, "agent-1", None).await.expect("cycle ok");
 
     assert_eq!(stats.observations_processed, 5, "5 triple-bearing obs");
-    assert_eq!(stats.facts_created, 2, "two distinct (subject, predicate) clusters");
+    assert_eq!(
+        stats.facts_created, 2,
+        "two distinct (subject, predicate) clusters"
+    );
     assert_eq!(stats.facts_reinforced, 0);
 
     assert_eq!(count_facts(&kb).await, 2);
 
-    let caroline_fact =
-        fetch_fact(&kb, "caroline", "researches")
-            .await
-            .expect("caroline fact present");
+    let caroline_fact = fetch_fact(&kb, "caroline", "researches")
+        .await
+        .expect("caroline fact present");
     assert_eq!(
         caroline_fact
             .get("observation_count")
@@ -478,7 +480,9 @@ async fn drift_threshold_flips_entity_unstable() {
     // After 5+ invalidations, the kim Entity should be flagged unstable.
     let session = kb.db().session();
     let result = session
-        .query_with("MATCH (e:Entity {name: 'kim'}) RETURN e.unstable AS u, e.invalidation_count AS c")
+        .query_with(
+            "MATCH (e:Entity {name: 'kim'}) RETURN e.unstable AS u, e.invalidation_count AS c",
+        )
         .fetch_all()
         .await
         .expect("entity probe");

@@ -90,10 +90,7 @@ async fn extract_one(
         content = input.content,
     );
 
-    let messages = vec![
-        Message::system(SYSTEM_PROMPT),
-        Message::user(&user),
-    ];
+    let messages = vec![Message::system(SYSTEM_PROMPT), Message::user(&user)];
     let options = GenerationOptions {
         max_tokens: Some(64),
         temperature: Some(0.0),

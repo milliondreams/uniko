@@ -161,10 +161,7 @@ async fn repro_unwind_match_id_slow() {
     let t0 = Instant::now();
     for &src in &src_ids {
         prepared
-            .execute(&[
-                ("src", Value::Int(src)),
-                ("dst", Value::Int(target_id)),
-            ])
+            .execute(&[("src", Value::Int(src)), ("dst", Value::Int(target_id))])
             .await
             .unwrap();
     }

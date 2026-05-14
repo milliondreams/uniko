@@ -13,9 +13,9 @@ use uni_db::Value;
 
 use uniko_memory::recall::{RecallConfig, recall};
 use uniko_memory::{RecordEpisodeParams, record_episode};
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::labels;
-use uniko_store::KnowledgeBase;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -120,9 +120,7 @@ async fn phase2_only_flag_set_when_coverage_clears_gate() {
         result.expect("record_episode");
     }
 
-    let bundle = recall(&kb, "topic", &config)
-        .await
-        .expect("recall");
+    let bundle = recall(&kb, "topic", &config).await.expect("recall");
     if bundle.items.is_empty() {
         // No Phase 1 hits and Phase 2 may not have returned ≥ 3 items
         // — gate cannot be cleared.  Treat as inconclusive rather than

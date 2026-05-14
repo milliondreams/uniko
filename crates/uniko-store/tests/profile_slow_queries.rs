@@ -25,8 +25,8 @@ use std::path::PathBuf;
 
 use uni_db::api::schema::EmbeddingCfg;
 use uni_db::{
-    IndexType, ModelAliasSpec, ModelTask, Uni, Value, VectorAlgo, VectorIndexCfg,
-    VectorMetric, WarmupPolicy,
+    IndexType, ModelAliasSpec, ModelTask, Uni, Value, VectorAlgo, VectorIndexCfg, VectorMetric,
+    WarmupPolicy,
 };
 
 const KB_PATH: &str = "/tmp/locomo-minilm-v4-kb/conv-44";
@@ -104,7 +104,10 @@ async fn sample_participant_name(db: &Uni) -> Option<String> {
         .fetch_all()
         .await
         .ok()?;
-    result.rows().first().and_then(|r| r.get::<String>("name").ok())
+    result
+        .rows()
+        .first()
+        .and_then(|r| r.get::<String>("name").ok())
 }
 
 /// Embed a query string via the xervo catalog so we have a real $qvec.
@@ -125,15 +128,15 @@ fn print_profile(name: &str, profile: &uni_db::ProfileOutput) {
     println!("\n────────────────────────────────────────────────────");
     println!("{name}");
     println!("────────────────────────────────────────────────────");
-    println!(
-        "  total_time_ms   = {}",
-        profile.total_time_ms
-    );
+    println!("  total_time_ms   = {}", profile.total_time_ms);
     println!(
         "  peak_memory_KB  = {:.1}",
         profile.peak_memory_bytes as f64 / 1024.0
     );
-    println!("  cost.estimated_rows = {}", profile.explain.cost_estimates.estimated_rows);
+    println!(
+        "  cost.estimated_rows = {}",
+        profile.explain.cost_estimates.estimated_rows
+    );
     if !profile.explain.warnings.is_empty() {
         println!("  warnings:");
         for w in &profile.explain.warnings {

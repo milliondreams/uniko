@@ -60,7 +60,10 @@ async fn create_node(db: &Uni, label: &str, props: &[(&str, Value)]) -> i64 {
         .enumerate()
         .map(|(i, (k, _))| format!("{k}: $p{i}"))
         .collect();
-    let cypher = format!("CREATE (n:{label} {{{}}}) RETURN id(n) AS vid", prop_str.join(", "));
+    let cypher = format!(
+        "CREATE (n:{label} {{{}}}) RETURN id(n) AS vid",
+        prop_str.join(", ")
+    );
 
     let mut qb = tx.query_with(&cypher);
     for (i, (_, v)) in props.iter().enumerate() {
@@ -98,9 +101,7 @@ async fn measure_get_edges(db: &Uni, node_id: i64) -> (usize, f64) {
 
     let start = Instant::now();
     let result = session
-        .query_with(
-            "MATCH (a)-[r:LINK]->(b) WHERE id(a) = $nid RETURN id(r) AS eid",
-        )
+        .query_with("MATCH (a)-[r:LINK]->(b) WHERE id(a) = $nid RETURN id(r) AS eid")
         .param("nid", node_id)
         .fetch_all()
         .await

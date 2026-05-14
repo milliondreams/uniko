@@ -503,14 +503,9 @@ async fn test_batch_create_nodes_and_edges() {
             (art_id, nid, props)
         })
         .collect();
-    kb.batch_create_edges_fast(
-        "HAS_CHUNK",
-        Some("Artifact"),
-        Some("Chunk"),
-        &edge_specs,
-    )
-    .await
-    .unwrap();
+    kb.batch_create_edges_fast("HAS_CHUNK", Some("Artifact"), Some("Chunk"), &edge_specs)
+        .await
+        .unwrap();
 
     // Verify edges exist.
     let edges = kb

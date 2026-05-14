@@ -197,7 +197,9 @@ async fn test_unwind_full_observation_turn() {
     let msg_id: i64 = msg_result.rows()[0].get("vid").unwrap();
 
     let ent_result = tx
-        .query_with("CREATE (e:Entity {entity_id: $eid, name: $name, entity_type: $t}) RETURN id(e) AS vid")
+        .query_with(
+            "CREATE (e:Entity {entity_id: $eid, name: $name, entity_type: $t}) RETURN id(e) AS vid",
+        )
         .param("eid", Value::String("ent-alice".into()))
         .param("name", Value::String("Alice".into()))
         .param("t", Value::String("person".into()))
@@ -371,7 +373,10 @@ async fn test_unwind_vs_loop_performance() {
     let items: Vec<Value> = (0..n)
         .map(|i| {
             let mut m = HashMap::new();
-            m.insert("observation_id".into(), Value::String(format!("unwind-{i}")));
+            m.insert(
+                "observation_id".into(),
+                Value::String(format!("unwind-{i}")),
+            );
             m.insert(
                 "content".into(),
                 Value::String(format!("unwind content {i}")),

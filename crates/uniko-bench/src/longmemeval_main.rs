@@ -294,12 +294,14 @@ async fn main() -> Result<()> {
         let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
             std::collections::HashMap::new();
         agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
-        agent_props.insert(
-            "name".into(),
-            uni_db::Value::String("bench-agent".into()),
-        );
+        agent_props.insert("name".into(), uni_db::Value::String("bench-agent".into()));
         if let Err(e) = kb
-            .merge_node("Participant", "participant_id", &bench_agent_id, &agent_props)
+            .merge_node(
+                "Participant",
+                "participant_id",
+                &bench_agent_id,
+                &agent_props,
+            )
             .await
         {
             tracing::warn!(error = %e, "failed to create bench-agent Participant");

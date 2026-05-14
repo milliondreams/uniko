@@ -15,11 +15,11 @@ use chrono::Utc;
 use uni_db::Value;
 
 use uniko_memory::recall::default_phase2_graph_edge_weights;
-use uniko_store::types::datetime_value;
 use uniko_memory::recall::intent::IntentProfile;
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
-use uniko_store::KnowledgeBase;
+use uniko_store::types::datetime_value;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -100,7 +100,10 @@ async fn ppr_propagates_along_about_supported_by_chain() {
     let obs_props = {
         let mut p: HashMap<String, Value> = HashMap::new();
         p.insert("observation_id".into(), Value::String("obs-1".into()));
-        p.insert("content".into(), Value::String("Caroline likes hiking".into()));
+        p.insert(
+            "content".into(),
+            Value::String("Caroline likes hiking".into()),
+        );
         p.insert("subject".into(), Value::String("Caroline".into()));
         p.insert("predicate".into(), Value::String("likes".into()));
         p.insert("object".into(), Value::String("hiking".into()));

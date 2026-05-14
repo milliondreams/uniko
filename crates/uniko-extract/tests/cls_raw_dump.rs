@@ -44,10 +44,9 @@ mod raw {
         let pipeline = NlpPipeline::try_new(&kb).await.expect("pipeline");
         let labels = label_maps();
 
-        let data: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(ws.join("data/locomo10.json")).unwrap(),
-        )
-        .unwrap();
+        let data: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(ws.join("data/locomo10.json")).unwrap())
+                .unwrap();
         let conv = data
             .as_array()
             .unwrap()
@@ -129,10 +128,7 @@ mod raw {
             let s = *conf_sum.get(name).unwrap_or(&0.0);
             let mean = if n > 0 { s / n as f32 } else { 0.0 };
             let pct = 100.0 * n as f64 / total as f64;
-            let b = buckets
-                .get(name)
-                .copied()
-                .unwrap_or([0; 5]);
+            let b = buckets.get(name).copied().unwrap_or([0; 5]);
             println!(
                 "  {name:<10} {n:>5} ({pct:>5.1}%)  mean conf={mean:.3}   conf hist [0-.2|-.4|-.6|-.8|-1]: {b:?}",
             );

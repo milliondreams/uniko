@@ -183,11 +183,11 @@ async fn repro_get_edges_scales_with_autoembed() {
                  timestamp: $p2}) RETURN id(n) AS vid",
                 &[
                     ("p0", Value::String(format!("msg-r{round}-{j:03}"))),
-                    ("p1", Value::String(format!("{MESSAGE_TEXT} (r{round} #{j})"))),
                     (
-                        "p2",
-                        Value::String(chrono::Utc::now().to_rfc3339()),
+                        "p1",
+                        Value::String(format!("{MESSAGE_TEXT} (r{round} #{j})")),
                     ),
+                    ("p2", Value::String(chrono::Utc::now().to_rfc3339())),
                 ],
             )
             .await;

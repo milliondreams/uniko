@@ -91,9 +91,7 @@ impl EmbeddingConfig {
             dimensions: 384,
             batch_size: 32,
             document_prefix: None,
-            query_prefix: Some(
-                "Represent this sentence for searching relevant passages: ".into(),
-            ),
+            query_prefix: Some("Represent this sentence for searching relevant passages: ".into()),
             execution_providers: None,
         }
     }
@@ -108,9 +106,7 @@ impl EmbeddingConfig {
             dimensions: 1024,
             batch_size: 16,
             document_prefix: None,
-            query_prefix: Some(
-                "Represent this sentence for searching relevant passages: ".into(),
-            ),
+            query_prefix: Some("Represent this sentence for searching relevant passages: ".into()),
             execution_providers: None,
         }
     }

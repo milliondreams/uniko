@@ -113,7 +113,10 @@ impl Accum {
         self.evidence_found += qr.evidence_found;
         self.evidence_total += qr.evidence_total;
         self.count += 1;
-        let cat = self.by_category.entry(qr.category).or_insert_with(Accum::new);
+        let cat = self
+            .by_category
+            .entry(qr.category)
+            .or_insert_with(Accum::new);
         cat.f1_sum += f1;
         if let Some(j) = judge {
             cat.judge_scores.push(j);

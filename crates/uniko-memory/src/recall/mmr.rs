@@ -42,10 +42,8 @@ pub fn mmr_dedup(
     let target = limit.unwrap_or(candidates.len()).min(candidates.len());
     let lambda = lambda.clamp(0.0, 1.0);
 
-    let token_sets: Vec<HashSet<String>> = candidates
-        .iter()
-        .map(|c| tokenize(&c.content))
-        .collect();
+    let token_sets: Vec<HashSet<String>> =
+        candidates.iter().map(|c| tokenize(&c.content)).collect();
 
     let mut remaining: Vec<usize> = (0..candidates.len()).collect();
     let mut selected_indices: Vec<usize> = Vec::with_capacity(target);
@@ -186,7 +184,10 @@ mod tests {
         ];
         let out = mmr_dedup(items, 0.7, 0.85, None);
         let ids: Vec<i64> = out.iter().map(|i| i.node_id).collect();
-        assert!(!ids.contains(&2), "near-duplicate should be removed: {ids:?}");
+        assert!(
+            !ids.contains(&2),
+            "near-duplicate should be removed: {ids:?}"
+        );
         assert!(ids.contains(&1));
         assert!(ids.contains(&3));
     }

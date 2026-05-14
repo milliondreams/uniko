@@ -239,15 +239,9 @@ mod tests {
     #[test]
     fn description_then_summary_in_priority_order() {
         let state = map_state(&[("description", "the desc"), ("summary", "the summary")]);
-        assert_eq!(
-            episode_topic_text(Some(&state), "x", None),
-            "the desc"
-        );
+        assert_eq!(episode_topic_text(Some(&state), "x", None), "the desc");
         let state = map_state(&[("summary", "the summary")]);
-        assert_eq!(
-            episode_topic_text(Some(&state), "x", None),
-            "the summary"
-        );
+        assert_eq!(episode_topic_text(Some(&state), "x", None), "the summary");
     }
 
     #[test]
@@ -261,10 +255,7 @@ mod tests {
     #[test]
     fn empty_strings_fall_through() {
         let state = map_state(&[("topic", ""), ("question", "real question")]);
-        assert_eq!(
-            episode_topic_text(Some(&state), "x", None),
-            "real question"
-        );
+        assert_eq!(episode_topic_text(Some(&state), "x", None), "real question");
     }
 
     #[test]

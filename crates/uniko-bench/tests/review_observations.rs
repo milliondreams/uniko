@@ -61,7 +61,10 @@ async fn review_observations_quality() {
         .first()
         .and_then(|r| r.get::<i64>("n").ok())
         .unwrap_or(0);
-    eprintln!("Observations with at least one ABOUT edge: {with_about} ({:.1}%)", 100.0 * with_about as f64 / total.max(1) as f64);
+    eprintln!(
+        "Observations with at least one ABOUT edge: {with_about} ({:.1}%)",
+        100.0 * with_about as f64 / total.max(1) as f64
+    );
 
     // 3a. ABOUT to Participant (force-named).
     let to_p: i64 = session
@@ -234,7 +237,11 @@ async fn review_observations_quality() {
         .fetch_all()
         .await
         .unwrap();
-    let n_empty: i64 = empty.rows().first().and_then(|r| r.get::<i64>("n").ok()).unwrap_or(0);
+    let n_empty: i64 = empty
+        .rows()
+        .first()
+        .and_then(|r| r.get::<i64>("n").ok())
+        .unwrap_or(0);
     eprintln!("Empty content: {n_empty}");
 
     // 7. Sample 25 observations + their ABOUT entities.

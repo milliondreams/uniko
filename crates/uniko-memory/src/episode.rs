@@ -211,9 +211,8 @@ async fn find_previous_episode(
             let millis = t
                 .epoch_millis()
                 .ok_or_else(|| UnikoError::Storage("Episode.timestamp has no epoch".into()))?;
-            DateTime::<Utc>::from_timestamp_millis(millis).ok_or_else(|| {
-                UnikoError::Storage(format!("epoch millis {millis} out of range"))
-            })?
+            DateTime::<Utc>::from_timestamp_millis(millis)
+                .ok_or_else(|| UnikoError::Storage(format!("epoch millis {millis} out of range")))?
         }
         Some(Value::String(s)) => DateTime::parse_from_rfc3339(s)
             .map_err(|e| UnikoError::Storage(e.to_string()))?
@@ -270,9 +269,9 @@ mod tests {
         assert!(matches!(json_to_value(&JsonValue::Null), Value::Null));
         assert!(matches!(json_to_value(&json!(true)), Value::Bool(true)));
         assert!(matches!(json_to_value(&json!(42)), Value::Int(42)));
-        let f = json_to_value(&json!(3.14));
+        let f = json_to_value(&json!(2.5));
         match f {
-            Value::Float(x) => assert!((x - 3.14).abs() < 1e-9),
+            Value::Float(x) => assert!((x - 2.5).abs() < 1e-9),
             other => panic!("expected Float, got {other:?}"),
         }
         let s = json_to_value(&json!("hi"));

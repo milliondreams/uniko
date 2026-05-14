@@ -258,11 +258,9 @@ fn contains_at_word_boundary(haystack: &str, needle: &str) -> bool {
     let mut start = 0;
     while let Some(idx) = haystack[start..].find(needle) {
         let abs = start + idx;
-        let before_ok = abs == 0
-            || !(bytes[abs - 1] as char).is_ascii_alphanumeric();
+        let before_ok = abs == 0 || !(bytes[abs - 1] as char).is_ascii_alphanumeric();
         let after = abs + n;
-        let after_ok = after == bytes.len()
-            || !(bytes[after] as char).is_ascii_alphanumeric();
+        let after_ok = after == bytes.len() || !(bytes[after] as char).is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -481,7 +479,11 @@ mod tests {
         let chunks = vec!["I love ice cream a lot"];
         let evidence = vec!["completely different evidence text not found in chunks".to_string()];
         let (found, total) = evidence_hit(&chunks, &evidence, "ice cream");
-        assert_eq!((found, total), (1, 1), "multi-word gold matches with boundaries");
+        assert_eq!(
+            (found, total),
+            (1, 1),
+            "multi-word gold matches with boundaries"
+        );
     }
 
     #[test]

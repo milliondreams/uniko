@@ -46,10 +46,7 @@ impl KnowledgeBase {
             .map(|props| {
                 let mut m = HashMap::with_capacity(prop_keys.len());
                 for k in &prop_keys {
-                    m.insert(
-                        k.clone(),
-                        props.get(k).cloned().unwrap_or(Value::Null),
-                    );
+                    m.insert(k.clone(), props.get(k).cloned().unwrap_or(Value::Null));
                 }
                 Value::Map(m)
             })
@@ -63,9 +60,8 @@ impl KnowledgeBase {
             format!(" {{{}}}", pairs.join(", "))
         };
 
-        let cypher = format!(
-            "UNWIND $items AS item CREATE (n:{label}{inline}) RETURN id(n) AS vid"
-        );
+        let cypher =
+            format!("UNWIND $items AS item CREATE (n:{label}{inline}) RETURN id(n) AS vid");
 
         let t_start = std::time::Instant::now();
         let session = self.db.session();
@@ -180,10 +176,7 @@ impl KnowledgeBase {
                 m.insert("src".to_string(), Value::Int(*from));
                 m.insert("dst".to_string(), Value::Int(*to));
                 for k in &prop_keys {
-                    m.insert(
-                        k.clone(),
-                        props.get(k).cloned().unwrap_or(Value::Null),
-                    );
+                    m.insert(k.clone(), props.get(k).cloned().unwrap_or(Value::Null));
                 }
                 Value::Map(m)
             })
@@ -193,8 +186,7 @@ impl KnowledgeBase {
         let set_clause = if prop_keys.is_empty() {
             String::new()
         } else {
-            let assigns: Vec<String> =
-                prop_keys.iter().map(|k| format!("r.{k} = e.{k}")).collect();
+            let assigns: Vec<String> = prop_keys.iter().map(|k| format!("r.{k} = e.{k}")).collect();
             format!(" SET {}", assigns.join(", "))
         };
 

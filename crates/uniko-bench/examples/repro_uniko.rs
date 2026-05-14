@@ -20,9 +20,9 @@ use chrono::Utc;
 use clap::Parser;
 use uni_db::Value;
 use uni_db::common::TemporalValue;
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::labels;
-use uniko_store::KnowledgeBase;
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -100,10 +100,16 @@ async fn main() -> Result<()> {
     .await?;
 
     println!("\n=== post-reopen counts ===");
-    println!("  Facts (label):              {facts}   (expected {})", cli.n_facts);
+    println!(
+        "  Facts (label):              {facts}   (expected {})",
+        cli.n_facts
+    );
     println!("  ConsolidationCycle (label): {cycle}   (expected 1)");
     println!("  bench-agent (label):        {bench_agent}   (expected 1)");
-    println!("  Episode (label):            {eps_lbl}   (expected {})", cli.n_episodes);
+    println!(
+        "  Episode (label):            {eps_lbl}   (expected {})",
+        cli.n_episodes
+    );
     println!("  Episode via edge-traversal: {eps_edge}");
 
     let bug_a = eps_lbl < eps_edge;
@@ -134,19 +140,29 @@ async fn main() -> Result<()> {
     if bug_b_candidate {
         println!("\n--- Bug B: bench-agent property probe ---");
         let r = s
-            .query_with("MATCH (e)-[:RECORDED_BY]->(p) RETURN DISTINCT p AS p, id(p) AS vid LIMIT 1")
+            .query_with(
+                "MATCH (e)-[:RECORDED_BY]->(p) RETURN DISTINCT p AS p, id(p) AS vid LIMIT 1",
+            )
             .fetch_all()
             .await?;
         for row in r.rows() {
             let vid: i64 = row.get("vid").unwrap_or(-1);
             let n: uni_db::Node = row.get("p")?;
-            println!("  vid={vid} labels={:?} prop_count={}", n.labels, n.properties.len());
+            println!(
+                "  vid={vid} labels={:?} prop_count={}",
+                n.labels,
+                n.properties.len()
+            );
             if n.properties.is_empty() {
                 println!("    ❌ ZERO properties (Bug B reproduced)");
             } else {
                 for (k, v) in &n.properties {
                     let s = format!("{v:?}");
-                    let s = if s.len() > 80 { format!("{}…", &s[..80]) } else { s };
+                    let s = if s.len() > 80 {
+                        format!("{}…", &s[..80])
+                    } else {
+                        s
+                    };
                     println!("    {k} = {s}");
                 }
             }
@@ -194,18 +210,9 @@ async fn run_workload(kb: &Arc<KnowledgeBase>, cli: &Cli) -> Result<()> {
         let mut props: HashMap<String, Value> = HashMap::new();
         props.insert("observation_id".into(), Value::String(format!("obs-{i}")));
         props.insert("content".into(), Value::String(format!("obs-{i} content")));
-        props.insert(
-            "subject".into(),
-            Value::String(format!("s{}", i % 50)),
-        );
-        props.insert(
-            "predicate".into(),
-            Value::String(format!("p{}", i % 30)),
-        );
-        props.insert(
-            "object".into(),
-            Value::String(format!("o{}", i % 70)),
-        );
+        props.insert("subject".into(), Value::String(format!("s{}", i % 50)));
+        props.insert("predicate".into(), Value::String(format!("p{}", i % 30)));
+        props.insert("object".into(), Value::String(format!("o{}", i % 70)));
         kb.create_node(labels::OBSERVATION, &props).await?;
     }
 
@@ -245,8 +252,13 @@ async fn run_workload(kb: &Arc<KnowledgeBase>, cli: &Cli) -> Result<()> {
     let mut agent_props: HashMap<String, Value> = HashMap::new();
     agent_props.insert("kind".into(), Value::String("agent".into()));
     agent_props.insert("name".into(), Value::String("bench-agent".into()));
-    kb.merge_node(labels::PARTICIPANT, "participant_id", agent_id, &agent_props)
-        .await?;
+    kb.merge_node(
+        labels::PARTICIPANT,
+        "participant_id",
+        agent_id,
+        &agent_props,
+    )
+    .await?;
 
     // In-session check.
     let n: i64 = scalar(
@@ -262,8 +274,7 @@ async fn run_workload(kb: &Arc<KnowledgeBase>, cli: &Cli) -> Result<()> {
     // exercise the same paths as `record_episode` (merge_node + edges
     // + labelless SET embedding).
     println!("phase 5: {} Episodes (interleaved)", cli.n_episodes);
-    let dummy_vec: Vec<f32> =
-        (0..768).map(|i| (i as f32) * 0.0001 - 0.5).collect();
+    let dummy_vec: Vec<f32> = (0..768).map(|i| (i as f32) * 0.0001 - 0.5).collect();
 
     let mut prev_vid: Option<i64> = None;
     let (participant_nid, _) = kb
@@ -276,7 +287,9 @@ async fn run_workload(kb: &Arc<KnowledgeBase>, cli: &Cli) -> Result<()> {
 
         // Read prev episode (mimics find_previous_episode).
         if prev_vid.is_some() {
-            let _ = kb.db().session()
+            let _ = kb
+                .db()
+                .session()
                 .query_with("MATCH (e:Episode) RETURN e ORDER BY e.timestamp DESC LIMIT 1")
                 .fetch_all()
                 .await?;
@@ -341,10 +354,16 @@ async fn run_workload(kb: &Arc<KnowledgeBase>, cli: &Cli) -> Result<()> {
 
 async fn scalar(s: &uni_db::Session, cypher: &str) -> Result<i64> {
     let r = s.query_with(cypher).fetch_all().await?;
-    Ok(r.rows().first().and_then(|row| row.get::<i64>("c").ok()).unwrap_or(-1))
+    Ok(r.rows()
+        .first()
+        .and_then(|row| row.get::<i64>("c").ok())
+        .unwrap_or(-1))
 }
 
 async fn scalar_with(s: &uni_db::Session, cypher: &str, key: &str, val: i64) -> Result<i64> {
     let r = s.query_with(cypher).param(key, val).fetch_all().await?;
-    Ok(r.rows().first().and_then(|row| row.get::<i64>("c").ok()).unwrap_or(-1))
+    Ok(r.rows()
+        .first()
+        .and_then(|row| row.get::<i64>("c").ok())
+        .unwrap_or(-1))
 }

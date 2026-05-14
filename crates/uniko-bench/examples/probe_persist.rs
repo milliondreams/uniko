@@ -29,7 +29,9 @@ async fn main() -> anyhow::Result<()> {
     let session = kb.db().session();
 
     let r = session
-        .query_with("MATCH (p:Participant) RETURN p.participant_id AS pid, p.kind AS k, p.name AS n")
+        .query_with(
+            "MATCH (p:Participant) RETURN p.participant_id AS pid, p.kind AS k, p.name AS n",
+        )
         .fetch_all()
         .await?;
     println!("Participants ({}):", r.rows().len());
@@ -44,28 +46,44 @@ async fn main() -> anyhow::Result<()> {
         .query_with("MATCH (c:ConsolidationCycle) RETURN count(c) AS n")
         .fetch_all()
         .await?;
-    let n: i64 = r.rows().first().and_then(|row| row.get("n").ok()).unwrap_or(-1);
+    let n: i64 = r
+        .rows()
+        .first()
+        .and_then(|row| row.get("n").ok())
+        .unwrap_or(-1);
     println!("ConsolidationCycle nodes: {n}");
 
     let r = session
         .query_with("MATCH (c)-[r:PROCESSED]->(o) RETURN count(r) AS n")
         .fetch_all()
         .await?;
-    let n: i64 = r.rows().first().and_then(|row| row.get("n").ok()).unwrap_or(-1);
+    let n: i64 = r
+        .rows()
+        .first()
+        .and_then(|row| row.get("n").ok())
+        .unwrap_or(-1);
     println!("PROCESSED edges (via match): {n}");
 
     let r = session
         .query_with("MATCH (e:Episode) RETURN count(e) AS n")
         .fetch_all()
         .await?;
-    let n: i64 = r.rows().first().and_then(|row| row.get("n").ok()).unwrap_or(-1);
+    let n: i64 = r
+        .rows()
+        .first()
+        .and_then(|row| row.get("n").ok())
+        .unwrap_or(-1);
     println!("Episode nodes: {n}");
 
     let r = session
         .query_with("MATCH (e)-[r:RECORDED_BY]->(p) RETURN count(r) AS n")
         .fetch_all()
         .await?;
-    let n: i64 = r.rows().first().and_then(|row| row.get("n").ok()).unwrap_or(-1);
+    let n: i64 = r
+        .rows()
+        .first()
+        .and_then(|row| row.get("n").ok())
+        .unwrap_or(-1);
     println!("RECORDED_BY edges (via match): {n}");
 
     drop(session);
@@ -126,7 +144,11 @@ async fn main() -> anyhow::Result<()> {
         .query_with("MATCH (c:ConsolidationCycle) RETURN count(c) AS n")
         .fetch_all()
         .await?;
-    let n: i64 = r.rows().first().and_then(|row| row.get("n").ok()).unwrap_or(-1);
+    let n: i64 = r
+        .rows()
+        .first()
+        .and_then(|row| row.get("n").ok())
+        .unwrap_or(-1);
     println!("ConsolidationCycle nodes after reopen: {n}");
 
     drop(session);

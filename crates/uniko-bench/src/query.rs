@@ -222,10 +222,7 @@ async fn fetch_session_dates(kb: &KnowledgeBase, node_ids: &[i64]) -> HashMap<i6
 ///
 /// Returns an empty entry for non-Observation node types or for
 /// Observations whose `temporal_anchor` is null.
-async fn fetch_temporal_anchors(
-    kb: &KnowledgeBase,
-    node_ids: &[i64],
-) -> HashMap<i64, String> {
+async fn fetch_temporal_anchors(kb: &KnowledgeBase, node_ids: &[i64]) -> HashMap<i64, String> {
     let mut out = HashMap::new();
     let session = kb.db().session();
     for &nid in node_ids {

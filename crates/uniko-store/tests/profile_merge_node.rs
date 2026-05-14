@@ -81,7 +81,10 @@ fn print_profile(name: &str, p: &uni_db::ProfileOutput) {
     println!("{name}");
     println!("────────────────────────────────────────────────────");
     println!("  total_time_ms       = {}", p.total_time_ms);
-    println!("  cost.estimated_rows = {}", p.explain.cost_estimates.estimated_rows);
+    println!(
+        "  cost.estimated_rows = {}",
+        p.explain.cost_estimates.estimated_rows
+    );
     if !p.explain.warnings.is_empty() {
         println!("  warnings:");
         for w in &p.explain.warnings {
@@ -91,7 +94,10 @@ fn print_profile(name: &str, p: &uni_db::ProfileOutput) {
     if !p.explain.suggestions.is_empty() {
         println!("  suggestions:");
         for s in &p.explain.suggestions {
-            println!("    - {} {} ({}): {}", s.label_or_type, s.property, s.index_type, s.reason);
+            println!(
+                "    - {} {} ({}): {}",
+                s.label_or_type, s.property, s.index_type, s.reason
+            );
         }
     }
     if !p.explain.index_usage.is_empty() {
@@ -119,7 +125,11 @@ async fn profile_merge_node_lookup() {
 
     let ids = sample_entity_ids(&db, 5).await;
     assert!(!ids.is_empty(), "no entities in KB");
-    println!("Sampled {} entity_ids: {:?}\n", ids.len(), &ids[..ids.len().min(3)]);
+    println!(
+        "Sampled {} entity_ids: {:?}\n",
+        ids.len(),
+        &ids[..ids.len().min(3)]
+    );
 
     let session = db.session();
 
@@ -133,10 +143,7 @@ async fn profile_merge_node_lookup() {
             .profile()
             .await
             .expect("profile existing");
-        print_profile(
-            "1. merge_node lookup — EXISTING entity_id (hot path)",
-            &p,
-        );
+        print_profile("1. merge_node lookup — EXISTING entity_id (hot path)", &p);
     }
 
     // ── Query 2: non-existent entity (also hot path — first creation) ───

@@ -110,8 +110,7 @@ pub async fn ingest_message(
     edge_specs.push(("IN_SESSION", message_nid, session_nid, HashMap::new()));
 
     // ADDRESSED_TO
-    let recipient_nids =
-        resolve_recipients(kb, msg, participant_nid, session_nid).await?;
+    let recipient_nids = resolve_recipients(kb, msg, participant_nid, session_nid).await?;
     for &rnid in &recipient_nids {
         edge_specs.push(("ADDRESSED_TO", message_nid, rnid, HashMap::new()));
     }
@@ -175,8 +174,7 @@ async fn resolve_recipients(
     if let Some(ref ids) = msg.addressed_to {
         let mut nids = Vec::with_capacity(ids.len());
         for pid in ids {
-            let nid =
-                super::session::ensure_participant(kb, pid, msg.timestamp).await?;
+            let nid = super::session::ensure_participant(kb, pid, msg.timestamp).await?;
             nids.push(nid);
         }
         Ok(nids)

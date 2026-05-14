@@ -239,10 +239,7 @@ pub async fn run_cycle_with(
         // its established object.  An open Fact with a stored object X
         // is "contradicted" when > CONTRADICTION_THRESHOLD of the
         // votes carry an object != X (case-insensitive, trimmed).
-        let prior_open = match kb
-            .find_stale_open_facts(&subject, &predicate, None)
-            .await
-        {
+        let prior_open = match kb.find_stale_open_facts(&subject, &predicate, None).await {
             Ok(facts) => facts,
             Err(e) => {
                 tracing::warn!(
@@ -533,11 +530,7 @@ fn canonical_object(votes: &[ObjectVote]) -> Option<String> {
     }
     tallies
         .into_iter()
-        .max_by(|a, b| {
-            a.1.0
-                .cmp(&b.1.0)
-                .then_with(|| a.1.1.cmp(&b.1.1))
-        })
+        .max_by(|a, b| a.1.0.cmp(&b.1.0).then_with(|| a.1.1.cmp(&b.1.1)))
         .map(|(k, _)| k)
 }
 
@@ -610,7 +603,10 @@ mod tests {
                 content: "Caroline also looking at foster care".into(),
             },
         ];
-        assert_eq!(canonical_object(&votes).as_deref(), Some("adoption agencies"));
+        assert_eq!(
+            canonical_object(&votes).as_deref(),
+            Some("adoption agencies")
+        );
     }
 
     #[test]

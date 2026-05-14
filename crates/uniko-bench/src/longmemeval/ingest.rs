@@ -242,7 +242,12 @@ pub async fn ingest_item(
         total_session_chunks += obs_chunk_ids.len();
     }
 
-    let total_ms = t_ingest_msg_ms + t_entity_ms + t_obs_ms + t_session_chunk_ms + t_obs_chunk_ms + t_ctx_setup_ms;
+    let total_ms = t_ingest_msg_ms
+        + t_entity_ms
+        + t_obs_ms
+        + t_session_chunk_ms
+        + t_obs_chunk_ms
+        + t_ctx_setup_ms;
     tracing::info!(
         question_id = %item.question_id,
         sessions = item.haystack_sessions.len(),

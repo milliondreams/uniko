@@ -54,7 +54,10 @@ fn run(frames: &[SrlFrame]) -> Vec<String> {
 #[test]
 fn srl_action_emits_clean_svo() {
     // "Caroline bought a yellow dress"
-    let f = frame("bought", &[("ARG0", "Caroline"), ("ARG1", "a yellow dress")]);
+    let f = frame(
+        "bought",
+        &[("ARG0", "Caroline"), ("ARG1", "a yellow dress")],
+    );
     let texts = run(&[f]);
     assert!(
         texts.iter().any(|t| t == "Caroline bought a yellow dress"),
@@ -130,9 +133,6 @@ fn srl_dedupes_identical_text_within_frame() {
     let f1 = frame("ate", &[("ARG0", "Caroline"), ("ARG1", "lunch")]);
     let f2 = frame("ate", &[("ARG0", "Caroline"), ("ARG1", "lunch")]);
     let texts = run(&[f1, f2]);
-    let count = texts
-        .iter()
-        .filter(|t| t == &"Caroline ate lunch")
-        .count();
+    let count = texts.iter().filter(|t| t == &"Caroline ate lunch").count();
     assert_eq!(count, 1, "expected dedup to one entry, got: {texts:?}");
 }

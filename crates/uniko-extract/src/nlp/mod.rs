@@ -246,8 +246,7 @@ impl NlpPipeline {
             let Ok(ids_arr) = ArrayD::from_shape_vec(vec![1, seq_len], input_ids.to_vec()) else {
                 continue;
             };
-            let Ok(mask_arr) =
-                ArrayD::from_shape_vec(vec![1, seq_len], attention_mask.to_vec())
+            let Ok(mask_arr) = ArrayD::from_shape_vec(vec![1, seq_len], attention_mask.to_vec())
             else {
                 continue;
             };
@@ -770,9 +769,7 @@ fn extract_f32_4d(
 /// subword index (it indexes encoder hidden states), so we project our
 /// word-level VERB indices back into subword space before each SRL
 /// re-forward.
-fn first_subword_per_word(
-    word_ids: &[Option<u32>],
-) -> std::collections::HashMap<usize, usize> {
+fn first_subword_per_word(word_ids: &[Option<u32>]) -> std::collections::HashMap<usize, usize> {
     let mut map = std::collections::HashMap::new();
     for (subword_idx, &wid) in word_ids.iter().enumerate() {
         if let Some(w) = wid {

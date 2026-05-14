@@ -16,11 +16,11 @@ use chrono::{DateTime, TimeZone, Utc};
 use uni_db::Value;
 
 use uniko_memory::recall::intent::{build_intent, build_intent_at};
-use uniko_store::config::UnikoConfig;
-use uniko_store::schema::constants::labels;
-use uniko_store::schema::btic::btic_active;
-use uniko_store::types::datetime_value;
 use uniko_store::KnowledgeBase;
+use uniko_store::config::UnikoConfig;
+use uniko_store::schema::btic::btic_active;
+use uniko_store::schema::constants::labels;
+use uniko_store::types::datetime_value;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -55,13 +55,7 @@ async fn build_intent_resolves_yesterday_to_one_day_window() {
     let kb = kb().await;
     // Use a fixed reference so the assertion is deterministic.
     let reference: DateTime<Utc> = Utc.with_ymd_and_hms(2025, 5, 15, 12, 0, 0).unwrap();
-    let intent_res = build_intent_at(
-        &kb,
-        "what happened yesterday",
-        &[],
-        Some(reference),
-    )
-    .await;
+    let intent_res = build_intent_at(&kb, "what happened yesterday", &[], Some(reference)).await;
     if is_embedding_unavailable(&intent_res) {
         eprintln!("skipping: embedding unavailable");
         return;
@@ -100,13 +94,7 @@ async fn observation_in_window_is_recallable() {
 
     // Build an intent that resolves "in may" to the May 2025 window.
     let reference: DateTime<Utc> = Utc.with_ymd_and_hms(2025, 7, 1, 12, 0, 0).unwrap();
-    let intent_res = build_intent_at(
-        &kb,
-        "what happened in may",
-        &[],
-        Some(reference),
-    )
-    .await;
+    let intent_res = build_intent_at(&kb, "what happened in may", &[], Some(reference)).await;
     if is_embedding_unavailable(&intent_res) {
         eprintln!("skipping: embedding unavailable");
         return;

@@ -367,8 +367,7 @@ pub async fn recall(
     // alone suffices and we skip the heavier Phase 3 broaden.
     let phase1_items = phase1_compact(kb, &intent, config).await;
     let phase1_coverage = compute_coverage(&phase1_items, intent.facet_count);
-    let phase1_sufficient =
-        phase1_coverage >= COVERAGE_GATE_PHASE1 && phase1_items.len() >= 3;
+    let phase1_sufficient = phase1_coverage >= COVERAGE_GATE_PHASE1 && phase1_items.len() >= 3;
 
     if phase1_sufficient {
         tracing::info!(
@@ -673,12 +672,8 @@ pub async fn recall(
             });
         }
         Phase1Strategy::Boost => {
-            let boost_map = session_boost_signals(
-                kb,
-                &phase1_items,
-                config.phase1_boost_alpha,
-            )
-            .await;
+            let boost_map =
+                session_boost_signals(kb, &phase1_items, config.phase1_boost_alpha).await;
             let mut boosted = 0usize;
             for item in &mut items {
                 if let Some(delta) = boost_map.get(&item.node_id) {
@@ -908,10 +903,7 @@ async fn phase2_expand(
         return Vec::new();
     }
 
-    let fused = rrf_fuse(
-        per_source.iter().map(|v| v.as_slice()),
-        config.rrf_k,
-    );
+    let fused = rrf_fuse(per_source.iter().map(|v| v.as_slice()), config.rrf_k);
 
     let mut items: Vec<RecallItem> = fused
         .into_iter()
@@ -1126,14 +1118,12 @@ async fn phase2_temporal(
     // downstream, and a narrow query window already restricts the
     // candidate set tightly.
     let mut ranked: Vec<RankedHit> = Vec::new();
-    for (res, default_label) in [
-        (facts, "Fact"),
-        (obs, "Observation"),
-        (eps, "Episode"),
-    ] {
+    for (res, default_label) in [(facts, "Fact"), (obs, "Observation"), (eps, "Episode")] {
         let Some(res) = res else { continue };
         for row in res.rows() {
-            let Ok(nid) = row.get::<i64>("nid") else { continue };
+            let Ok(nid) = row.get::<i64>("nid") else {
+                continue;
+            };
             let lbl: String = row.get("lbl").unwrap_or_else(|_| default_label.into());
             let content: String = row.get("content").unwrap_or_default();
             if content.trim().is_empty() {
@@ -1251,7 +1241,9 @@ async fn phase2_graph_activation(
 
     let mut ranked: Vec<RankedHit> = Vec::with_capacity(r.rows().len());
     for row in r.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else { continue };
+        let Ok(nid) = row.get::<i64>("nid") else {
+            continue;
+        };
         let lbl: String = row.get("lbl").unwrap_or_default();
         let content: String = row.get("content").unwrap_or_default();
         if content.trim().is_empty() {
@@ -1588,12 +1580,7 @@ async fn run_recall_for_variant(
             "embedding",
             "(m)-[:ABOUT]->(:Entity {name: $ename})",
         ),
-        (
-            "Observation",
-            "content",
-            "embedding",
-            "m.subject = $ename",
-        ),
+        ("Observation", "content", "embedding", "m.subject = $ename"),
     ];
 
     for entity_name in entity_refs {
@@ -1723,9 +1710,7 @@ mod rrf_tests {
             .into_iter()
             .map(|(nid, (_, _, s))| (nid, s))
             .collect();
-        pairs.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         pairs
     }
 
@@ -1766,7 +1751,10 @@ mod rrf_tests {
         let v1 = vec![hit(8, 1.0), hit(42, 0.6)];
         let v2 = vec![hit(99, 1.0), hit(98, 0.5)];
         let pairs = fused_sorted(vec![v0, v1, v2], 60.0);
-        assert_eq!(pairs[0].0, 42, "gold should rank first across noisy variants");
+        assert_eq!(
+            pairs[0].0, 42,
+            "gold should rank first across noisy variants"
+        );
     }
 
     #[test]

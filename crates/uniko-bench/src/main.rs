@@ -409,13 +409,8 @@ async fn main() -> Result<()> {
                     duration_ms = cycle_start.elapsed().as_millis(),
                     "consolidation cycle complete",
                 );
-                verify_label_visible(
-                    &kb,
-                    "ConsolidationCycle",
-                    "agent_id",
-                    &sample.sample_id,
-                )
-                .await;
+                verify_label_visible(&kb, "ConsolidationCycle", "agent_id", &sample.sample_id)
+                    .await;
             }
             Err(e) => tracing::warn!(
                 sample_id = %sample.sample_id,
@@ -436,7 +431,12 @@ async fn main() -> Result<()> {
         agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
         agent_props.insert("name".into(), uni_db::Value::String("bench-agent".into()));
         if let Err(e) = kb
-            .merge_node("Participant", "participant_id", &bench_agent_id, &agent_props)
+            .merge_node(
+                "Participant",
+                "participant_id",
+                &bench_agent_id,
+                &agent_props,
+            )
             .await
         {
             tracing::warn!(error = %e, "failed to create bench-agent Participant — skipping episode recording");
@@ -592,12 +592,21 @@ async fn verify_label_visible(
     ext_id_field: &str,
     ext_id: &str,
 ) {
-    let cypher = format!(
-        "MATCH (n:{label}) WHERE n.{ext_id_field} = $eid RETURN count(n) AS c"
-    );
-    match kb.db().session().query_with(&cypher).param("eid", ext_id).fetch_all().await {
+    let cypher = format!("MATCH (n:{label}) WHERE n.{ext_id_field} = $eid RETURN count(n) AS c");
+    match kb
+        .db()
+        .session()
+        .query_with(&cypher)
+        .param("eid", ext_id)
+        .fetch_all()
+        .await
+    {
         Ok(r) => {
-            let n: i64 = r.rows().first().and_then(|row| row.get("c").ok()).unwrap_or(-1);
+            let n: i64 = r
+                .rows()
+                .first()
+                .and_then(|row| row.get("c").ok())
+                .unwrap_or(-1);
             if n == 0 {
                 tracing::warn!(
                     label,
@@ -621,9 +630,20 @@ async fn verify_node_visible_by_label(
     node_id: uniko_store::NodeId,
 ) {
     let cypher = format!("MATCH (n:{label}) WHERE id(n) = $v RETURN count(n) AS c");
-    match kb.db().session().query_with(&cypher).param("v", node_id).fetch_all().await {
+    match kb
+        .db()
+        .session()
+        .query_with(&cypher)
+        .param("v", node_id)
+        .fetch_all()
+        .await
+    {
         Ok(r) => {
-            let n: i64 = r.rows().first().and_then(|row| row.get("c").ok()).unwrap_or(-1);
+            let n: i64 = r
+                .rows()
+                .first()
+                .and_then(|row| row.get("c").ok())
+                .unwrap_or(-1);
             if n == 0 {
                 tracing::warn!(
                     label,

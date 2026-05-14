@@ -117,25 +117,25 @@ fn apply_suffix_rules(predicate: &str) -> String {
         ("bbing", "b"),
         ("mming", "m"),
         // Plain gerund / present participle.
-        ("ying", "y"),  // studying → study
-        ("ing", ""),     // researching → research
+        ("ying", "y"), // studying → study
+        ("ing", ""),   // researching → research
         // Past tense — doubled consonant first.
         ("nned", "n"),
         ("tted", "t"),
         ("dded", "d"),
         ("pped", "p"),
         ("gged", "g"),
-        ("ied", "y"),    // studied → study
-        ("ed", ""),       // painted → paint
+        ("ied", "y"), // studied → study
+        ("ed", ""),   // painted → paint
         // Third-person singular.
-        ("ies", "y"),    // studies → study
-        ("sses", "ss"),  // passes → pass
-        ("ches", "ch"),  // researches → research
+        ("ies", "y"),   // studies → study
+        ("sses", "ss"), // passes → pass
+        ("ches", "ch"), // researches → research
         ("shes", "sh"),
         ("xes", "x"),
         ("zes", "z"),
-        ("oes", "o"),    // does → do
-        ("s", ""),        // gets → get
+        ("oes", "o"), // does → do
+        ("s", ""),    // gets → get
     ];
 
     for (suffix, replacement) in SUFFIX_RULES {
@@ -157,8 +157,7 @@ fn apply_suffix_rules(predicate: &str) -> String {
 /// Returns `None` for forms not in the table — caller falls through to
 /// the regular-suffix rules.
 fn irregular_lemma(predicate: &str) -> Option<&'static str> {
-    static TABLE: OnceLock<std::collections::HashMap<&'static str, &'static str>> =
-        OnceLock::new();
+    static TABLE: OnceLock<std::collections::HashMap<&'static str, &'static str>> = OnceLock::new();
     let table = TABLE.get_or_init(|| {
         let pairs: &[(&str, &str)] = &[
             ("got", "get"),
@@ -313,9 +312,8 @@ static LEADING_STRIP_WORDS: std::sync::LazyLock<HashSet<&'static str>> =
             "the", "a", "an",
             // Prepositions that frequently lead object phrases captured
             // via `obj`/`obl` DEP arcs.
-            "in", "on", "at", "to", "of", "for", "with", "from", "by",
-            "into", "onto", "upon", "about", "around", "before", "after",
-            "over", "under",
+            "in", "on", "at", "to", "of", "for", "with", "from", "by", "into", "onto", "upon",
+            "about", "around", "before", "after", "over", "under",
         ]
         .into_iter()
         .collect()
@@ -327,20 +325,51 @@ static REJECT_OBJECT_PHRASES: std::sync::LazyLock<HashSet<&'static str>> =
     std::sync::LazyLock::new(|| {
         [
             // Pronouns
-            "i", "me", "my", "mine",
-            "you", "your", "yours",
-            "he", "him", "his",
-            "she", "her", "hers",
-            "it", "its",
-            "we", "us", "our", "ours",
-            "they", "them", "their", "theirs",
+            "i",
+            "me",
+            "my",
+            "mine",
+            "you",
+            "your",
+            "yours",
+            "he",
+            "him",
+            "his",
+            "she",
+            "her",
+            "hers",
+            "it",
+            "its",
+            "we",
+            "us",
+            "our",
+            "ours",
+            "they",
+            "them",
+            "their",
+            "theirs",
             // Interrogatives / vague nouns
-            "what", "who", "which", "thing", "things", "stuff", "something",
-            "anything", "everything", "nothing",
+            "what",
+            "who",
+            "which",
+            "thing",
+            "things",
+            "stuff",
+            "something",
+            "anything",
+            "everything",
+            "nothing",
             // Temporal deictics (Phase A puts these in temporal_anchor slot)
-            "yesterday", "today", "tomorrow", "now", "then",
+            "yesterday",
+            "today",
+            "tomorrow",
+            "now",
+            "then",
             // Single demonstratives
-            "this", "that", "these", "those",
+            "this",
+            "that",
+            "these",
+            "those",
         ]
         .into_iter()
         .collect()
@@ -454,10 +483,7 @@ mod tests {
             clean_object_phrase("in pottery class").as_deref(),
             Some("pottery class"),
         );
-        assert_eq!(
-            clean_object_phrase("the idea").as_deref(),
-            Some("idea"),
-        );
+        assert_eq!(clean_object_phrase("the idea").as_deref(), Some("idea"),);
         assert_eq!(
             clean_object_phrase("to the new dance studio").as_deref(),
             Some("new dance studio"),

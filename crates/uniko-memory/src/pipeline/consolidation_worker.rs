@@ -141,12 +141,8 @@ impl ConsolidationWorker {
 
         metrics::emit_consolidation_cycle(agent_id);
 
-        match crate::consolidation::run_cycle(
-            &self.kb,
-            agent_id,
-            Some(self.batch_size as i64),
-        )
-        .await
+        match crate::consolidation::run_cycle(&self.kb, agent_id, Some(self.batch_size as i64))
+            .await
         {
             Ok(stats) => {
                 let elapsed_ms = start.elapsed().as_millis() as f64;

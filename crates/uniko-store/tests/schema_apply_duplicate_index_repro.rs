@@ -120,10 +120,7 @@ async fn duplicates_persist_across_reopen_on_disk() {
     // Variant that hits the production failure mode: bloat persists to
     // `catalog/schema.json` and reloads on every open, so subsequent
     // applies pile additional duplicates on top of what was loaded.
-    let dir = std::env::temp_dir().join(format!(
-        "uni-schema-bloat-repro-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("uni-schema-bloat-repro-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let path = dir.to_string_lossy().to_string();
 
@@ -141,7 +138,10 @@ async fn duplicates_persist_across_reopen_on_disk() {
     {
         let db = Uni::open(&path).build().await.unwrap();
         let on_load = db.schema_manager().schema().indexes.len();
-        assert_eq!(on_load, 1, "second open (post-load): expected 1 index, got {on_load}");
+        assert_eq!(
+            on_load, 1,
+            "second open (post-load): expected 1 index, got {on_load}"
+        );
 
         apply_canonical_schema(&db).await;
         let after_apply = db.schema_manager().schema().indexes.len();

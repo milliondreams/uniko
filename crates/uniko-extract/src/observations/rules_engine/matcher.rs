@@ -12,8 +12,8 @@ use crate::nlp::decode::DepObservation;
 use crate::nlp::types::{DepArc, SrlFrame};
 
 use super::resolver::{
-    ResolvedSubject, collect_subtree, collect_with_relations, resolve_subject, strip_trailing_punct,
-    update_sentence_context,
+    ResolvedSubject, collect_subtree, collect_with_relations, resolve_subject,
+    strip_trailing_punct, update_sentence_context,
 };
 use super::rules::{ChildSpec, Pattern, PhraseCollector, Rules, SrlPattern};
 use super::template::render;
@@ -51,9 +51,18 @@ pub fn extract_with_rules(
                 continue;
             }
             if let Some(obs) = try_match(
-                pattern, anchor_idx, anchor_pos, words, pos_indices, dep_arcs, pos_labels, speaker,
-                ctx, rules,
-            ) && seen_text.insert(obs.content.clone()) {
+                pattern,
+                anchor_idx,
+                anchor_pos,
+                words,
+                pos_indices,
+                dep_arcs,
+                pos_labels,
+                speaker,
+                ctx,
+                rules,
+            ) && seen_text.insert(obs.content.clone())
+            {
                 out.push(obs);
             }
         }
@@ -137,7 +146,8 @@ fn try_match_srl(
             continue;
         }
         match &best {
-            Some(prev) if prev.split_whitespace().count() >= rendered.split_whitespace().count() => {}
+            Some(prev)
+                if prev.split_whitespace().count() >= rendered.split_whitespace().count() => {}
             _ => best = Some(rendered),
         }
     }
@@ -286,8 +296,15 @@ fn try_match(
             continue;
         };
 
-        let collected =
-            collect_children(child, &matches, words, pos_indices, dep_arcs, pos_labels, rules);
+        let collected = collect_children(
+            child,
+            &matches,
+            words,
+            pos_indices,
+            dep_arcs,
+            pos_labels,
+            rules,
+        );
 
         if collected.is_empty() {
             if child.required {
@@ -309,8 +326,12 @@ fn try_match(
                 return None;
             }
             // Resolve pronouns / drop unresolvable.
-            let raw_subject =
-                collect_with_relations(first_match.dependent, words, dep_arcs, &noun_phrase_relations(rules));
+            let raw_subject = collect_with_relations(
+                first_match.dependent,
+                words,
+                dep_arcs,
+                &noun_phrase_relations(rules),
+            );
             let resolved = resolve_subject(
                 &raw_subject,
                 subj_pos,
@@ -337,7 +358,9 @@ fn try_match(
 
     // Pattern-level quality knobs.
     if let Some(min_mod_words) = pattern.quality.min_modifier_words {
-        let mods = captures.get("modifier").or_else(|| captures.get("modifiers"));
+        let mods = captures
+            .get("modifier")
+            .or_else(|| captures.get("modifiers"));
         let words_in_mod = mods.map(|s| s.split_whitespace().count()).unwrap_or(0);
         if words_in_mod < min_mod_words {
             return None;
@@ -362,7 +385,10 @@ fn try_match(
     // without re-parsing.  Phase B: normalize → lemmatize predicate;
     // clean object phrase; reject light-verb-only triples.
     let predicate_normalized = crate::nlp::decode::normalize_predicate(
-        captures.get(ANCHOR_CAPTURE).map(String::as_str).unwrap_or(""),
+        captures
+            .get(ANCHOR_CAPTURE)
+            .map(String::as_str)
+            .unwrap_or(""),
     );
     let predicate = crate::observations::cleanup::lemmatize_predicate(&predicate_normalized);
     let object_raw = ["object", "obj", "target", "complement"]

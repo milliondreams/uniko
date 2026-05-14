@@ -14,8 +14,14 @@ use uniko_store::config::UnikoConfig;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let kb_a: PathBuf = args.next().expect("usage: compare_facts <srl_kb> <llm_kb>").into();
-    let kb_b: PathBuf = args.next().expect("usage: compare_facts <srl_kb> <llm_kb>").into();
+    let kb_a: PathBuf = args
+        .next()
+        .expect("usage: compare_facts <srl_kb> <llm_kb>")
+        .into();
+    let kb_b: PathBuf = args
+        .next()
+        .expect("usage: compare_facts <srl_kb> <llm_kb>")
+        .into();
 
     println!("\n══ A: {} ══", kb_a.display());
     let a = summarize(&kb_a).await?;
@@ -26,9 +32,20 @@ async fn main() -> anyhow::Result<()> {
     println!("\n══ Predicate vocabulary delta ══");
     let only_a: BTreeSet<_> = a.predicates.difference(&b.predicates).collect();
     let only_b: BTreeSet<_> = b.predicates.difference(&a.predicates).collect();
-    println!("  shared:        {}", a.predicates.intersection(&b.predicates).count());
-    println!("  only in A:     {} (e.g. {:?})", only_a.len(), only_a.iter().take(8).collect::<Vec<_>>());
-    println!("  only in B:     {} (e.g. {:?})", only_b.len(), only_b.iter().take(8).collect::<Vec<_>>());
+    println!(
+        "  shared:        {}",
+        a.predicates.intersection(&b.predicates).count()
+    );
+    println!(
+        "  only in A:     {} (e.g. {:?})",
+        only_a.len(),
+        only_a.iter().take(8).collect::<Vec<_>>()
+    );
+    println!(
+        "  only in B:     {} (e.g. {:?})",
+        only_b.len(),
+        only_b.iter().take(8).collect::<Vec<_>>()
+    );
 
     Ok(())
 }
@@ -42,14 +59,33 @@ async fn summarize(path: &PathBuf) -> anyhow::Result<Summary> {
     let session = kb.db().session();
 
     for (label, q) in [
-        ("Facts                  ", "MATCH (f:Fact) RETURN count(f) AS n"),
-        ("Observations (total)   ", "MATCH (o:Observation) RETURN count(o) AS n"),
-        ("Observations (w/triple)", "MATCH (o:Observation) WHERE o.predicate IS NOT NULL RETURN count(o) AS n"),
-        ("Cycles                 ", "MATCH (c:ConsolidationCycle) RETURN count(c) AS n"),
-        ("Distinct predicates    ", "MATCH (f:Fact) RETURN count(DISTINCT f.predicate) AS n"),
+        (
+            "Facts                  ",
+            "MATCH (f:Fact) RETURN count(f) AS n",
+        ),
+        (
+            "Observations (total)   ",
+            "MATCH (o:Observation) RETURN count(o) AS n",
+        ),
+        (
+            "Observations (w/triple)",
+            "MATCH (o:Observation) WHERE o.predicate IS NOT NULL RETURN count(o) AS n",
+        ),
+        (
+            "Cycles                 ",
+            "MATCH (c:ConsolidationCycle) RETURN count(c) AS n",
+        ),
+        (
+            "Distinct predicates    ",
+            "MATCH (f:Fact) RETURN count(DISTINCT f.predicate) AS n",
+        ),
     ] {
         let r = session.query_with(q).fetch_all().await?;
-        let n: i64 = r.rows().first().and_then(|row| row.get("n").ok()).unwrap_or(-1);
+        let n: i64 = r
+            .rows()
+            .first()
+            .and_then(|row| row.get("n").ok())
+            .unwrap_or(-1);
         println!("  {label}: {n}");
     }
 

@@ -73,10 +73,7 @@ pub fn argmax_with_confidence(logits: &ArrayView1<f32>) -> (usize, f32) {
 /// Numerically-stable softmax over a 1D logits array. Returns a vector
 /// of probabilities summing to 1.
 pub fn softmax_1d(logits: &ArrayView1<f32>) -> Vec<f32> {
-    let max_val = logits
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let max_val = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let exps: Vec<f32> = logits.iter().map(|&v| (v - max_val).exp()).collect();
     let sum: f32 = exps.iter().sum();
     if sum > 0.0 {
@@ -310,10 +307,7 @@ pub fn decode_srl_frame(
         words,
     );
 
-    let predicate_word = words
-        .get(predicate_idx)
-        .cloned()
-        .unwrap_or_default();
+    let predicate_word = words.get(predicate_idx).cloned().unwrap_or_default();
 
     SrlFrame {
         predicate_idx,
@@ -962,18 +956,13 @@ mod tests {
         let dep_rel_labels: Vec<String> = vec!["root".into(), "nsubj".into(), "obj".into()];
         let word_ids = vec![Some(0u32), Some(1), Some(2)];
 
-        let arc = ndarray::arr2(&[
-            [0.0_f32, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-        ]);
+        let arc = ndarray::arr2(&[[0.0_f32, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]]);
         let mut label = ndarray::Array3::<f32>::zeros((3, 3, 3));
         label[[0, 1, 1]] = 1.0; // 0 → 1 = nsubj
         label[[1, 1, 0]] = 1.0; // 1 → 1 = root
         label[[2, 1, 2]] = 1.0; // 2 → 1 = obj
 
-        let arcs =
-            decode_dep_arcs_biaffine(&arc.view(), &label.view(), &word_ids, &dep_rel_labels);
+        let arcs = decode_dep_arcs_biaffine(&arc.view(), &label.view(), &word_ids, &dep_rel_labels);
 
         assert_eq!(arcs.len(), 3);
         assert_eq!(arcs[0].dependent, 0);
@@ -1069,12 +1058,12 @@ mod tests {
     /// each test's `tag_indices` slice.
     fn srl_labels_fixture() -> Vec<String> {
         vec![
-            "O".into(),         // 0
-            "V".into(),         // 1
-            "B-ARG0".into(),    // 2
-            "I-ARG0".into(),    // 3
-            "B-ARG1".into(),    // 4
-            "I-ARG1".into(),    // 5
+            "O".into(),          // 0
+            "V".into(),          // 1
+            "B-ARG0".into(),     // 2
+            "I-ARG0".into(),     // 3
+            "B-ARG1".into(),     // 4
+            "I-ARG1".into(),     // 5
             "B-ARGM-TMP".into(), // 6
             "I-ARGM-TMP".into(), // 7
             "B-ARGM-LOC".into(), // 8

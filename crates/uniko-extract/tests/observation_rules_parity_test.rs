@@ -226,9 +226,9 @@ fn phase_b_oblique_state_modifier_single_parent() {
         vec!["Caroline".into()],
     );
     assert!(
-        texts.iter().any(|t| t.contains("Caroline")
-            && t.contains("tough")
-            && t.contains("single parent")),
+        texts
+            .iter()
+            .any(|t| t.contains("Caroline") && t.contains("tough") && t.contains("single parent")),
         "expected an observation joining 'Caroline', 'tough', 'single parent', got: {texts:?}",
     );
 }
@@ -270,7 +270,9 @@ fn phase_b_oblique_state_modifier_breakup() {
         vec!["Caroline".into()],
     );
     assert!(
-        texts.iter().any(|t| t.contains("Caroline") && t.contains("breakup")),
+        texts
+            .iter()
+            .any(|t| t.contains("Caroline") && t.contains("breakup")),
         "expected an observation joining 'Caroline' and 'breakup', got: {texts:?}",
     );
 }
@@ -293,9 +295,9 @@ fn phase_b_appositional_identity_sweden() {
         vec!["Caroline".into()],
     );
     assert!(
-        texts.iter().any(|t| t.contains("Sweden")
-            && t.contains("country")
-            && t.contains("Jon")),
+        texts
+            .iter()
+            .any(|t| t.contains("Sweden") && t.contains("country") && t.contains("Jon")),
         "expected an apposition observation linking speaker, 'country', and 'Sweden', got: {texts:?}",
     );
 }

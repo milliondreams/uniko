@@ -72,10 +72,7 @@ impl IntentProfile {
 
     /// First variant's text. Same back-compat reason as [`intent_vec`].
     pub fn keywords(&self) -> &str {
-        self.variants
-            .first()
-            .map(|v| v.text.as_str())
-            .unwrap_or("")
+        self.variants.first().map(|v| v.text.as_str()).unwrap_or("")
     }
 
     /// Resolve [`Self::entity_refs`] to graph seed [`NodeId`]s for the
@@ -88,10 +85,7 @@ impl IntentProfile {
     /// or organisations as Entities).  Returns a deduped Vec of
     /// resolved NodeIds; empty when no entity_ref resolves or when
     /// `entity_refs` itself is empty.
-    pub async fn resolve_seeds(
-        &self,
-        kb: &uniko_store::KnowledgeBase,
-    ) -> Vec<uniko_store::NodeId> {
+    pub async fn resolve_seeds(&self, kb: &uniko_store::KnowledgeBase) -> Vec<uniko_store::NodeId> {
         if self.entity_refs.is_empty() {
             return Vec::new();
         }
@@ -242,7 +236,11 @@ pub async fn build_intent_at(
                 vec_len = vector.len(),
                 "intent: variant built",
             );
-            QueryVariant { label, text, vector }
+            QueryVariant {
+                label,
+                text,
+                vector,
+            }
         })
         .collect();
 
@@ -252,8 +250,7 @@ pub async fn build_intent_at(
     // wall-clock now (least informative — relative phrases like "last
     // week" become meaningless in this fallback).
     let reference = reference_ts.unwrap_or_else(Utc::now);
-    let temporal_window = resolve_temporal_with_granularity(query, reference)
-        .map(|r| r.to_range());
+    let temporal_window = resolve_temporal_with_granularity(query, reference).map(|r| r.to_range());
     if let Some((lo, hi)) = temporal_window {
         tracing::info!(
             lo = %lo,
@@ -355,22 +352,40 @@ pub fn predict_answer_type(question: &str) -> Option<&'static str> {
     const RULES: &[(&str, &str)] = &[
         // Person
         (r"^(who|whose|by whom|with whom|to whom)\b", "person"),
-        (r"\bwhich (person|friend|coworker|colleague|teacher|doctor|partner)\b", "person"),
+        (
+            r"\bwhich (person|friend|coworker|colleague|teacher|doctor|partner)\b",
+            "person",
+        ),
         (r"\bwhat is (his|her|their) name\b", "person"),
         // Location
         (r"^where\b|^from where\b|^to where\b", "location"),
-        (r"\b(which|what) (city|country|place|state|park|address|venue|building|street|neighborhood|hotel|restaurant|cafe|store|airport)\b", "location"),
+        (
+            r"\b(which|what) (city|country|place|state|park|address|venue|building|street|neighborhood|hotel|restaurant|cafe|store|airport)\b",
+            "location",
+        ),
         // Date/Time
         (r"^when\b", "date"),
         (r"\bwhat (time|day|date|year|month|hour)\b", "date"),
         (r"\bhow long ago\b", "date"),
         // Measurement / Numeric
-        (r"^how (many|much|long|old|far|tall|big|fast|heavy|deep|wide)\b", "measurement"),
-        (r"\bhow many (days|years|months|weeks|hours|minutes|seconds|miles|km|kilometers)\b", "measurement"),
+        (
+            r"^how (many|much|long|old|far|tall|big|fast|heavy|deep|wide)\b",
+            "measurement",
+        ),
+        (
+            r"\bhow many (days|years|months|weeks|hours|minutes|seconds|miles|km|kilometers)\b",
+            "measurement",
+        ),
         // Organization
-        (r"\b(which|what) (company|organization|firm|university|college|school|team|brand|agency)\b", "organization"),
+        (
+            r"\b(which|what) (company|organization|firm|university|college|school|team|brand|agency)\b",
+            "organization",
+        ),
         // Work of art (currently bucketed under `other` in our schema)
-        (r"\b(which|what) (movie|book|song|album|game|show|film|novel|poem|painting)\b", "other"),
+        (
+            r"\b(which|what) (movie|book|song|album|game|show|film|novel|poem|painting)\b",
+            "other",
+        ),
     ];
 
     use regex::Regex;
@@ -396,7 +411,10 @@ mod tests {
 
     #[test]
     fn predicts_basic_wh() {
-        assert_eq!(predict_answer_type("Who attended the wedding?"), Some("person"));
+        assert_eq!(
+            predict_answer_type("Who attended the wedding?"),
+            Some("person")
+        );
         assert_eq!(
             predict_answer_type("Where did I attend my cousin's wedding?"),
             Some("location"),

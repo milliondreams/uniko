@@ -17,20 +17,62 @@ async fn main() -> anyhow::Result<()> {
     let session = kb.db().session();
 
     let counts = [
-        ("Facts                  ", "MATCH (f:Fact) RETURN count(f) AS n"),
-        ("Observations (total)   ", "MATCH (o:Observation) RETURN count(o) AS n"),
-        ("Observations (w/triple)", "MATCH (o:Observation) WHERE o.predicate IS NOT NULL RETURN count(o) AS n"),
-        ("Processed observations ", "MATCH (:ConsolidationCycle)-[:PROCESSED]->(o) RETURN count(o) AS n"),
-        ("ConsolidationCycles    ", "MATCH (c:ConsolidationCycle) RETURN count(c) AS n"),
-        ("SUPPORTED_BY edges     ", "MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN count(r) AS n"),
-        ("Facts with embedding   ", "MATCH (f:Fact) WHERE f.embedding IS NOT NULL RETURN count(f) AS n"),
-        ("Bench Participant     ", "MATCH (p:Participant {participant_id: 'bench-agent-conv-26'}) RETURN count(p) AS n"),
-        ("Participants total    ", "MATCH (p:Participant) RETURN count(p) AS n"),
-        ("Episodes               ", "MATCH (e:Episode) RETURN count(e) AS n"),
-        ("Episodes w/ embedding  ", "MATCH (e:Episode) WHERE e.embedding IS NOT NULL RETURN count(e) AS n"),
-        ("Entities (unstable=true)", "MATCH (e:Entity) WHERE e.unstable = true RETURN count(e) AS n"),
-        ("INVALIDATES edges      ", "MATCH (:Fact)-[r:INVALIDATES]->(:Fact) RETURN count(r) AS n"),
-        ("RECORDED_BY edges      ", "MATCH (:Episode)-[r:RECORDED_BY]->() RETURN count(r) AS n"),
+        (
+            "Facts                  ",
+            "MATCH (f:Fact) RETURN count(f) AS n",
+        ),
+        (
+            "Observations (total)   ",
+            "MATCH (o:Observation) RETURN count(o) AS n",
+        ),
+        (
+            "Observations (w/triple)",
+            "MATCH (o:Observation) WHERE o.predicate IS NOT NULL RETURN count(o) AS n",
+        ),
+        (
+            "Processed observations ",
+            "MATCH (:ConsolidationCycle)-[:PROCESSED]->(o) RETURN count(o) AS n",
+        ),
+        (
+            "ConsolidationCycles    ",
+            "MATCH (c:ConsolidationCycle) RETURN count(c) AS n",
+        ),
+        (
+            "SUPPORTED_BY edges     ",
+            "MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN count(r) AS n",
+        ),
+        (
+            "Facts with embedding   ",
+            "MATCH (f:Fact) WHERE f.embedding IS NOT NULL RETURN count(f) AS n",
+        ),
+        (
+            "Bench Participant     ",
+            "MATCH (p:Participant {participant_id: 'bench-agent-conv-26'}) RETURN count(p) AS n",
+        ),
+        (
+            "Participants total    ",
+            "MATCH (p:Participant) RETURN count(p) AS n",
+        ),
+        (
+            "Episodes               ",
+            "MATCH (e:Episode) RETURN count(e) AS n",
+        ),
+        (
+            "Episodes w/ embedding  ",
+            "MATCH (e:Episode) WHERE e.embedding IS NOT NULL RETURN count(e) AS n",
+        ),
+        (
+            "Entities (unstable=true)",
+            "MATCH (e:Entity) WHERE e.unstable = true RETURN count(e) AS n",
+        ),
+        (
+            "INVALIDATES edges      ",
+            "MATCH (:Fact)-[r:INVALIDATES]->(:Fact) RETURN count(r) AS n",
+        ),
+        (
+            "RECORDED_BY edges      ",
+            "MATCH (:Episode)-[r:RECORDED_BY]->() RETURN count(r) AS n",
+        ),
     ];
     for (label, q) in counts {
         let r = session.query_with(q).fetch_all().await?;

@@ -55,7 +55,10 @@ mod onnx_dump {
             println!("\n=== TARGET {i}: {text} ===");
             let results = pipeline.analyze_sentences(text).await.expect("analyze");
             for (s_idx, r) in results.iter().enumerate() {
-                println!("  S{s_idx}: cls={:?}  words={:?}", r.sentence_class, r.words);
+                println!(
+                    "  S{s_idx}: cls={:?}  words={:?}",
+                    r.sentence_class, r.words
+                );
                 let probs: Vec<(String, f32)> = labels
                     .cls_labels
                     .iter()
@@ -84,10 +87,7 @@ mod onnx_dump {
                     let head = if a.head == usize::MAX {
                         "ROOT".to_string()
                     } else {
-                        r.words
-                            .get(a.head)
-                            .cloned()
-                            .unwrap_or_else(|| "?".into())
+                        r.words.get(a.head).cloned().unwrap_or_else(|| "?".into())
                     };
                     println!("         {dep} -[{}]-> {head}", a.relation);
                 }
@@ -102,7 +102,10 @@ mod onnx_dump {
                     "Caroline",
                     &mut ctx,
                 );
-                println!("       OBS: {:?}", obs.iter().map(|o| &o.content).collect::<Vec<_>>());
+                println!(
+                    "       OBS: {:?}",
+                    obs.iter().map(|o| &o.content).collect::<Vec<_>>()
+                );
             }
         }
     }

@@ -71,9 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n== MATCH (c:ConsolidationCycle) RETURN id(c), c.cycle_id ==");
     let r = session
-        .query_with(
-            "MATCH (c:ConsolidationCycle) RETURN id(c) AS vid, c.cycle_id AS cid LIMIT 5",
-        )
+        .query_with("MATCH (c:ConsolidationCycle) RETURN id(c) AS vid, c.cycle_id AS cid LIMIT 5")
         .fetch_all()
         .await?;
     println!("rows: {}", r.rows().len());
@@ -107,7 +105,10 @@ async fn main() -> anyhow::Result<()> {
             .param("v", vid)
             .fetch_all()
             .await?;
-        println!("  labeled MATCH (:ConsolidationCycle) id={vid}: rows={}", r.rows().len());
+        println!(
+            "  labeled MATCH (:ConsolidationCycle) id={vid}: rows={}",
+            r.rows().len()
+        );
     }
 
     drop(session);
