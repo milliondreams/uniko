@@ -2,8 +2,10 @@
 
 // Rust guideline compliant
 
+use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use uniko_extract::ner::rules::extract_entities_rule_based;
+use uniko_extract::observations::temporal::resolve_temporal_with_granularity;
 use uniko_store::{KnowledgeBase, UnikoError};
 
 /// Content POS tags to keep for keyword extraction.
@@ -50,6 +52,11 @@ pub struct IntentProfile {
     /// downstream code should treat absence as "no signal", not
     /// "anything goes". Populated by [`predict_answer_type`].
     pub expected_answer_type: Option<&'static str>,
+    /// Half-open `[lo, hi)` temporal window parsed from the query (e.g.
+    /// "last May" → `[2025-05-01, 2025-06-01)`).  `None` when no
+    /// temporal phrase fires.  Drives the temporal-interval channel in
+    /// Phase 2 recall.
+    pub temporal_window: Option<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
 impl IntentProfile {
@@ -70,6 +77,52 @@ impl IntentProfile {
             .map(|v| v.text.as_str())
             .unwrap_or("")
     }
+
+    /// Resolve [`Self::entity_refs`] to graph seed [`NodeId`]s for the
+    /// spreading-activation channel.
+    ///
+    /// Each entity name is matched against `Entity.name` and
+    /// `Participant.name` in a single Cypher round-trip — both labels
+    /// are equally valid recall anchors (Caroline/Melanie show up as
+    /// Participants in the bench corpus, named entities like locations
+    /// or organisations as Entities).  Returns a deduped Vec of
+    /// resolved NodeIds; empty when no entity_ref resolves or when
+    /// `entity_refs` itself is empty.
+    pub async fn resolve_seeds(
+        &self,
+        kb: &uniko_store::KnowledgeBase,
+    ) -> Vec<uniko_store::NodeId> {
+        if self.entity_refs.is_empty() {
+            return Vec::new();
+        }
+        let session = kb.db().session();
+        let cypher = "UNWIND $names AS name \
+                      MATCH (n) \
+                      WHERE (n:Entity AND n.name = name) \
+                         OR (n:Participant AND n.name = name) \
+                      RETURN DISTINCT id(n) AS nid";
+        let names: Vec<uni_db::Value> = self
+            .entity_refs
+            .iter()
+            .map(|n| uni_db::Value::String(n.clone()))
+            .collect();
+        match session
+            .query_with(cypher)
+            .param("names", uni_db::Value::List(names))
+            .fetch_all()
+            .await
+        {
+            Ok(r) => r
+                .rows()
+                .iter()
+                .filter_map(|row| row.get::<i64>("nid").ok())
+                .collect(),
+            Err(e) => {
+                tracing::debug!(error = %e, "resolve_seeds query failed");
+                Vec::new()
+            }
+        }
+    }
 }
 
 /// Build an [`IntentProfile`] from a query string.
@@ -88,6 +141,26 @@ pub async fn build_intent(
     kb: &KnowledgeBase,
     query: &str,
     enabled_variants: &[String],
+) -> Result<IntentProfile, UnikoError> {
+    build_intent_at(kb, query, enabled_variants, None).await
+}
+
+/// Like [`build_intent`] but takes a `reference_ts` for temporal phrase
+/// resolution.  Callers that know the conversation/session time should
+/// pass it so phrases like "last May" resolve against the right
+/// baseline rather than wall-clock now.
+///
+/// `reference_ts = None` falls back to `Utc::now()`.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Embedding`] if the embedding runtime is
+/// unavailable for *every* requested variant.
+pub async fn build_intent_at(
+    kb: &KnowledgeBase,
+    query: &str,
+    enabled_variants: &[String],
+    reference_ts: Option<DateTime<Utc>>,
 ) -> Result<IntentProfile, UnikoError> {
     let analysis = analyze_query(kb, query).await;
     let entity_refs = analysis.entity_refs.clone();
@@ -173,11 +246,29 @@ pub async fn build_intent(
         })
         .collect();
 
+    // Resolve any temporal phrase in the query into a half-open
+    // [lo, hi) window for the temporal recall channel.  Reference time
+    // is the caller-supplied conversation timestamp when available, else
+    // wall-clock now (least informative — relative phrases like "last
+    // week" become meaningless in this fallback).
+    let reference = reference_ts.unwrap_or_else(Utc::now);
+    let temporal_window = resolve_temporal_with_granularity(query, reference)
+        .map(|r| r.to_range());
+    if let Some((lo, hi)) = temporal_window {
+        tracing::info!(
+            lo = %lo,
+            hi = %hi,
+            query = %query,
+            "intent: temporal window resolved",
+        );
+    }
+
     Ok(IntentProfile {
         variants,
         entity_refs,
         facet_count,
         expected_answer_type,
+        temporal_window,
     })
 }
 

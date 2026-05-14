@@ -174,6 +174,22 @@ fn default_phase2_mmr_duplicate_threshold() -> f64 {
     0.85
 }
 
+fn default_phase2_temporal_enabled() -> bool {
+    true
+}
+
+fn default_phase2_graph_enabled() -> bool {
+    true
+}
+
+fn default_phase2_graph_damping() -> f64 {
+    0.85
+}
+
+fn default_phase2_graph_max_iter() -> usize {
+    30
+}
+
 fn default_phase1_boost_alpha() -> f64 {
     0.3
 }
@@ -472,6 +488,26 @@ pub struct UnikoConfig {
     /// overlap.
     #[serde(default = "default_phase2_mmr_duplicate_threshold")]
     pub phase2_mmr_duplicate_threshold: f64,
+
+    /// Enable the temporal-interval channel in Phase 2 recall.  Fires
+    /// only when the query has a parsed temporal phrase.
+    #[serde(default = "default_phase2_temporal_enabled")]
+    pub phase2_temporal_enabled: bool,
+    /// Enable the graph spreading-activation channel in Phase 2.  Fires
+    /// only when the query has at least one resolvable entity seed.
+    #[serde(default = "default_phase2_graph_enabled")]
+    pub phase2_graph_enabled: bool,
+    /// PPR damping factor for the graph channel.  Standard 0.85.
+    #[serde(default = "default_phase2_graph_damping")]
+    pub phase2_graph_damping: f64,
+    /// PPR power-iteration cap for the graph channel.
+    #[serde(default = "default_phase2_graph_max_iter")]
+    pub phase2_graph_max_iter: usize,
+    /// Per-edge-type weight multipliers for graph propagation.  Empty
+    /// map means "use the built-in defaults" (see
+    /// `uniko_memory::recall::default_phase2_graph_edge_weights`).
+    #[serde(default)]
+    pub phase2_graph_edge_weights: std::collections::HashMap<String, f64>,
 }
 
 impl Default for UnikoConfig {
@@ -518,6 +554,11 @@ impl Default for UnikoConfig {
             phase2_coverage_threshold: 0.65,
             phase2_mmr_lambda: default_phase2_mmr_lambda(),
             phase2_mmr_duplicate_threshold: default_phase2_mmr_duplicate_threshold(),
+            phase2_temporal_enabled: default_phase2_temporal_enabled(),
+            phase2_graph_enabled: default_phase2_graph_enabled(),
+            phase2_graph_damping: default_phase2_graph_damping(),
+            phase2_graph_max_iter: default_phase2_graph_max_iter(),
+            phase2_graph_edge_weights: std::collections::HashMap::new(),
         }
     }
 }

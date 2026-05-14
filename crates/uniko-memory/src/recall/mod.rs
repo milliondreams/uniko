@@ -11,7 +11,7 @@
 pub mod intent;
 pub mod mmr;
 
-pub use intent::{IntentProfile, build_intent};
+pub use intent::{IntentProfile, build_intent, build_intent_at};
 
 use std::collections::HashMap;
 
@@ -186,6 +186,25 @@ pub struct RecallConfig {
     /// Token-overlap (Jaccard) threshold above which a Phase 2 hit is
     /// dropped as a hard duplicate.  Spec default 0.85.
     pub phase2_mmr_duplicate_threshold: f64,
+    /// Enable the temporal-interval channel in Phase 2.  When the query
+    /// has a parsed [`IntentProfile::temporal_window`], fans out
+    /// BTIC-overlap + BTree-range queries across Fact / Observation /
+    /// Episode and folds the hits into the RRF pool.  Default `true`.
+    pub phase2_temporal_enabled: bool,
+    /// Enable the graph-spreading-activation channel in Phase 2.  When
+    /// the query has any entity refs, runs weighted PPR over the entity
+    /// graph and folds the activated nodes into the RRF pool.  Default
+    /// `true`.
+    pub phase2_graph_enabled: bool,
+    /// PPR damping factor for the graph channel.  Standard 0.85.
+    pub phase2_graph_damping: f64,
+    /// PPR power-iteration cap.  Convergence is usually reached within
+    /// 10-20 iterations; 30 is conservative.
+    pub phase2_graph_max_iter: usize,
+    /// Per-edge-type weight multipliers for the graph channel
+    /// (Hindsight's `μ(ℓ)`).  Unmapped edge types default to 1.0.  See
+    /// [`default_phase2_graph_edge_weights`].
+    pub phase2_graph_edge_weights: std::collections::HashMap<String, f64>,
 }
 
 impl Default for RecallConfig {
@@ -216,8 +235,35 @@ impl Default for RecallConfig {
             phase2_coverage_gate: 0.65,
             phase2_mmr_lambda: 0.7,
             phase2_mmr_duplicate_threshold: 0.85,
+            phase2_temporal_enabled: true,
+            phase2_graph_enabled: true,
+            phase2_graph_damping: 0.85,
+            phase2_graph_max_iter: 30,
+            phase2_graph_edge_weights: default_phase2_graph_edge_weights(),
         }
     }
+}
+
+/// Default edge-type weights for the graph spreading-activation
+/// channel.  Higher weights mean activation propagates more readily
+/// along that relation type.  Unmapped edge types default to 1.0.
+///
+/// Tuned so that semantic edges (entity links, fact support) dominate
+/// over structural ones (session containment, chronological chaining).
+pub fn default_phase2_graph_edge_weights() -> std::collections::HashMap<String, f64> {
+    [
+        ("ABOUT", 1.0),
+        ("MENTIONS", 1.0),
+        ("SUPPORTED_BY", 0.9),
+        ("OBSERVED_IN", 0.7),
+        ("HAS_CHUNK", 0.5),
+        ("IN_SESSION", 0.3),
+        ("RECORDED_BY", 0.3),
+        ("FOLLOWED_BY", 0.3),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect()
 }
 
 impl RecallConfig {
@@ -249,6 +295,15 @@ impl RecallConfig {
             phase2_coverage_gate: cfg.phase2_coverage_threshold,
             phase2_mmr_lambda: cfg.phase2_mmr_lambda,
             phase2_mmr_duplicate_threshold: cfg.phase2_mmr_duplicate_threshold,
+            phase2_temporal_enabled: cfg.phase2_temporal_enabled,
+            phase2_graph_enabled: cfg.phase2_graph_enabled,
+            phase2_graph_damping: cfg.phase2_graph_damping,
+            phase2_graph_max_iter: cfg.phase2_graph_max_iter,
+            phase2_graph_edge_weights: if cfg.phase2_graph_edge_weights.is_empty() {
+                default_phase2_graph_edge_weights()
+            } else {
+                cfg.phase2_graph_edge_weights.clone()
+            },
         }
     }
 }
@@ -760,11 +815,11 @@ async fn phase2_expand(
         .unwrap_or("");
     let has_vec = !qvec.is_empty();
     let has_txt = !qtxt.is_empty();
-    if !has_vec && !has_txt {
+    let has_temporal = intent.temporal_window.is_some() && config.phase2_temporal_enabled;
+    let has_graph = !intent.entity_refs.is_empty() && config.phase2_graph_enabled;
+    if !has_vec && !has_txt && !has_temporal && !has_graph {
         return Vec::new();
     }
-
-    let session = kb.db().session();
 
     // (label, mode, content_field, top_k).  mode ∈ {"vector","fulltext"}.
     let sources: &[(&str, &str, &str, i64)] = &[
@@ -775,88 +830,44 @@ async fn phase2_expand(
         ("Message", "fulltext", "content", 10),
     ];
 
-    let mut per_source: Vec<Vec<RankedHit>> = Vec::with_capacity(sources.len());
+    // Fire all sources in parallel.  Each task returns `Vec::new()` on
+    // internal failure (consistent with the previous per-source
+    // `continue` semantics), so no source can fail the phase.
+    let mut futs: Vec<futures::future::BoxFuture<'_, Vec<RankedHit>>> =
+        Vec::with_capacity(sources.len() + 2);
     for &(label, mode, content_field, top_k) in sources {
-        let hits = match mode {
-            "vector" => {
-                if !has_vec {
-                    continue;
-                }
-                let cypher = format!(
-                    "MATCH (m:{label}) \
-                     WHERE m.embedding IS NOT NULL \
-                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                            coalesce(m.{content_field}, '') AS content, \
-                            similar_to(m.embedding, $qvec) AS score \
-                     ORDER BY score DESC LIMIT $lim"
-                );
-                let result = session
-                    .query_with(&cypher)
-                    .param("qvec", uni_db::Value::Vector(qvec.to_vec()))
-                    .param("lim", top_k)
-                    .fetch_all()
-                    .await;
-                match result {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::debug!(label, mode, error = %e, "phase2 query failed");
-                        continue;
-                    }
-                }
-            }
-            "fulltext" => {
-                if !has_txt {
-                    continue;
-                }
-                let cypher = format!(
-                    "MATCH (m:{label}) \
-                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                            coalesce(m.{content_field}, '') AS content, \
-                            similar_to(m.{content_field}, $qtxt) AS score \
-                     ORDER BY score DESC LIMIT $lim"
-                );
-                let result = session
-                    .query_with(&cypher)
-                    .param("qtxt", qtxt)
-                    .param("lim", top_k)
-                    .fetch_all()
-                    .await;
-                match result {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::debug!(label, mode, error = %e, "phase2 query failed");
-                        continue;
-                    }
-                }
-            }
-            _ => continue,
+        let skip = match mode {
+            "vector" => !has_vec,
+            "fulltext" => !has_txt,
+            _ => true,
         };
-
-        let mut ranked: Vec<RankedHit> = Vec::with_capacity(hits.rows().len());
-        for row in hits.rows() {
-            let Ok(nid) = row.get::<i64>("nid") else {
-                continue;
-            };
-            let lbl: String = row.get("lbl").unwrap_or_else(|_| label.into());
-            let content: String = row.get("content").unwrap_or_default();
-            let score: f64 = row.get("score").unwrap_or(0.0);
-            if content.is_empty() {
-                continue;
-            }
-            ranked.push(RankedHit {
-                node_id: nid,
-                label: lbl,
-                content,
-                raw_score: score,
-            });
+        if skip {
+            continue;
         }
-        // Per-source min-max normalisation to [0,1] for the RRF input.
-        // Since `rrf_fuse` only cares about rank order, this is purely
-        // diagnostic — but keeps `raw_score` comparable in any debug
-        // dump.
-        normalize_scores_in_place(&mut ranked);
-        per_source.push(ranked);
+        let qvec_ref = qvec;
+        let qtxt_owned = qtxt.to_string();
+        futs.push(Box::pin(run_phase2_source(
+            kb,
+            label,
+            mode,
+            content_field,
+            top_k,
+            qvec_ref,
+            qtxt_owned,
+        )));
     }
+    if has_temporal {
+        futs.push(Box::pin(phase2_temporal(kb, intent, config)));
+    }
+    if has_graph {
+        futs.push(Box::pin(phase2_graph_activation(kb, intent, config)));
+    }
+
+    let per_source: Vec<Vec<RankedHit>> = futures::future::join_all(futs)
+        .await
+        .into_iter()
+        .filter(|v| !v.is_empty())
+        .collect();
 
     if per_source.is_empty() {
         return Vec::new();
@@ -889,6 +900,373 @@ async fn phase2_expand(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     items
+}
+
+/// Run a single Phase 2 vector-or-fulltext source.
+///
+/// Returns `Vec::new()` on internal failure so the calling fan-out can
+/// tolerate per-source errors without poisoning the whole phase.  This
+/// is the parallel-callable building block fed into
+/// `futures::future::join_all` inside [`phase2_expand`].
+async fn run_phase2_source(
+    kb: &KnowledgeBase,
+    label: &str,
+    mode: &str,
+    content_field: &str,
+    top_k: i64,
+    qvec: &[f32],
+    qtxt: String,
+) -> Vec<RankedHit> {
+    let start = std::time::Instant::now();
+    let session = kb.db().session();
+
+    let result = match mode {
+        "vector" => {
+            let cypher = format!(
+                "MATCH (m:{label}) \
+                 WHERE m.embedding IS NOT NULL \
+                 RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                        coalesce(m.{content_field}, '') AS content, \
+                        similar_to(m.embedding, $qvec) AS score \
+                 ORDER BY score DESC LIMIT $lim"
+            );
+            session
+                .query_with(&cypher)
+                .param("qvec", uni_db::Value::Vector(qvec.to_vec()))
+                .param("lim", top_k)
+                .fetch_all()
+                .await
+        }
+        "fulltext" => {
+            let cypher = format!(
+                "MATCH (m:{label}) \
+                 RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                        coalesce(m.{content_field}, '') AS content, \
+                        similar_to(m.{content_field}, $qtxt) AS score \
+                 ORDER BY score DESC LIMIT $lim"
+            );
+            session
+                .query_with(&cypher)
+                .param("qtxt", qtxt.as_str())
+                .param("lim", top_k)
+                .fetch_all()
+                .await
+        }
+        _ => return Vec::new(),
+    };
+
+    let hits = match result {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(label, mode, error = %e, "phase2 query failed");
+            return Vec::new();
+        }
+    };
+
+    let mut ranked: Vec<RankedHit> = Vec::with_capacity(hits.rows().len());
+    for row in hits.rows() {
+        let Ok(nid) = row.get::<i64>("nid") else {
+            continue;
+        };
+        let lbl: String = row.get("lbl").unwrap_or_else(|_| label.into());
+        let content: String = row.get("content").unwrap_or_default();
+        let score: f64 = row.get("score").unwrap_or(0.0);
+        if content.is_empty() {
+            continue;
+        }
+        ranked.push(RankedHit {
+            node_id: nid,
+            label: lbl,
+            content,
+            raw_score: score,
+        });
+    }
+    normalize_scores_in_place(&mut ranked);
+    tracing::debug!(
+        label,
+        mode,
+        hits = ranked.len(),
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "phase2 source complete"
+    );
+    ranked
+}
+
+/// Phase 2 temporal-interval channel.
+///
+/// When the query has a parsed `[lo, hi)` temporal window
+/// (`IntentProfile.temporal_window`), fans out three queries in
+/// parallel:
+///
+/// - **Fact**: BTIC overlap on `valid_at` via the `btic_overlaps()`
+///   Cypher UDF.  Score: flat `1.0` (overlap is binary).
+/// - **Observation**: BTree range scan on `temporal_anchor`.
+///   Score: `1.0 / (1.0 + days_from_window_center)` to favour hits
+///   closer to the middle of the window.
+/// - **Episode**: BTree range scan on `timestamp`.  Same proximity
+///   scoring as Observation.
+///
+/// Returns hits in a single ranked list — RRF treats them as one
+/// channel.  Empty Vec when the window is None or all queries fail.
+async fn phase2_temporal(
+    kb: &KnowledgeBase,
+    intent: &IntentProfile,
+    _config: &RecallConfig,
+) -> Vec<RankedHit> {
+    let Some((lo, hi)) = intent.temporal_window else {
+        return Vec::new();
+    };
+    let start = std::time::Instant::now();
+
+    // Cypher params: BTIC value for Fact overlap, day-aligned DateTime
+    // values for Observation/Episode BTree range scans.
+    let qbtic = temporal_window_to_btic_value(lo, hi);
+    let lo_val = uniko_store::types::datetime_value(lo);
+    let hi_val = uniko_store::types::datetime_value(hi);
+
+    let session = kb.db().session();
+    let (facts, obs, eps) = tokio::join!(
+        async {
+            let cypher = "MATCH (f:Fact) \
+                          WHERE f.valid_at IS NOT NULL \
+                            AND btic_overlaps(f.valid_at, $qbtic) \
+                          RETURN id(f) AS nid, labels(f)[0] AS lbl, \
+                                 (coalesce(f.subject, '') + ' ' \
+                                  + coalesce(f.predicate, '') + ' ' \
+                                  + coalesce(f.object, '')) AS content \
+                          LIMIT $lim";
+            session
+                .query_with(cypher)
+                .param("qbtic", qbtic.clone())
+                .param("lim", 20i64)
+                .fetch_all()
+                .await
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "phase2_temporal Fact query failed");
+                })
+                .ok()
+        },
+        async {
+            let cypher = "MATCH (o:Observation) \
+                          WHERE o.temporal_anchor >= $lo \
+                            AND o.temporal_anchor < $hi \
+                          RETURN id(o) AS nid, labels(o)[0] AS lbl, \
+                                 coalesce(o.content, '') AS content \
+                          LIMIT $lim";
+            session
+                .query_with(cypher)
+                .param("lo", lo_val.clone())
+                .param("hi", hi_val.clone())
+                .param("lim", 20i64)
+                .fetch_all()
+                .await
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "phase2_temporal Observation query failed");
+                })
+                .ok()
+        },
+        async {
+            let cypher = "MATCH (e:Episode) \
+                          WHERE e.timestamp >= $lo \
+                            AND e.timestamp < $hi \
+                          RETURN id(e) AS nid, labels(e)[0] AS lbl, \
+                                 coalesce(e.action_type, '') AS content \
+                          LIMIT $lim";
+            session
+                .query_with(cypher)
+                .param("lo", lo_val.clone())
+                .param("hi", hi_val.clone())
+                .param("lim", 10i64)
+                .fetch_all()
+                .await
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "phase2_temporal Episode query failed");
+                })
+                .ok()
+        }
+    );
+
+    // Flat score 1.0 for every hit — the window is the discriminator,
+    // not proximity-within-window.  RRF rank order is what matters
+    // downstream, and a narrow query window already restricts the
+    // candidate set tightly.
+    let mut ranked: Vec<RankedHit> = Vec::new();
+    for (res, default_label) in [
+        (facts, "Fact"),
+        (obs, "Observation"),
+        (eps, "Episode"),
+    ] {
+        let Some(res) = res else { continue };
+        for row in res.rows() {
+            let Ok(nid) = row.get::<i64>("nid") else { continue };
+            let lbl: String = row.get("lbl").unwrap_or_else(|_| default_label.into());
+            let content: String = row.get("content").unwrap_or_default();
+            if content.trim().is_empty() {
+                continue;
+            }
+            ranked.push(RankedHit {
+                node_id: nid,
+                label: lbl,
+                content,
+                raw_score: 1.0,
+            });
+        }
+    }
+
+    normalize_scores_in_place(&mut ranked);
+    tracing::debug!(
+        hits = ranked.len(),
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        lo = %lo,
+        hi = %hi,
+        "phase2_temporal complete",
+    );
+    ranked
+}
+
+/// Phase 2 graph spreading-activation channel.
+///
+/// Resolves the query's `entity_refs` to graph seed NodeIds, runs
+/// edge-weight-aware personalized PageRank from those seeds, then
+/// converts the top activated nodes into `RankedHit`s.  Edge-type
+/// weights bias propagation toward semantic relations (ABOUT,
+/// MENTIONS, SUPPORTED_BY) and away from structural ones (IN_SESSION,
+/// FOLLOWED_BY).  See [`default_phase2_graph_edge_weights`].
+///
+/// Excludes the seed nodes themselves from output — they already
+/// dominate by construction and the recall bundle gains nothing from
+/// echoing the query's entity names back.
+///
+/// Returns empty Vec when seed resolution yields nothing, PPR fails,
+/// or no activated nodes have non-empty content.
+async fn phase2_graph_activation(
+    kb: &KnowledgeBase,
+    intent: &IntentProfile,
+    config: &RecallConfig,
+) -> Vec<RankedHit> {
+    let start = std::time::Instant::now();
+    let seeds = intent.resolve_seeds(kb).await;
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+
+    let top_k = (config.per_variant_limit.max(15)).saturating_mul(2);
+    let ppr_result = match kb
+        .personalized_pagerank_weighted(
+            &seeds,
+            config.phase2_graph_damping,
+            config.phase2_graph_max_iter,
+            top_k,
+            Some(&config.phase2_graph_edge_weights),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(error = %e, "phase2_graph_activation PPR failed");
+            return Vec::new();
+        }
+    };
+
+    if ppr_result.scores.is_empty() {
+        return Vec::new();
+    }
+
+    // Drop seed nodes from output and collect the rest.  We need their
+    // label + a content string suitable for downstream RRF / rerank.
+    let seed_set: std::collections::HashSet<NodeId> = seeds.iter().copied().collect();
+    let vids: Vec<NodeId> = ppr_result
+        .scores
+        .iter()
+        .filter(|(nid, _)| !seed_set.contains(nid))
+        .map(|(nid, _)| *nid)
+        .collect();
+    if vids.is_empty() {
+        return Vec::new();
+    }
+    let score_by_nid: HashMap<NodeId, f64> = ppr_result.scores.into_iter().collect();
+
+    // Pull labels + a best-effort content field for each activated node
+    // in a single Cypher round-trip.  `content` falls back through the
+    // common text-bearing fields across label types.
+    let session = kb.db().session();
+    let cypher = "UNWIND $nids AS nid \
+                  MATCH (n) WHERE id(n) = nid \
+                  RETURN nid, labels(n)[0] AS lbl, \
+                         coalesce(n.content, \
+                                  n.action_type, \
+                                  (coalesce(n.subject, '') + ' ' \
+                                   + coalesce(n.predicate, '') + ' ' \
+                                   + coalesce(n.object, '')), \
+                                  n.name, \
+                                  '') AS content";
+    let vids_param: Vec<uni_db::Value> = vids.iter().map(|&v| uni_db::Value::Int(v)).collect();
+    let r = match session
+        .query_with(cypher)
+        .param("nids", uni_db::Value::List(vids_param))
+        .fetch_all()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(error = %e, "phase2_graph_activation node fetch failed");
+            return Vec::new();
+        }
+    };
+
+    let mut ranked: Vec<RankedHit> = Vec::with_capacity(r.rows().len());
+    for row in r.rows() {
+        let Ok(nid) = row.get::<i64>("nid") else { continue };
+        let lbl: String = row.get("lbl").unwrap_or_default();
+        let content: String = row.get("content").unwrap_or_default();
+        if content.trim().is_empty() {
+            continue;
+        }
+        // Skip entities themselves — they're recall anchors, not items
+        // we want to show in the bundle.  Same exclusion downstream
+        // code in Phase 3 entity fan-out applies.
+        if lbl == "Entity" || lbl == "Participant" {
+            continue;
+        }
+        let score = score_by_nid.get(&nid).copied().unwrap_or(0.0);
+        ranked.push(RankedHit {
+            node_id: nid,
+            label: lbl,
+            content,
+            raw_score: score,
+        });
+    }
+    // PPR's natural ordering is already top-down by score, but the
+    // UNWIND/MATCH round-trip doesn't preserve order — re-sort here.
+    ranked.sort_by(|a, b| {
+        b.raw_score
+            .partial_cmp(&a.raw_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    normalize_scores_in_place(&mut ranked);
+    tracing::debug!(
+        seeds = seeds.len(),
+        hits = ranked.len(),
+        iterations = ppr_result.iterations,
+        converged = ppr_result.converged,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "phase2_graph_activation complete",
+    );
+    ranked
+}
+
+/// Build a `Value::Temporal(Btic { ... })` covering `[lo, hi)` for use
+/// as a Cypher parameter to the `btic_overlaps()` UDF.
+fn temporal_window_to_btic_value(
+    lo: chrono::DateTime<chrono::Utc>,
+    hi: chrono::DateTime<chrono::Utc>,
+) -> uni_db::Value {
+    let btic = uniko_store::schema::btic::btic_query_window(lo, hi);
+    uni_db::Value::Temporal(uni_db::common::TemporalValue::Btic {
+        lo: btic.lo(),
+        hi: btic.hi(),
+        meta: btic.meta(),
+    })
 }
 
 /// Min-max normalise a `RankedHit` list's `raw_score` field in-place

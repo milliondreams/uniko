@@ -196,6 +196,32 @@ impl KnowledgeBase {
         max_iter: usize,
         top_k: usize,
     ) -> Result<PageRankResult> {
+        self.personalized_pagerank_weighted(seeds, damping, max_iter, top_k, None)
+            .await
+    }
+
+    /// Personalized PageRank with per-edge-type weight multipliers.
+    ///
+    /// Generalises [`personalized_pagerank`] by letting callers bias
+    /// propagation along specific relation types — mirrors Hindsight's
+    /// `μ(ℓ)` link-type multiplier (arxiv:2512.12818).  Weight `w` on
+    /// edge type `e` scales the activation flowing through any
+    /// `(_)-[e]->(_)` relation.  Unmapped edge types default to `1.0`
+    /// (same as the vanilla algorithm).
+    ///
+    /// Pass `edge_weights = None` for the uniform-weight case.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] when the adjacency fetch fails.
+    pub async fn personalized_pagerank_weighted(
+        &self,
+        seeds: &[NodeId],
+        damping: f64,
+        max_iter: usize,
+        top_k: usize,
+        edge_weights: Option<&HashMap<String, f64>>,
+    ) -> Result<PageRankResult> {
         if seeds.is_empty() {
             return Ok(PageRankResult {
                 scores: Vec::new(),
@@ -204,15 +230,16 @@ impl KnowledgeBase {
             });
         }
 
-        // 1. Fetch the adjacency list from the graph.
+        // 1. Fetch the adjacency list from the graph, including edge type
+        //    so we can apply per-type multipliers.
         let session = self.db.session();
         let result = session
-            .query("MATCH (a)-[r]->(b) RETURN id(a) AS src, id(b) AS dst")
+            .query("MATCH (a)-[r]->(b) RETURN id(a) AS src, id(b) AS dst, type(r) AS etype")
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
 
-        // Build adjacency: src -> [dst, dst, ...]
-        let mut out_edges: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        // Build weighted adjacency: src -> [(dst, weight), ...]
+        let mut out_edges: HashMap<NodeId, Vec<(NodeId, f64)>> = HashMap::new();
         let mut all_nodes: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
 
         for row in result.rows() {
@@ -222,7 +249,17 @@ impl KnowledgeBase {
             let dst: i64 = row
                 .get("dst")
                 .map_err(|e| UnikoError::Storage(e.to_string()))?;
-            out_edges.entry(src).or_default().push(dst);
+            let etype: String = row.get("etype").unwrap_or_default();
+            let w = edge_weights
+                .and_then(|m| m.get(&etype).copied())
+                .unwrap_or(1.0);
+            // Drop zero-weight edges entirely — they don't contribute.
+            if w == 0.0 {
+                all_nodes.insert(src);
+                all_nodes.insert(dst);
+                continue;
+            }
+            out_edges.entry(src).or_default().push((dst, w));
             all_nodes.insert(src);
             all_nodes.insert(dst);
         }
@@ -244,7 +281,9 @@ impl KnowledgeBase {
             .map(|&n| (n, *teleport.get(&n).unwrap_or(&0.0)))
             .collect();
 
-        // 3. Power iteration.
+        // 3. Power iteration with weighted propagation.
+        //    Each src divides its score among neighbours proportional to
+        //    each edge's weight (sum-of-weights replaces out-degree).
         const EPSILON: f64 = 1e-6;
         let mut converged = false;
         let mut iterations = 0;
@@ -253,22 +292,22 @@ impl KnowledgeBase {
             iterations += 1;
             let mut new_scores: HashMap<NodeId, f64> = HashMap::new();
 
-            // Teleport component.
             for &node in &all_nodes {
                 let tp = teleport.get(&node).copied().unwrap_or(0.0);
                 new_scores.insert(node, (1.0 - damping) * tp);
             }
 
-            // Propagation component.
             for (&src, neighbors) in &out_edges {
-                let out_deg = neighbors.len() as f64;
-                let contrib = damping * scores[&src] / out_deg;
-                for &dst in neighbors {
-                    *new_scores.entry(dst).or_insert(0.0) += contrib;
+                let total_w: f64 = neighbors.iter().map(|(_, w)| *w).sum();
+                if total_w <= 0.0 {
+                    continue;
+                }
+                let base = damping * scores[&src] / total_w;
+                for &(dst, w) in neighbors {
+                    *new_scores.entry(dst).or_insert(0.0) += base * w;
                 }
             }
 
-            // Check convergence.
             let max_diff = all_nodes
                 .iter()
                 .map(|n| {

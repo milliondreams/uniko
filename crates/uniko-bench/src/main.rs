@@ -113,6 +113,18 @@ struct Cli {
     #[arg(long)]
     extract_triples_llm_alias: Option<String>,
 
+    /// Disable the graph spreading-activation channel in Phase 2 recall.
+    /// Default: on.  Channel only fires when the query has at least one
+    /// resolvable entity seed.
+    #[arg(long)]
+    no_phase2_graph: bool,
+
+    /// Disable the temporal-interval channel in Phase 2 recall.
+    /// Default: on.  Channel only fires when the query has a parsed
+    /// temporal phrase (e.g. "last May", "yesterday").
+    #[arg(long)]
+    no_phase2_temporal: bool,
+
     /// Path to xervo model catalog JSON file.
     #[arg(long)]
     catalog: Option<PathBuf>,
@@ -268,6 +280,8 @@ async fn main() -> Result<()> {
         }
     }
     config.phase1_strategy = cli.phase1_strategy.clone();
+    config.phase2_graph_enabled = !cli.no_phase2_graph;
+    config.phase2_temporal_enabled = !cli.no_phase2_temporal;
     config.phase1_boost_alpha = cli.phase1_boost_alpha;
     if !cli.variants.trim().is_empty() {
         config.query_variants = cli

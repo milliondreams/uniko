@@ -13,13 +13,97 @@
 
 use std::sync::OnceLock;
 
-use chrono::{DateTime, Datelike, Duration, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc, Weekday};
 use regex::Regex;
+
+/// Granularity of a resolved temporal expression.
+///
+/// Used to derive a `[lo, hi)` retrieval window — "last May" widens to
+/// the whole month, "yesterday" to one day, etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemporalGranularity {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+/// A temporal expression resolved to a concrete point + its semantic
+/// granularity.  See [`resolve_temporal_with_granularity`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTemporal {
+    /// The resolved point in time — usually the start of the period
+    /// implied by the phrase (e.g. "last May" → 2025-05-01).
+    pub point: DateTime<Utc>,
+    /// Semantic granularity of the original phrase.
+    pub granularity: TemporalGranularity,
+}
+
+impl ResolvedTemporal {
+    /// Convert this resolved phrase into a half-open `[lo, hi)`
+    /// retrieval window aligned to its [`granularity`](Self::granularity).
+    ///
+    /// - `Day`:   `[start-of-day(point), start-of-next-day(point))`
+    /// - `Week`:  `[point, point + 7d)`
+    /// - `Month`: `[first-of-month, first-of-next-month)`
+    /// - `Year`:  `[Jan 1, Jan 1 next year)`
+    #[must_use]
+    pub fn to_range(&self) -> (DateTime<Utc>, DateTime<Utc>) {
+        match self.granularity {
+            TemporalGranularity::Day => {
+                let day = self.point.date_naive();
+                let lo = day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+                let hi = day
+                    .succ_opt()
+                    .unwrap_or(day)
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc();
+                (lo, hi)
+            }
+            TemporalGranularity::Week => (self.point, self.point + Duration::days(7)),
+            TemporalGranularity::Month => {
+                let y = self.point.year();
+                let m = self.point.month();
+                let lo = NaiveDate::from_ymd_opt(y, m, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc();
+                let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+                let hi = NaiveDate::from_ymd_opt(ny, nm, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc();
+                (lo, hi)
+            }
+            TemporalGranularity::Year => {
+                let y = self.point.year();
+                let lo = NaiveDate::from_ymd_opt(y, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc();
+                let hi = NaiveDate::from_ymd_opt(y + 1, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc();
+                (lo, hi)
+            }
+        }
+    }
+}
 
 /// Resolve a temporal expression in `text` relative to `reference`.
 ///
 /// Returns the resolved [`DateTime<Utc>`], or the unchanged `reference`
 /// when no temporal expression is found.
+///
+/// Thin wrapper over [`resolve_temporal_with_granularity`]; callers that
+/// also need the granularity (e.g. to derive a retrieval window) should
+/// use that instead.
 ///
 /// Supported patterns (matched in priority order):
 /// - Generic relative: `today`, `tomorrow`, `yesterday`
@@ -31,74 +115,176 @@ use regex::Regex;
 /// - Month relative: `in January..December` (resolves to nearest past
 ///   occurrence)
 pub fn resolve_temporal(text: &str, reference: DateTime<Utc>) -> DateTime<Utc> {
+    resolve_temporal_with_granularity(text, reference)
+        .map(|r| r.point)
+        .unwrap_or(reference)
+}
+
+/// Resolve a temporal expression in `text` relative to `reference`, also
+/// returning its semantic [`TemporalGranularity`].
+///
+/// Returns `None` when no temporal expression is recognised — distinct
+/// from [`resolve_temporal`], which returns `reference` on no-match.
+/// The granularity lets callers derive a `[lo, hi)` retrieval window
+/// via [`ResolvedTemporal::to_range`].
+pub fn resolve_temporal_with_granularity(
+    text: &str,
+    reference: DateTime<Utc>,
+) -> Option<ResolvedTemporal> {
     let lower = text.to_lowercase();
 
     // ── Highest-priority literal anchors ──────────────────────────
     if lower.contains("yesterday") {
-        return reference - Duration::days(1);
+        return Some(ResolvedTemporal {
+            point: reference - Duration::days(1),
+            granularity: TemporalGranularity::Day,
+        });
     }
     if lower.contains("tomorrow") {
-        return reference + Duration::days(1);
+        return Some(ResolvedTemporal {
+            point: reference + Duration::days(1),
+            granularity: TemporalGranularity::Day,
+        });
     }
-    // Match "today" only as a whole word so "todays" / "today's"
-    // (which usually appear in unrelated contexts) don't accidentally
-    // trigger.  Also reject "today's" specifically.
     if has_word(&lower, "today") {
-        return reference;
+        return Some(ResolvedTemporal {
+            point: reference,
+            granularity: TemporalGranularity::Day,
+        });
     }
 
-    // ── Weekend handling — checked before generic "last X" / "next X"
-    // because "last weekend" / "next weekend" need a different
-    // resolution semantics than "last week".
+    // ── Weekend handling ──────────────────────────────────────────
     if let Some(delta) = parse_weekend(&lower) {
-        return reference + delta;
+        return Some(ResolvedTemporal {
+            point: reference + delta,
+            granularity: TemporalGranularity::Week,
+        });
     }
 
     // ── "N {unit} ago" and "in N {unit}" ──────────────────────────
-    if let Some(delta) = parse_n_ago(&lower) {
-        return reference - delta;
+    if let Some((delta, gran)) = parse_n_ago_with_gran(&lower) {
+        return Some(ResolvedTemporal {
+            point: reference - delta,
+            granularity: gran,
+        });
     }
-    if let Some(delta) = parse_in_n(&lower) {
-        return reference + delta;
+    if let Some((delta, gran)) = parse_in_n_with_gran(&lower) {
+        return Some(ResolvedTemporal {
+            point: reference + delta,
+            granularity: gran,
+        });
     }
 
-    // ── Weekday relative ("last Friday", "Last Fri", "this Tuesday",
-    //                       "next Monday") ─────────────────────────
-    if let Some(resolved) = parse_relative_weekday(&lower, reference) {
-        return resolved;
+    // ── Weekday relative ──────────────────────────────────────────
+    if let Some(point) = parse_relative_weekday(&lower, reference) {
+        return Some(ResolvedTemporal {
+            point,
+            granularity: TemporalGranularity::Day,
+        });
     }
 
-    // ── "last week|month|year" / "next week|month|year" ────────────
+    // ── "last week|month|year" / "next week|month|year" ───────────
     if lower.contains("last week") {
-        return reference - Duration::weeks(1);
+        return Some(ResolvedTemporal {
+            point: reference - Duration::weeks(1),
+            granularity: TemporalGranularity::Week,
+        });
     }
     if lower.contains("last month") {
-        return reference - Duration::days(30);
+        return Some(ResolvedTemporal {
+            point: reference - Duration::days(30),
+            granularity: TemporalGranularity::Month,
+        });
     }
     if lower.contains("last year") {
-        return reference
-            .with_year(reference.year() - 1)
-            .unwrap_or(reference);
+        return Some(ResolvedTemporal {
+            point: reference
+                .with_year(reference.year() - 1)
+                .unwrap_or(reference),
+            granularity: TemporalGranularity::Year,
+        });
     }
     if lower.contains("next week") {
-        return reference + Duration::weeks(1);
+        return Some(ResolvedTemporal {
+            point: reference + Duration::weeks(1),
+            granularity: TemporalGranularity::Week,
+        });
     }
     if lower.contains("next month") {
-        return reference + Duration::days(30);
+        return Some(ResolvedTemporal {
+            point: reference + Duration::days(30),
+            granularity: TemporalGranularity::Month,
+        });
     }
     if lower.contains("next year") {
-        return reference
-            .with_year(reference.year() + 1)
-            .unwrap_or(reference);
+        return Some(ResolvedTemporal {
+            point: reference
+                .with_year(reference.year() + 1)
+                .unwrap_or(reference),
+            granularity: TemporalGranularity::Year,
+        });
     }
 
     // ── "in {month}" → nearest past occurrence ─────────────────────
     if let Some(month) = parse_in_month(&lower) {
-        return resolve_month(month, reference);
+        return Some(ResolvedTemporal {
+            point: resolve_month(month, reference),
+            granularity: TemporalGranularity::Month,
+        });
     }
 
-    // No temporal expression found — return the reference timestamp.
-    reference
+    // No temporal expression found.
+    None
+}
+
+/// Like [`parse_n_ago`] but also returns the granularity inferred from
+/// the unit string.  Used by [`resolve_temporal_with_granularity`].
+fn parse_n_ago_with_gran(text: &str) -> Option<(Duration, TemporalGranularity)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?|months?|years?|weekends?)\s+ago",
+        )
+        .unwrap()
+    });
+    let caps = re.captures(text)?;
+    let n: i64 = parse_count(&caps[1])?;
+    let unit = &caps[2];
+    let dur = duration_for_unit(unit, n)?;
+    Some((dur, granularity_for_unit(unit)))
+}
+
+/// Like [`parse_in_n`] but also returns the granularity.
+fn parse_in_n_with_gran(text: &str) -> Option<(Duration, TemporalGranularity)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r"in\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?|months?|years?|weekends?)\b",
+        )
+        .unwrap()
+    });
+    let caps = re.captures(text)?;
+    let n: i64 = parse_count(&caps[1])?;
+    let unit = &caps[2];
+    let dur = duration_for_unit(unit, n)?;
+    Some((dur, granularity_for_unit(unit)))
+}
+
+/// Map a unit substring (as captured by the N-unit regex) to a
+/// [`TemporalGranularity`].  Weekends collapse to `Week`.
+fn granularity_for_unit(unit: &str) -> TemporalGranularity {
+    if unit.starts_with("day") {
+        TemporalGranularity::Day
+    } else if unit.starts_with("weekend") || unit.starts_with("week") {
+        TemporalGranularity::Week
+    } else if unit.starts_with("month") {
+        TemporalGranularity::Month
+    } else if unit.starts_with("year") {
+        TemporalGranularity::Year
+    } else {
+        // Conservative fallback — should be unreachable given the regex.
+        TemporalGranularity::Day
+    }
 }
 
 /// Check whether `text` contains `word` as a whole token.
@@ -108,44 +294,6 @@ pub fn resolve_temporal(text: &str, reference: DateTime<Utc>) -> DateTime<Utc> {
 fn has_word(text: &str, word: &str) -> bool {
     text.split(|c: char| !c.is_alphanumeric())
         .any(|tok| tok == word)
-}
-
-/// Parse "N days|weeks|months|years ago" patterns.
-///
-/// `N` may be a literal digit ("2 weeks ago") or a small English word
-/// numeral ("two weeks ago") up to ten — matches how the LoCoMo corpus
-/// expresses these (`"two weekends ago we camped"`).
-fn parse_n_ago(text: &str) -> Option<Duration> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(
-            r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?|months?|years?|weekends?)\s+ago",
-        )
-        .unwrap()
-    });
-
-    let caps = re.captures(text)?;
-    let n: i64 = parse_count(&caps[1])?;
-    let unit = &caps[2];
-
-    duration_for_unit(unit, n)
-}
-
-/// Parse "in N days|weeks|months|years" patterns (forward in time).
-fn parse_in_n(text: &str) -> Option<Duration> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(
-            r"in\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?|months?|years?|weekends?)\b",
-        )
-        .unwrap()
-    });
-
-    let caps = re.captures(text)?;
-    let n: i64 = parse_count(&caps[1])?;
-    let unit = &caps[2];
-
-    duration_for_unit(unit, n)
 }
 
 /// Parse a digit string or small English word numeral (`"one"..."ten"`)
@@ -483,5 +631,97 @@ mod tests {
         assert!(has_word("the today report", "today"));
         assert!(!has_word("todays plan", "today"));
         assert!(!has_word("yesterdays trip", "today"));
+    }
+
+    // ── granularity-aware resolver + to_range ─────────────────────
+
+    #[test]
+    fn test_granularity_yesterday_returns_day() {
+        let r = resolve_temporal_with_granularity("it was yesterday", ref_ts()).unwrap();
+        assert_eq!(r.granularity, TemporalGranularity::Day);
+    }
+
+    #[test]
+    fn test_granularity_last_may_returns_month() {
+        // ref is mid-March 2024 — "in may" resolves to most recent past May (May 2023).
+        let r = resolve_temporal_with_granularity("happened in may", ref_ts()).unwrap();
+        assert_eq!(r.granularity, TemporalGranularity::Month);
+        assert_eq!(r.point.month(), 5);
+    }
+
+    #[test]
+    fn test_granularity_last_year_returns_year() {
+        let r = resolve_temporal_with_granularity("last year", ref_ts()).unwrap();
+        assert_eq!(r.granularity, TemporalGranularity::Year);
+    }
+
+    #[test]
+    fn test_granularity_no_match_returns_none() {
+        assert!(resolve_temporal_with_granularity("just a normal sentence", ref_ts()).is_none());
+    }
+
+    #[test]
+    fn test_to_range_day_is_24h_aligned_to_midnight() {
+        let r = ResolvedTemporal {
+            point: chrono::DateTime::parse_from_rfc3339("2025-05-15T14:23:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            granularity: TemporalGranularity::Day,
+        };
+        let (lo, hi) = r.to_range();
+        assert_eq!(lo.to_rfc3339(), "2025-05-15T00:00:00+00:00");
+        assert_eq!(hi.to_rfc3339(), "2025-05-16T00:00:00+00:00");
+        assert_eq!((hi - lo).num_hours(), 24);
+    }
+
+    #[test]
+    fn test_to_range_week_is_7d() {
+        let r = ResolvedTemporal {
+            point: chrono::DateTime::parse_from_rfc3339("2025-05-15T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            granularity: TemporalGranularity::Week,
+        };
+        let (lo, hi) = r.to_range();
+        assert_eq!((hi - lo).num_days(), 7);
+    }
+
+    #[test]
+    fn test_to_range_month_spans_calendar_month() {
+        let r = ResolvedTemporal {
+            point: chrono::DateTime::parse_from_rfc3339("2025-05-15T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            granularity: TemporalGranularity::Month,
+        };
+        let (lo, hi) = r.to_range();
+        assert_eq!(lo.to_rfc3339(), "2025-05-01T00:00:00+00:00");
+        assert_eq!(hi.to_rfc3339(), "2025-06-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn test_to_range_month_december_rolls_to_next_year() {
+        let r = ResolvedTemporal {
+            point: chrono::DateTime::parse_from_rfc3339("2025-12-15T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            granularity: TemporalGranularity::Month,
+        };
+        let (lo, hi) = r.to_range();
+        assert_eq!(lo.to_rfc3339(), "2025-12-01T00:00:00+00:00");
+        assert_eq!(hi.to_rfc3339(), "2026-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn test_to_range_year_spans_calendar_year() {
+        let r = ResolvedTemporal {
+            point: chrono::DateTime::parse_from_rfc3339("2025-05-15T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            granularity: TemporalGranularity::Year,
+        };
+        let (lo, hi) = r.to_range();
+        assert_eq!(lo.to_rfc3339(), "2025-01-01T00:00:00+00:00");
+        assert_eq!(hi.to_rfc3339(), "2026-01-01T00:00:00+00:00");
     }
 }

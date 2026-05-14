@@ -27,6 +27,30 @@ pub fn btic_active(observed_at: DateTime<Utc>) -> Btic {
     Btic::new(lo, POS_INF, meta).expect("valid active BTIC interval")
 }
 
+/// Build a BTIC representing the half-open query window `[lo, hi)`.
+///
+/// Both bounds are definite at day granularity — the intended use is
+/// recall-side temporal-interval retrieval where the caller has
+/// resolved a phrase like "last May" into an exact calendar range.
+/// Use [`btic_overlaps`] (or the Cypher `btic_overlaps()` UDF) to test
+/// against stored Fact validity intervals.
+///
+/// # Panics
+///
+/// Panics if `lo >= hi` (the underlying [`Btic::new`] requires
+/// `lo < hi`).  Callers should ensure the range is non-empty.
+#[must_use]
+pub fn btic_query_window(lo: DateTime<Utc>, hi: DateTime<Utc>) -> Btic {
+    let meta = Btic::build_meta(
+        Granularity::Day,
+        Granularity::Day,
+        Certainty::Definite,
+        Certainty::Definite,
+    );
+    Btic::new(lo.timestamp_millis(), hi.timestamp_millis(), meta)
+        .expect("temporal query window must have lo < hi")
+}
+
 /// Close a BTIC interval by setting hi = `now`.
 ///
 /// Returns a new [`Btic`] with the same lo but hi closed to `now`,
