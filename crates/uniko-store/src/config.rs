@@ -166,6 +166,14 @@ fn default_phase1_strategy() -> String {
     "merge".to_string()
 }
 
+fn default_phase2_mmr_lambda() -> f64 {
+    0.7
+}
+
+fn default_phase2_mmr_duplicate_threshold() -> f64 {
+    0.85
+}
+
 fn default_phase1_boost_alpha() -> f64 {
     0.3
 }
@@ -453,6 +461,17 @@ pub struct UnikoConfig {
     pub phase1_coverage_threshold: f64,
     /// Coverage threshold for Phase 2 (Expand) early exit.
     pub phase2_coverage_threshold: f64,
+    /// MMR lambda (relevance vs diversity) for Phase 2 deduplication.
+    /// `1.0` = pure relevance order; `0.0` = pure diversity.  Spec §IX
+    /// default: 0.7.
+    #[serde(default = "default_phase2_mmr_lambda")]
+    pub phase2_mmr_lambda: f64,
+    /// Token-overlap threshold above which a Phase 2 candidate is
+    /// dropped as a hard duplicate.  Spec §IX uses cosine > 0.85;
+    /// without per-item embeddings we apply the same number to Jaccard
+    /// overlap.
+    #[serde(default = "default_phase2_mmr_duplicate_threshold")]
+    pub phase2_mmr_duplicate_threshold: f64,
 }
 
 impl Default for UnikoConfig {
@@ -497,6 +516,8 @@ impl Default for UnikoConfig {
             prune_below: 0.05,
             phase1_coverage_threshold: 0.75,
             phase2_coverage_threshold: 0.65,
+            phase2_mmr_lambda: default_phase2_mmr_lambda(),
+            phase2_mmr_duplicate_threshold: default_phase2_mmr_duplicate_threshold(),
         }
     }
 }

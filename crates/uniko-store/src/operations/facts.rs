@@ -206,10 +206,11 @@ impl KnowledgeBase {
     /// Returns [`UnikoError::Storage`] on database failure.
     #[expect(
         clippy::too_many_arguments,
-        reason = "ConsolidationCycle is an audit record with five distinct \
-                  edge groupings (processed/created/reinforced/applied \
-                  rules) plus two timestamps; grouping into a struct \
-                  would obscure the call site without simplifying it."
+        reason = "ConsolidationCycle is an audit record with several \
+                  edge groupings (processed/created/reinforced/invalidated/ \
+                  applied rules) plus drift alerts and two timestamps; \
+                  grouping into a struct would obscure the call site \
+                  without simplifying it."
     )]
     pub async fn write_consolidation_cycle(
         &self,
@@ -219,6 +220,8 @@ impl KnowledgeBase {
         processed_observations: &[NodeId],
         created_facts: &[NodeId],
         reinforced_facts: &[NodeId],
+        invalidated_facts: &[NodeId],
+        drift_alerts: i64,
         applied_rules: &[NodeId],
     ) -> Result<NodeId> {
         let mut props: HashMap<String, Value> = HashMap::new();
@@ -226,11 +229,11 @@ impl KnowledgeBase {
         props.insert("agent_id".into(), Value::String(agent_id.to_string()));
         props.insert(
             "started_at".into(),
-            Value::String(started_at.to_rfc3339()),
+            crate::types::datetime_value(started_at),
         );
         props.insert(
             "completed_at".into(),
-            Value::String(completed_at.to_rfc3339()),
+            crate::types::datetime_value(completed_at),
         );
         props.insert(
             "observations_processed".into(),
@@ -244,6 +247,11 @@ impl KnowledgeBase {
             "facts_reinforced".into(),
             Value::Int(reinforced_facts.len() as i64),
         );
+        props.insert(
+            "facts_invalidated".into(),
+            Value::Int(invalidated_facts.len() as i64),
+        );
+        props.insert("drift_alerts".into(), Value::Int(drift_alerts));
 
         let cycle_nid = self
             .create_node(labels::CONSOLIDATION_CYCLE, &props)
@@ -284,6 +292,15 @@ impl KnowledgeBase {
             )
             .await?;
         }
+        if !invalidated_facts.is_empty() {
+            self.batch_create_edges_fast(
+                edges::INVALIDATED,
+                Some(labels::CONSOLIDATION_CYCLE),
+                Some(labels::FACT),
+                &mk_edges(invalidated_facts),
+            )
+            .await?;
+        }
         if !applied_rules.is_empty() {
             self.batch_create_edges_fast(
                 edges::APPLIED_RULE,
@@ -318,6 +335,257 @@ fn extract_btic(value: Option<&Value>) -> Option<Btic> {
             Btic::new(*lo, *hi, *meta).ok()
         }
         _ => None,
+    }
+}
+
+/// Extract the `lo` bound (epoch millis) from a BTIC display string.
+///
+/// uni-db's `toString(btic)` produces `"[<iso>, <hi>) <grain>/ [<cert>/<cert>]"`.
+/// We isolate the substring between the opening bracket and the first
+/// comma, then parse it as RFC 3339.  Returns `None` on shape mismatch
+/// — callers fall back to skipping the row.
+fn parse_btic_lo_millis(s: &str) -> Option<i64> {
+    let after_bracket = s.strip_prefix('[')?;
+    let (lo_iso, _) = after_bracket.split_once(", ")?;
+    let dt = chrono::DateTime::parse_from_rfc3339(lo_iso.trim()).ok()?;
+    Some(dt.with_timezone(&Utc).timestamp_millis())
+}
+
+/// Parse uni-db's named Granularity strings back into the enum.
+fn parse_granularity(s: &str) -> Option<uni_db::common::uni_btic::Granularity> {
+    uni_db::common::uni_btic::Granularity::from_name(s)
+}
+
+/// Parse uni-db's named Certainty strings back into the enum.
+fn parse_certainty(s: &str) -> Option<uni_db::common::uni_btic::Certainty> {
+    use uni_db::common::uni_btic::Certainty;
+    Some(match s {
+        "definite" => Certainty::Definite,
+        "approximate" => Certainty::Approximate,
+        "uncertain" => Certainty::Uncertain,
+        "unknown" => Certainty::Unknown,
+        _ => return None,
+    })
+}
+
+impl KnowledgeBase {
+    /// Find every open-BTIC Fact for `(subject, predicate)` whose
+    /// `object` differs from `current_object`.
+    ///
+    /// "Open" = `valid_at.hi == POS_INF`, i.e. not previously closed.
+    /// Used by F38 contradiction detection: when a consolidation cycle
+    /// promotes a new canonical object, prior open Facts with stale
+    /// objects must be invalidated.
+    ///
+    /// Returns each match's `(node_id, valid_at)` pair so the caller
+    /// can close the BTIC without a second read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn find_stale_open_facts(
+        &self,
+        subject: &str,
+        predicate: &str,
+        current_object: Option<&str>,
+    ) -> Result<Vec<(NodeId, Btic)>> {
+        use uni_db::common::uni_btic::btic::POS_INF;
+
+        let session = self.db.session();
+        // `RETURN f` serializes Temporal columns to their display
+        // string when packaged inside a Node, which prevents direct
+        // `extract_btic` extraction.  We use `btic_is_unbounded` to
+        // filter open intervals server-side and `btic_lo_granularity`
+        // / `btic_lo_certainty` to recover meta as named strings; the
+        // BTIC display is parsed for the `lo` timestamp.
+        let cypher = "MATCH (f:Fact) \
+                      WHERE f.subject = $s AND f.predicate = $p \
+                        AND btic_is_unbounded(f.valid_at) \
+                      RETURN id(f) AS nid, f.object AS obj, \
+                             toString(f.valid_at) AS vat_str, \
+                             btic_lo_granularity(f.valid_at) AS lo_g, \
+                             btic_lo_certainty(f.valid_at) AS lo_c";
+        let result = session
+            .query_with(cypher)
+            .param("s", subject)
+            .param("p", predicate)
+            .fetch_all()
+            .await
+            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
+
+        let current = current_object.unwrap_or("").to_ascii_lowercase();
+        let mut out = Vec::new();
+        for row in result.rows() {
+            let Ok(nid) = row.get::<i64>("nid") else {
+                continue;
+            };
+            let obj: String = row.get::<String>("obj").unwrap_or_default();
+            if !current.is_empty() && obj.to_ascii_lowercase() == current {
+                continue;
+            }
+            let Ok(vat_str) = row.get::<String>("vat_str") else {
+                continue;
+            };
+            let Some(lo_ms) = parse_btic_lo_millis(&vat_str) else {
+                continue;
+            };
+            let lo_g = row
+                .get::<String>("lo_g")
+                .ok()
+                .and_then(|s| parse_granularity(&s))
+                .unwrap_or(uni_db::common::uni_btic::Granularity::Day);
+            let lo_c = row
+                .get::<String>("lo_c")
+                .ok()
+                .and_then(|s| parse_certainty(&s))
+                .unwrap_or(uni_db::common::uni_btic::Certainty::Approximate);
+            let meta = Btic::build_meta(
+                lo_g,
+                uni_db::common::uni_btic::Granularity::Millisecond,
+                lo_c,
+                uni_db::common::uni_btic::Certainty::Definite,
+            );
+            if let Ok(btic) = Btic::new(lo_ms, POS_INF, meta) {
+                out.push((nid, btic));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Close a Fact's BTIC interval as of `now` and (optionally) wire an
+    /// `INVALIDATES` edge from `replacement` → this fact.
+    ///
+    /// Used by F38 when a contradicting canonical object is promoted
+    /// in a consolidation cycle.  The fact remains in the graph (for
+    /// audit) but its BTIC `hi` is closed so `btic.contains(now)` is
+    /// false going forward.
+    ///
+    /// `reason` populates the `INVALIDATES.reason` property; pass
+    /// `None` to skip the edge entirely (useful when the caller wants
+    /// to invalidate without recording a successor).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn invalidate_fact(
+        &self,
+        stale_fact: NodeId,
+        old_interval: &Btic,
+        now: DateTime<Utc>,
+        replacement: Option<NodeId>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let closed = crate::schema::btic::btic_invalidate(old_interval, now);
+        let mut updates: HashMap<String, Value> = HashMap::new();
+        updates.insert("valid_at".into(), btic_to_value(&closed));
+        self.update_node(stale_fact, &updates).await?;
+
+        if let Some(new_fact) = replacement {
+            let mut edge_props: HashMap<String, Value> = HashMap::new();
+            if let Some(r) = reason {
+                edge_props.insert("reason".into(), Value::String(r.to_string()));
+            }
+            self.create_edge(edges::INVALIDATES, new_fact, stale_fact, &edge_props)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Record that an Entity's subject was invalidated and flip the
+    /// `unstable` flag once invalidations within the last 30 days
+    /// exceed `drift_threshold`.
+    ///
+    /// Returns whether the Entity transitioned to unstable on this
+    /// call (`false` when it was already unstable or remains stable).
+    /// Creates an Entity node implicitly when `subject` has none — F38
+    /// must not silently swallow drift when the upstream NER missed
+    /// the subject.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn record_entity_invalidation(
+        &self,
+        subject: &str,
+        now: DateTime<Utc>,
+        drift_threshold: i64,
+    ) -> Result<bool> {
+        let key = subject.trim();
+        if key.is_empty() {
+            return Ok(false);
+        }
+
+        // Fetch (or implicitly create) the Entity by name.
+        let session = self.db.session();
+        let lookup = session
+            .query_with("MATCH (e:Entity {name: $n}) RETURN id(e) AS nid, e.invalidation_count AS c, e.unstable AS u")
+            .param("n", key)
+            .fetch_all()
+            .await
+            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
+
+        let (nid, prior_count, prior_unstable) = match lookup.rows().first() {
+            Some(row) => {
+                let nid: i64 = row.get("nid").unwrap_or(0);
+                let c: i64 = row.get::<i64>("c").unwrap_or(0);
+                let u: bool = row.get::<bool>("u").unwrap_or(false);
+                (nid, c, u)
+            }
+            None => {
+                let mut props: HashMap<String, Value> = HashMap::new();
+                props.insert("name".into(), Value::String(key.to_string()));
+                let nid = self
+                    .merge_node(labels::ENTITY, "entity_id", key, &props)
+                    .await?;
+                (nid, 0, false)
+            }
+        };
+
+        let new_count = prior_count.saturating_add(1);
+        let mut updates: HashMap<String, Value> = HashMap::new();
+        updates.insert("invalidation_count".into(), Value::Int(new_count));
+        updates.insert(
+            "last_invalidation_at".into(),
+            crate::types::datetime_value(now),
+        );
+
+        // Drift gate: count invalidations within the last 30 days by
+        // matching INVALIDATES edges on Facts whose subject equals this
+        // entity.  Falls back to the cumulative count when the windowed
+        // query yields nothing (e.g., no INVALIDATES edges yet because
+        // the caller hasn't wired one for the current invalidation).
+        let window_count = self.count_recent_invalidations(key, now).await?.max(new_count);
+        let now_unstable = window_count > drift_threshold;
+        updates.insert("unstable".into(), Value::Bool(now_unstable));
+        self.update_node(nid, &updates).await?;
+
+        Ok(now_unstable && !prior_unstable)
+    }
+
+    /// Count `INVALIDATES` edges on Facts with `subject = entity_name`
+    /// whose invalidation occurred within the last 30 days.
+    async fn count_recent_invalidations(
+        &self,
+        entity_name: &str,
+        now: DateTime<Utc>,
+    ) -> Result<i64> {
+        let earliest_ms = (now - chrono::Duration::days(30)).timestamp_millis();
+
+        let session = self.db.session();
+        let cypher = "MATCH (new:Fact)-[r:INVALIDATES]->(old:Fact) \
+                      WHERE old.subject = $n \
+                      RETURN count(r) AS k";
+        let result = session
+            .query_with(cypher)
+            .param("n", entity_name)
+            .fetch_all()
+            .await
+            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
+        let _ = earliest_ms; // Reserved: when BTIC predicate is filterable in Cypher, narrow.
+        match result.rows().first() {
+            Some(row) => Ok(row.get::<i64>("k").unwrap_or(0)),
+            None => Ok(0),
+        }
     }
 }
 

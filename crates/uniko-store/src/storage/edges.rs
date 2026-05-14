@@ -246,8 +246,13 @@ impl KnowledgeBase {
             .tx()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        // `id(r) = $eid` on an untyped relationship triggers a uni-db
+        // planner bug where the function gets lowered to `r._vid`
+        // (see `bugs/uni-db-edge-id-vid-planner.md`).  Reading the
+        // internal `_eid` column directly bypasses the broken
+        // function-resolution path.
         let result = tx
-            .execute_with("MATCH ()-[r]->() WHERE id(r) = $eid DELETE r")
+            .execute_with("MATCH ()-[r]->() WHERE r._eid = $eid DELETE r")
             .param("eid", edge_id)
             .run()
             .await
@@ -307,7 +312,9 @@ impl KnowledgeBase {
             return Ok(());
         }
         let (set_clause, params) = build_set_clause("r", properties, 0)?;
-        let cypher = format!("MATCH ()-[r]->() WHERE id(r) = $eid {set_clause}");
+        // See `delete_edge` — `id(r) = $eid` hits a uni-db planner
+        // bug; read `_eid` directly to bypass.
+        let cypher = format!("MATCH ()-[r]->() WHERE r._eid = $eid {set_clause}");
 
         let session = self.db.session();
         let tx = session

@@ -26,6 +26,10 @@ use uni_db::{DataType, Uni, Value};
 
 async fn setup_db_asymmetric_schemas() -> Uni {
     let db = Uni::in_memory().build().await.unwrap();
+    // All non-name properties are nullable so the test fixture stays
+    // valid as uni-db tightens NOT NULL enforcement; the disjunction
+    // bug being reproduced is about column-count asymmetry, not
+    // nullability.
     db.schema()
         .label("Source")
         .property("name", DataType::String)
@@ -33,14 +37,14 @@ async fn setup_db_asymmetric_schemas() -> Uni {
         // DestA has 2 properties.
         .label("DestA")
         .property("name", DataType::String)
-        .property("category", DataType::String)
+        .property_nullable("category", DataType::String)
         .done()
         // DestB has 4 properties (different count from DestA).
         .label("DestB")
         .property("name", DataType::String)
-        .property("kind", DataType::String)
-        .property("first_seen", DataType::String)
-        .property("last_seen", DataType::String)
+        .property_nullable("kind", DataType::String)
+        .property_nullable("first_seen", DataType::String)
+        .property_nullable("last_seen", DataType::String)
         .done()
         .edge_type("LINK", &["Source"], &["DestA", "DestB"])
         .done()
@@ -88,11 +92,13 @@ async fn disjunction_panics_when_branch_schemas_differ() {
         .run()
         .await;
 
-    // Document what happens. Today this never returns Ok or Err —
-    // the await panics inside DataFusion. If the test is run via
-    // `cargo nextest run` you'll see the per-test panic captured;
-    // running directly produces a process abort.
+    // Document what happens. Originally this panicked inside
+    // DataFusion's `union_schema` — uni-db has since fixed the bug,
+    // so the test now also verifies that the disjunction actually
+    // matched `:DestB` and the edge was created.
     eprintln!("execute result: {result:?}");
+    result.expect("disjunction execute should succeed");
+    tx.commit().await.expect("tx commit");
 
     // If we ever reach this line, the panic was fixed and we
     // should also see the edge created.

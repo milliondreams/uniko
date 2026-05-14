@@ -14,9 +14,16 @@
 //!    `CREATED`, and `INVOLVED` edges — the `PROCESSED` edges are the
 //!    idempotency anchor so future cycles skip the same Observations.
 //!
-//! Contradiction (F38) and drift (F39) detection are deferred — they
-//! require either Observation polarity or an LLM judge at consolidation
-//! time, both out of scope for the first ship.
+//! F38 contradiction detection: when contradicting observations within
+//! a `(subject, predicate)` group exceed [`CONTRADICTION_THRESHOLD`] of
+//! the total, any prior open-BTIC Fact for that pair with a different
+//! object is invalidated (BTIC `hi` closed; `INVALIDATES` edge wired
+//! from the new Fact).
+//!
+//! F39 entity drift: each invalidation records against the subject
+//! Entity's `invalidation_count`; once cumulative invalidations exceed
+//! [`DRIFT_THRESHOLD`], `Entity.unstable = true` so the recall cascade
+//! can force Phase 2+ for queries that reference it.
 
 // Rust guideline compliant
 
@@ -29,7 +36,7 @@ use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use crate::llm_triples::{ObservationInput, refine_triples};
 
-/// Number of Facts created and reinforced in one cycle.
+/// Number of Facts created, reinforced, and invalidated in one cycle.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CycleStats {
     /// Observations processed (PROCESSED edges emitted).
@@ -38,7 +45,24 @@ pub struct CycleStats {
     pub facts_created: usize,
     /// Facts reinforced (existing Fact whose count was incremented).
     pub facts_reinforced: usize,
+    /// Facts whose BTIC interval was closed by F38 contradiction
+    /// detection in this cycle.
+    pub facts_invalidated: usize,
+    /// Number of Entities that transitioned to `unstable = true` in
+    /// this cycle (F39 drift alerts).
+    pub drift_alerts: usize,
 }
+
+/// Fraction of observations within a `(subject, predicate)` group that
+/// must disagree with the canonical object to trigger F38 invalidation
+/// of any prior open-BTIC Facts for the same pair.  Spec §5 F38.
+const CONTRADICTION_THRESHOLD: f64 = 0.40;
+
+/// Cumulative invalidation count at or above which an Entity is flagged
+/// `unstable = true` (F39).  Spec calls for "> 4 invalidations within
+/// 30 days" — the windowing belongs in the store helper, this constant
+/// captures only the count.
+const DRIFT_THRESHOLD: i64 = 4;
 
 /// Maximum observations to process in a single cycle.
 ///
@@ -165,6 +189,8 @@ pub async fn run_cycle_with(
             &[],
             &[],
             &[],
+            0,
+            &[],
         )
         .await?;
         return Ok(CycleStats::default());
@@ -202,9 +228,61 @@ pub async fn run_cycle_with(
 
     let mut created_facts: Vec<NodeId> = Vec::new();
     let mut reinforced_facts: Vec<NodeId> = Vec::new();
+    let mut invalidated_facts: Vec<NodeId> = Vec::new();
+    let mut drift_alerts: usize = 0;
 
     for ((subject, predicate), group) in groups {
         let canonical = canonical_object(&group.object_votes);
+
+        // F38: identify prior open Facts for (subject, predicate) and,
+        // for each, decide whether the votes in this cycle contradict
+        // its established object.  An open Fact with a stored object X
+        // is "contradicted" when > CONTRADICTION_THRESHOLD of the
+        // votes carry an object != X (case-insensitive, trimmed).
+        let prior_open = match kb
+            .find_stale_open_facts(&subject, &predicate, None)
+            .await
+        {
+            Ok(facts) => facts,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    subject = %subject,
+                    predicate = %predicate,
+                    "open Fact lookup failed (continuing without F38)",
+                );
+                Vec::new()
+            }
+        };
+        let mut prior_stale: Vec<(NodeId, uni_db::common::uni_btic::Btic, String)> = Vec::new();
+        for (nid, btic) in &prior_open {
+            // Fetch the Fact's object so we can vote-compare.  Reuse
+            // the Node already loaded by find_stale_open_facts isn't
+            // possible across the API boundary; do a focused read.
+            let session = kb.db().session();
+            let row_set = match session
+                .query_with("MATCH (f:Fact) WHERE id(f) = $vid RETURN f.object AS obj")
+                .param("vid", *nid)
+                .fetch_all()
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let prior_obj = row_set
+                .rows()
+                .first()
+                .and_then(|r| r.get::<String>("obj").ok())
+                .unwrap_or_default();
+            let (total, agree) = vote_tallies(&group.object_votes, Some(&prior_obj));
+            if total == 0 {
+                continue;
+            }
+            let contradicting = total - agree;
+            if (contradicting as f64) / (total as f64) > CONTRADICTION_THRESHOLD {
+                prior_stale.push((*nid, *btic, prior_obj));
+            }
+        }
         // Prefer the earliest resolved `temporal_anchor` (when the
         // claim first held) over `observed_at` (when the message was
         // recorded).  This propagates to Fact.valid_at_lo via
@@ -257,6 +335,62 @@ pub async fn run_cycle_with(
         } else {
             reinforced_facts.push(upsert.node_id);
         }
+
+        // F38: invalidate every prior Fact we identified as contested
+        // by this cycle's vote distribution.  Skip if the stale Fact
+        // happens to be the same node we just upserted (the new
+        // canonical matches the prior canonical — `upsert_fact_by_triple`
+        // is idempotent on subject|predicate|object).
+        if !prior_stale.is_empty() {
+            let now = Utc::now();
+            for (stale_nid, stale_btic, _stale_obj) in &prior_stale {
+                if *stale_nid == upsert.node_id {
+                    continue;
+                }
+                if let Err(e) = kb
+                    .invalidate_fact(
+                        *stale_nid,
+                        stale_btic,
+                        now,
+                        Some(upsert.node_id),
+                        Some("consolidation contradiction"),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        stale_fact = stale_nid,
+                        subject = %subject,
+                        predicate = %predicate,
+                        "fact invalidation failed (continuing)",
+                    );
+                    continue;
+                }
+                invalidated_facts.push(*stale_nid);
+
+                // F39: account the invalidation against the subject
+                // Entity.  Flips `unstable` when cumulative
+                // invalidations exceed DRIFT_THRESHOLD.
+                match kb
+                    .record_entity_invalidation(&subject, now, DRIFT_THRESHOLD)
+                    .await
+                {
+                    Ok(true) => {
+                        drift_alerts += 1;
+                        tracing::info!(
+                            subject = %subject,
+                            "entity transitioned to unstable",
+                        );
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        subject = %subject,
+                        "drift accounting failed (continuing)",
+                    ),
+                }
+            }
+        }
     }
 
     let processed_ids: Vec<NodeId> = observations.iter().map(|o| o.node_id).collect();
@@ -268,6 +402,8 @@ pub async fn run_cycle_with(
         &processed_ids,
         &created_facts,
         &reinforced_facts,
+        &invalidated_facts,
+        drift_alerts as i64,
         &[],
     )
     .await?;
@@ -276,7 +412,36 @@ pub async fn run_cycle_with(
         observations_processed: processed_ids.len(),
         facts_created: created_facts.len(),
         facts_reinforced: reinforced_facts.len(),
+        facts_invalidated: invalidated_facts.len(),
+        drift_alerts,
     })
+}
+
+/// Tally `(total, canonical)` non-empty object votes for F38.
+///
+/// `total` counts every contributing observation that supplied a non-
+/// empty object string; `canonical` counts how many of those matched
+/// the chosen canonical text (case-insensitively, trimmed).
+fn vote_tallies(votes: &[ObjectVote], canonical: Option<&str>) -> (usize, usize) {
+    let canonical_key = canonical.map(|s| s.trim().to_ascii_lowercase());
+    let mut total = 0usize;
+    let mut canonical_count = 0usize;
+    for vote in votes {
+        let Some(text) = vote.text.as_ref() else {
+            continue;
+        };
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        total += 1;
+        if let Some(ref key) = canonical_key
+            && trimmed.to_ascii_lowercase() == *key
+        {
+            canonical_count += 1;
+        }
+    }
+    (total, canonical_count)
 }
 
 /// Pull unprocessed Observations carrying a structured triple.

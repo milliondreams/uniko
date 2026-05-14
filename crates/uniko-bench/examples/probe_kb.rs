@@ -24,6 +24,13 @@ async fn main() -> anyhow::Result<()> {
         ("ConsolidationCycles    ", "MATCH (c:ConsolidationCycle) RETURN count(c) AS n"),
         ("SUPPORTED_BY edges     ", "MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN count(r) AS n"),
         ("Facts with embedding   ", "MATCH (f:Fact) WHERE f.embedding IS NOT NULL RETURN count(f) AS n"),
+        ("Bench Participant     ", "MATCH (p:Participant {participant_id: 'bench-agent-conv-26'}) RETURN count(p) AS n"),
+        ("Participants total    ", "MATCH (p:Participant) RETURN count(p) AS n"),
+        ("Episodes               ", "MATCH (e:Episode) RETURN count(e) AS n"),
+        ("Episodes w/ embedding  ", "MATCH (e:Episode) WHERE e.embedding IS NOT NULL RETURN count(e) AS n"),
+        ("Entities (unstable=true)", "MATCH (e:Entity) WHERE e.unstable = true RETURN count(e) AS n"),
+        ("INVALIDATES edges      ", "MATCH (:Fact)-[r:INVALIDATES]->(:Fact) RETURN count(r) AS n"),
+        ("RECORDED_BY edges      ", "MATCH (:Episode)-[r:RECORDED_BY]->() RETURN count(r) AS n"),
     ];
     for (label, q) in counts {
         let r = session.query_with(q).fetch_all().await?;
@@ -33,6 +40,23 @@ async fn main() -> anyhow::Result<()> {
             .and_then(|row| row.get("n").ok())
             .unwrap_or(-1);
         println!("{label}: {n}");
+    }
+
+    println!("\nConsolidationCycle audit rows:");
+    let r = session
+        .query_with(
+            "MATCH (c:ConsolidationCycle) RETURN c.agent_id AS a, c.facts_created AS fc, \
+             c.facts_invalidated AS fi, c.drift_alerts AS da, c.started_at AS t ORDER BY c.started_at",
+        )
+        .fetch_all()
+        .await?;
+    for row in r.rows() {
+        let a: String = row.get("a").unwrap_or_default();
+        let fc: i64 = row.get("fc").unwrap_or(-1);
+        let fi: i64 = row.get("fi").unwrap_or(-1);
+        let da: i64 = row.get("da").unwrap_or(-1);
+        let t: String = row.get("t").unwrap_or_default();
+        println!("  agent={a} fc={fc} fi={fi} da={da} t={t}");
     }
 
     println!("\nTop-10 most-supported Facts:");

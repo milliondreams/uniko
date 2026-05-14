@@ -6,10 +6,13 @@
 //! Depends on `uniko-extract` only. This is the memory management brain.
 
 pub mod consolidation;
+pub mod episode;
 pub mod llm_triples;
 pub mod pipeline;
 pub mod recall;
 pub mod rules;
 
+#[doc(inline)]
+pub use episode::{RecordEpisodeParams, record_episode};
 #[doc(inline)]
 pub use pipeline::PipelineSystem;

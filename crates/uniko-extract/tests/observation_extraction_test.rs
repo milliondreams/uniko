@@ -1,9 +1,13 @@
 //! Unit tests for DEP-tree observation extraction.
 //!
 //! Tests extract_dep_observations() directly with synthetic DEP trees,
-//! no ONNX model or database required.
+//! no ONNX model or database required.  Gated on the `onnx` feature
+//! because the `nlp` module that hosts the extractor is itself gated
+//! — without ONNX the symbols don't exist.
 //!
-//! Run: cargo nextest run -p uniko-extract --test observation_extraction_test --nocapture
+//! Run: cargo nextest run -p uniko-extract --features onnx --test observation_extraction_test --nocapture
+
+#![cfg(feature = "onnx")]
 
 use uniko_extract::ingest::context::SentenceContext;
 use uniko_extract::nlp::decode::extract_dep_observations;

@@ -9,6 +9,7 @@
 // Rust guideline compliant
 
 pub mod intent;
+pub mod mmr;
 
 pub use intent::{IntentProfile, build_intent};
 
@@ -93,8 +94,15 @@ pub struct ContextBundle {
     pub items: Vec<RecallItem>,
     /// Estimated total tokens.
     pub total_tokens: usize,
-    /// Whether Compact phase was sufficient (always false in Phase 1).
+    /// Whether Compact (Phase 1) alone satisfied the coverage gate
+    /// and the cascade exited before Phase 2.  Tracked as the spec's
+    /// primary scaling signal (`phase1_only_pct`).
     pub phase1_only: bool,
+    /// Whether the cascade exited after Phase 2 (Expand) — i.e. Phase
+    /// 1 failed its gate but Phase 2's vector + fulltext over Episode/
+    /// Observation/Message cleared the 0.65 coverage gate.  Tracks
+    /// `phase2_only_pct` alongside `phase1_only_pct`.
+    pub phase2_only: bool,
     /// Coverage score (0.0–1.0).
     pub coverage: f64,
 }
@@ -168,6 +176,16 @@ pub struct RecallConfig {
     /// — large enough to nudge a chunk by ~one rank position, small
     /// enough not to overwhelm the cross-encoder ranking.
     pub phase1_boost_alpha: f64,
+    /// Coverage gate for Phase 2 (Expand) early exit.  When Phase 2
+    /// fuses vector + fulltext hits across Episode/Observation/Message
+    /// and `coverage >= phase2_coverage_gate`, the cascade skips Phase
+    /// 3 (Broaden).  Spec §IX default: 0.65.
+    pub phase2_coverage_gate: f64,
+    /// MMR `lambda` for Phase 2 deduplication.  Spec default 0.7.
+    pub phase2_mmr_lambda: f64,
+    /// Token-overlap (Jaccard) threshold above which a Phase 2 hit is
+    /// dropped as a hard duplicate.  Spec default 0.85.
+    pub phase2_mmr_duplicate_threshold: f64,
 }
 
 impl Default for RecallConfig {
@@ -195,6 +213,9 @@ impl Default for RecallConfig {
             per_variant_limit: 15,
             phase1_strategy: Phase1Strategy::Merge,
             phase1_boost_alpha: 0.3,
+            phase2_coverage_gate: 0.65,
+            phase2_mmr_lambda: 0.7,
+            phase2_mmr_duplicate_threshold: 0.85,
         }
     }
 }
@@ -225,6 +246,9 @@ impl RecallConfig {
             per_variant_limit: cfg.recall_per_variant_limit.unwrap_or(cfg.recall_limit),
             phase1_strategy: parse_phase1_strategy(&cfg.phase1_strategy),
             phase1_boost_alpha: cfg.phase1_boost_alpha,
+            phase2_coverage_gate: cfg.phase2_coverage_threshold,
+            phase2_mmr_lambda: cfg.phase2_mmr_lambda,
+            phase2_mmr_duplicate_threshold: cfg.phase2_mmr_duplicate_threshold,
         }
     }
 }
@@ -317,7 +341,70 @@ pub async fn recall(
             total_tokens,
             items: final_items,
             phase1_only: true,
+            phase2_only: false,
             coverage: phase1_coverage,
+        });
+    }
+
+    // ── Phase 2: Expand ─────────────────────────────────────────────
+    // RRF-fuse vector + fulltext hits over Episode / Observation /
+    // Message, apply MMR deduplication, and check the 0.65 coverage
+    // gate.  When met, we return the Phase 2 bundle (merged with
+    // Phase 1 hits) without paying for Phase 3.
+    let phase2_items_raw = phase2_expand(kb, &intent, config).await;
+    let phase2_items = mmr::mmr_dedup(
+        phase2_items_raw,
+        config.phase2_mmr_lambda,
+        config.phase2_mmr_duplicate_threshold,
+        None,
+    );
+    let phase2_coverage = compute_coverage(&phase2_items, intent.facet_count);
+    let phase2_sufficient =
+        phase2_coverage >= config.phase2_coverage_gate && phase2_items.len() >= 3;
+
+    if phase2_sufficient {
+        tracing::info!(
+            phase2_items = phase2_items.len(),
+            coverage = phase2_coverage,
+            "phase 2 (expand) sufficient — skipping phase 3"
+        );
+        // Cap on Phase 1 items merged into the Phase 2 bundle.  Same
+        // value used at the Phase 3 merge site (see `Phase1Strategy::Merge`
+        // branch below).
+        const PHASE1_MERGE_CAP: usize = 3;
+        let mut combined: Vec<RecallItem> = phase2_items;
+        if matches!(config.phase1_strategy, Phase1Strategy::Merge) {
+            let mut p1 = phase1_items;
+            p1.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            p1.truncate(PHASE1_MERGE_CAP);
+            combined.extend(p1);
+        }
+
+        combined.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        combined.truncate(config.limit);
+        let mut total_tokens = 0usize;
+        let mut final_items = Vec::new();
+        for item in combined {
+            total_tokens += TOKENS_PER_ITEM;
+            if total_tokens > config.token_budget {
+                break;
+            }
+            final_items.push(item);
+        }
+        return Ok(ContextBundle {
+            total_tokens,
+            items: final_items,
+            phase1_only: false,
+            phase2_only: true,
+            coverage: phase2_coverage,
         });
     }
 
@@ -547,6 +634,7 @@ pub async fn recall(
         total_tokens,
         items: final_items,
         phase1_only: false,
+        phase2_only: false,
         coverage,
     })
 }
@@ -640,6 +728,188 @@ async fn phase1_compact(
         }
     }
     out.into_values().collect()
+}
+
+/// Phase 2 (Expand): RRF-fuse vector + fulltext hits over the
+/// episodic tier (Episode, Observation, Message).
+///
+/// Sources and top-k from spec §IX-A retrieval contract:
+/// - Vector top-20 on `Episode.embedding`
+/// - Vector top-20 on `Observation.embedding`
+/// - Vector top-10 on `Message.embedding`
+/// - Fulltext top-20 on `Observation.content`
+/// - Fulltext top-10 on `Message.content`
+///
+/// RRF (`k = 60`) fuses the five ranked lists; per-source min-max
+/// normalisation is applied before fusion so heterogeneous scoring
+/// ranges (cosine, BM25) compare like-for-like.  Tier weight is
+/// applied (Episodic = 0.7).  Returns an empty `Vec` on any internal
+/// error — Phase 2 is opportunistic.
+async fn phase2_expand(
+    kb: &KnowledgeBase,
+    intent: &IntentProfile,
+    config: &RecallConfig,
+) -> Vec<RecallItem> {
+    let qvec = intent.intent_vec();
+    let qtxt = intent
+        .variants
+        .iter()
+        .find(|v| v.label == "keywords")
+        .map(|v| v.text.as_str())
+        .or_else(|| intent.variants.first().map(|v| v.text.as_str()))
+        .unwrap_or("");
+    let has_vec = !qvec.is_empty();
+    let has_txt = !qtxt.is_empty();
+    if !has_vec && !has_txt {
+        return Vec::new();
+    }
+
+    let session = kb.db().session();
+
+    // (label, mode, content_field, top_k).  mode ∈ {"vector","fulltext"}.
+    let sources: &[(&str, &str, &str, i64)] = &[
+        ("Episode", "vector", "action_type", 20),
+        ("Observation", "vector", "content", 20),
+        ("Message", "vector", "content", 10),
+        ("Observation", "fulltext", "content", 20),
+        ("Message", "fulltext", "content", 10),
+    ];
+
+    let mut per_source: Vec<Vec<RankedHit>> = Vec::with_capacity(sources.len());
+    for &(label, mode, content_field, top_k) in sources {
+        let hits = match mode {
+            "vector" => {
+                if !has_vec {
+                    continue;
+                }
+                let cypher = format!(
+                    "MATCH (m:{label}) \
+                     WHERE m.embedding IS NOT NULL \
+                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                            coalesce(m.{content_field}, '') AS content, \
+                            similar_to(m.embedding, $qvec) AS score \
+                     ORDER BY score DESC LIMIT $lim"
+                );
+                let result = session
+                    .query_with(&cypher)
+                    .param("qvec", uni_db::Value::Vector(qvec.to_vec()))
+                    .param("lim", top_k)
+                    .fetch_all()
+                    .await;
+                match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::debug!(label, mode, error = %e, "phase2 query failed");
+                        continue;
+                    }
+                }
+            }
+            "fulltext" => {
+                if !has_txt {
+                    continue;
+                }
+                let cypher = format!(
+                    "MATCH (m:{label}) \
+                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                            coalesce(m.{content_field}, '') AS content, \
+                            similar_to(m.{content_field}, $qtxt) AS score \
+                     ORDER BY score DESC LIMIT $lim"
+                );
+                let result = session
+                    .query_with(&cypher)
+                    .param("qtxt", qtxt)
+                    .param("lim", top_k)
+                    .fetch_all()
+                    .await;
+                match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::debug!(label, mode, error = %e, "phase2 query failed");
+                        continue;
+                    }
+                }
+            }
+            _ => continue,
+        };
+
+        let mut ranked: Vec<RankedHit> = Vec::with_capacity(hits.rows().len());
+        for row in hits.rows() {
+            let Ok(nid) = row.get::<i64>("nid") else {
+                continue;
+            };
+            let lbl: String = row.get("lbl").unwrap_or_else(|_| label.into());
+            let content: String = row.get("content").unwrap_or_default();
+            let score: f64 = row.get("score").unwrap_or(0.0);
+            if content.is_empty() {
+                continue;
+            }
+            ranked.push(RankedHit {
+                node_id: nid,
+                label: lbl,
+                content,
+                raw_score: score,
+            });
+        }
+        // Per-source min-max normalisation to [0,1] for the RRF input.
+        // Since `rrf_fuse` only cares about rank order, this is purely
+        // diagnostic — but keeps `raw_score` comparable in any debug
+        // dump.
+        normalize_scores_in_place(&mut ranked);
+        per_source.push(ranked);
+    }
+
+    if per_source.is_empty() {
+        return Vec::new();
+    }
+
+    let fused = rrf_fuse(
+        per_source.iter().map(|v| v.as_slice()),
+        config.rrf_k,
+    );
+
+    let mut items: Vec<RecallItem> = fused
+        .into_iter()
+        .filter(|(_, (_, content, _))| !content.is_empty())
+        .map(|(nid, (label, content, score))| {
+            let tier = RecallTier::from_label(&label);
+            RecallItem {
+                node_id: nid,
+                node_type: label,
+                score: score * tier.weight(),
+                content,
+                tier,
+            }
+        })
+        .filter(|item| item.score >= config.min_score)
+        .collect();
+
+    items.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    items
+}
+
+/// Min-max normalise a `RankedHit` list's `raw_score` field in-place
+/// to `[0,1]`.  No-op when all scores are equal or the list is empty.
+fn normalize_scores_in_place(hits: &mut [RankedHit]) {
+    if hits.is_empty() {
+        return;
+    }
+    let (min, max) = hits
+        .iter()
+        .map(|h| h.raw_score)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
+            (lo.min(s), hi.max(s))
+        });
+    let range = max - min;
+    if range <= f64::EPSILON {
+        return;
+    }
+    for h in hits {
+        h.raw_score = (h.raw_score - min) / range;
+    }
 }
 
 /// Phase C session-boost: walk each Phase 1 Fact to its containing
@@ -1016,6 +1286,7 @@ fn empty_bundle() -> ContextBundle {
         items: Vec::new(),
         total_tokens: 0,
         phase1_only: false,
+        phase2_only: false,
         coverage: 0.0,
     }
 }

@@ -27,3 +27,20 @@ pub type TaskId = String;
 
 /// Embedding vector (f32 components, dimensionality depends on model).
 pub type EmbeddingVec = Vec<f32>;
+
+/// Convert a UTC datetime to uni-db's wire-form temporal value.
+///
+/// Writing `Value::String(dt.to_rfc3339())` into a `DataType::DateTime`
+/// column is silently rejected by uni-db's post-commit flush check —
+/// the transaction commits, but the row is omitted from the per-label
+/// persisted table, leaving it invisible to label-anchored MATCH.  All
+/// uniko write paths that target a DateTime property MUST go through
+/// this helper instead.
+#[must_use]
+pub fn datetime_value(dt: chrono::DateTime<chrono::Utc>) -> uni_db::Value {
+    uni_db::Value::Temporal(uni_db::common::TemporalValue::DateTime {
+        nanos_since_epoch: dt.timestamp_nanos_opt().unwrap_or(0),
+        offset_seconds: 0,
+        timezone_name: None,
+    })
+}

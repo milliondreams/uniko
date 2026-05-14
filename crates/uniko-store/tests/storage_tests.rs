@@ -491,23 +491,26 @@ async fn test_batch_create_nodes_and_edges() {
         })
         .collect();
 
-    let node_ids = kb
-        .batch_create_nodes_and_edges("Chunk", &chunk_props, |nids| {
-            let edges: Vec<_> = nids
-                .iter()
-                .enumerate()
-                .map(|(i, &nid)| {
-                    let mut props = HashMap::new();
-                    props.insert("index".into(), Value::Int(i as i64));
-                    (art_id, nid, props)
-                })
-                .collect();
-            vec![("HAS_CHUNK".to_string(), edges)]
-        })
-        .await
-        .unwrap();
-
+    let node_ids = kb.batch_create_nodes("Chunk", &chunk_props).await.unwrap();
     assert_eq!(node_ids.len(), 5);
+
+    let edge_specs: Vec<_> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, &nid)| {
+            let mut props = HashMap::new();
+            props.insert("index".into(), Value::Int(i as i64));
+            (art_id, nid, props)
+        })
+        .collect();
+    kb.batch_create_edges_fast(
+        "HAS_CHUNK",
+        Some("Artifact"),
+        Some("Chunk"),
+        &edge_specs,
+    )
+    .await
+    .unwrap();
 
     // Verify edges exist.
     let edges = kb

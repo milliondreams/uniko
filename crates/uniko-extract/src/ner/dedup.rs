@@ -12,6 +12,7 @@ use uni_db::Value;
 
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::storage::edges::Direction;
+use uniko_store::types::datetime_value;
 use uniko_store::{KnowledgeBase, NodeId};
 
 use super::types::{EntityMatch, RawEntity};
@@ -60,7 +61,7 @@ pub async fn upsert_entities(
     deduped: Vec<(RawEntity, u32)>,
 ) -> uniko_store::Result<Vec<EntityMatch>> {
     let mut matches = Vec::with_capacity(deduped.len());
-    let now_str = chrono::Utc::now().to_rfc3339();
+    let now_value = datetime_value(chrono::Utc::now());
 
     for (entity, mention_count) in deduped {
         let entity_id = format!("{}:{}", entity.entity_type.as_str(), &entity.canonical_name);
@@ -79,7 +80,7 @@ pub async fn upsert_entities(
                     "frequency".into(),
                     Value::Int(old_freq + mention_count as i64),
                 );
-                update.insert("last_seen".into(), Value::String(now_str.clone()));
+                update.insert("last_seen".into(), now_value.clone());
 
                 let old_conf = props
                     .get("confidence")
@@ -105,8 +106,8 @@ pub async fn upsert_entities(
                     "entity_type".into(),
                     Value::String(entity_type_str.to_string()),
                 );
-                props.insert("first_seen".into(), Value::String(now_str.clone()));
-                props.insert("last_seen".into(), Value::String(now_str.clone()));
+                props.insert("first_seen".into(), now_value.clone());
+                props.insert("last_seen".into(), now_value.clone());
                 props.insert("frequency".into(), Value::Int(mention_count as i64));
                 props.insert("confidence".into(), Value::Float(entity.confidence));
 

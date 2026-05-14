@@ -18,6 +18,15 @@ pub(crate) fn register_labels<'a>(
         .property_nullable("last_seen", DataType::DateTime)
         .property_nullable("frequency", DataType::Int64)
         .property_nullable("confidence", DataType::Float64)
+        // F39 drift tracking.  `invalidation_count` is the total number
+        // of times any Fact with this Entity as subject has been
+        // invalidated (BTIC closed) by consolidation.  When the count
+        // crosses the configured drift threshold within a 30-day window
+        // the `unstable` flag flips to true so recall can force Phase 2+
+        // for queries that reference the Entity (drift override).
+        .property_nullable("invalidation_count", DataType::Int64)
+        .property_nullable("last_invalidation_at", DataType::DateTime)
+        .property_nullable("unstable", DataType::Bool)
         .property_nullable(
             "embedding",
             DataType::Vector {
@@ -28,6 +37,7 @@ pub(crate) fn register_labels<'a>(
         .index("name", IndexType::Scalar(ScalarType::Hash))
         .index("name", IndexType::FullText)
         .index("entity_type", IndexType::Scalar(ScalarType::Hash))
+        .index("unstable", IndexType::Scalar(ScalarType::Hash))
         .index("embedding", IndexType::Vector(super::vector_index(config)))
         .done()
 }

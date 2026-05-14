@@ -239,3 +239,255 @@ async fn cycle_reinforces_existing_fact() {
         "2 + 3 contributors total",
     );
 }
+
+// ── F38 contradiction detection ──────────────────────────────────────
+
+async fn count_invalidates_edges_to(kb: &KnowledgeBase, stale_fact: NodeId) -> i64 {
+    let session = kb.db().session();
+    let result = session
+        .query_with(
+            "MATCH (new:Fact)-[:INVALIDATES]->(old:Fact) \
+             WHERE id(old) = $vid \
+             RETURN count(*) AS n",
+        )
+        .param("vid", stale_fact)
+        .fetch_all()
+        .await
+        .expect("invalidates count");
+    result
+        .rows()
+        .first()
+        .map(|r| r.get::<i64>("n").unwrap_or(0))
+        .unwrap_or(0)
+}
+
+async fn fact_node_id(kb: &KnowledgeBase, subject: &str, predicate: &str, object: &str) -> NodeId {
+    let session = kb.db().session();
+    let result = session
+        .query_with(
+            "MATCH (f:Fact) \
+             WHERE f.subject = $s AND f.predicate = $p AND f.object = $o \
+             RETURN id(f) AS nid",
+        )
+        .param("s", subject)
+        .param("p", predicate)
+        .param("o", object)
+        .fetch_all()
+        .await
+        .expect("fact node lookup");
+    result
+        .rows()
+        .first()
+        .and_then(|r| r.get::<i64>("nid").ok())
+        .expect("fact node present")
+}
+
+#[tokio::test]
+async fn balanced_split_does_not_trigger_invalidation() {
+    let kb = test_kb().await;
+
+    // Seed an established Fact: 4 observations all saying "X is Y".
+    for i in 0..4 {
+        seed_observation(
+            &kb,
+            "alex",
+            Some("uses"),
+            Some("rust"),
+            "Alex uses rust",
+            ts(2024, 1, 1 + i),
+        )
+        .await;
+    }
+    run_cycle(&kb, "agent-1", None).await.expect("cycle 1");
+
+    // Balanced 50/50 split — 3 say "rust", 3 say "go".  Below the 40%
+    // contradiction threshold (it's exactly 50%, but the rule is
+    // "contradicting > 40%" → 3/6 = 50% IS over; this should trigger).
+    // Use 3 rust + 2 go to land at 40% contradiction — boundary case.
+    for i in 0..3 {
+        seed_observation(
+            &kb,
+            "alex",
+            Some("uses"),
+            Some("rust"),
+            "still rust",
+            ts(2024, 2, 1 + i),
+        )
+        .await;
+    }
+    for i in 0..2 {
+        seed_observation(
+            &kb,
+            "alex",
+            Some("uses"),
+            Some("go"),
+            "now go",
+            ts(2024, 2, 4 + i),
+        )
+        .await;
+    }
+    let stats = run_cycle(&kb, "agent-1", None).await.expect("cycle 2");
+
+    // 2/5 = 40%, not strictly > 40% → no invalidation.
+    assert_eq!(
+        stats.facts_invalidated, 0,
+        "40% contradiction is boundary, not above threshold",
+    );
+    assert_eq!(stats.drift_alerts, 0);
+}
+
+#[tokio::test]
+async fn majority_contradiction_invalidates_old_fact() {
+    let kb = test_kb().await;
+
+    // Cycle 1: 4 observations saying "Alex uses rust" → Fact created.
+    for i in 0..4 {
+        seed_observation(
+            &kb,
+            "alex",
+            Some("uses"),
+            Some("rust"),
+            "Alex uses rust",
+            ts(2024, 1, 1 + i),
+        )
+        .await;
+    }
+    let s1 = run_cycle(&kb, "agent-1", None).await.expect("cycle 1");
+    assert_eq!(s1.facts_created, 1);
+    let old_fact_id = fact_node_id(&kb, "alex", "uses", "rust").await;
+
+    // Cycle 2: 5 fresh observations, 4 say "go" and 1 says "rust" →
+    // 80% contradict "rust" relative to the new canonical "go" → trigger.
+    for i in 0..4 {
+        seed_observation(
+            &kb,
+            "alex",
+            Some("uses"),
+            Some("go"),
+            "Alex switched to go",
+            ts(2024, 2, 1 + i),
+        )
+        .await;
+    }
+    seed_observation(
+        &kb,
+        "alex",
+        Some("uses"),
+        Some("rust"),
+        "one straggler still rust",
+        ts(2024, 2, 6),
+    )
+    .await;
+
+    let s2 = run_cycle(&kb, "agent-1", None).await.expect("cycle 2");
+
+    // New Fact for (alex, uses, go) created; old (alex, uses, rust)
+    // invalidated; the canonical-matching "rust" straggler reinforces
+    // the old Fact via upsert_fact_by_triple (same fact_id key).
+    assert_eq!(s2.facts_invalidated, 1, "old rust fact invalidated");
+
+    let new_fact_id = fact_node_id(&kb, "alex", "uses", "go").await;
+    assert_ne!(new_fact_id, old_fact_id);
+
+    // INVALIDATES edge from new → old.
+    assert_eq!(count_invalidates_edges_to(&kb, old_fact_id).await, 1);
+
+    // Old Fact's BTIC closed.
+    let old_fact = fetch_fact(&kb, "alex", "uses")
+        .await
+        .expect("rust fact still present");
+    // The mode-by-recency tiebreak picks the most recently observed
+    // value when counts tie; here counts differ (5 rust vs 4 go in
+    // store) but fetch_fact returns *some* Fact for (alex, uses) — we
+    // want to confirm one of them now has a closed interval.
+    let _ = old_fact;
+    let session = kb.db().session();
+    let probe = session
+        .query_with(
+            "MATCH (f:Fact) WHERE id(f) = $vid \
+             RETURN f.valid_at AS vat",
+        )
+        .param("vid", old_fact_id)
+        .fetch_all()
+        .await
+        .expect("probe");
+    let row = probe.rows().first().expect("old fact row");
+    let node_row = session
+        .query_with("MATCH (f:Fact) WHERE id(f) = $vid RETURN f")
+        .param("vid", old_fact_id)
+        .fetch_all()
+        .await
+        .expect("node probe");
+    let node: uni_db::Node = node_row
+        .rows()
+        .first()
+        .expect("node row")
+        .get("f")
+        .expect("node");
+    let _ = row;
+
+    // uni-db stringifies Temporal columns when packaged inside a Node
+    // returned via Cypher.  An open BTIC ends with `+inf)`; a closed
+    // BTIC contains a real datetime as `hi`.
+    let vat_display = match node.properties.get("valid_at") {
+        Some(Value::String(s)) => s.clone(),
+        other => panic!("expected stringified BTIC valid_at, got {other:?}"),
+    };
+    assert!(
+        !vat_display.contains("+inf)"),
+        "old fact BTIC was not closed: {vat_display}",
+    );
+}
+
+#[tokio::test]
+async fn drift_threshold_flips_entity_unstable() {
+    let kb = test_kb().await;
+
+    // Seed initial Fact, then drive 5 successive contradictions on the
+    // same subject "kim" with different objects each round.  Each round
+    // should invalidate the prior open Fact.
+    let objects = ["a", "b", "c", "d", "e", "f"];
+    for (round, obj) in objects.iter().enumerate() {
+        for i in 0..4 {
+            seed_observation(
+                &kb,
+                "kim",
+                Some("prefers"),
+                Some(obj),
+                "Kim prefers something",
+                ts(2024, 1 + round as u32, 1 + i),
+            )
+            .await;
+        }
+        // Add a single contradicting observation so the next round is
+        // pre-contradicted relative to the prior canonical.
+        if round + 1 < objects.len() {
+            seed_observation(
+                &kb,
+                "kim",
+                Some("prefers"),
+                Some(objects[round + 1]),
+                "tiny hint of next",
+                ts(2024, 1 + round as u32, 28),
+            )
+            .await;
+        }
+        let _ = run_cycle(&kb, "agent-1", None).await.expect("cycle");
+    }
+
+    // After 5+ invalidations, the kim Entity should be flagged unstable.
+    let session = kb.db().session();
+    let result = session
+        .query_with("MATCH (e:Entity {name: 'kim'}) RETURN e.unstable AS u, e.invalidation_count AS c")
+        .fetch_all()
+        .await
+        .expect("entity probe");
+    let row = result.rows().first().expect("kim entity row");
+    let unstable: bool = row.get("u").unwrap_or(false);
+    let count: i64 = row.get("c").unwrap_or(0);
+    assert!(
+        unstable,
+        "kim should be unstable after {count} invalidations",
+    );
+    assert!(count > 4, "expected >4 invalidations, got {count}");
+}

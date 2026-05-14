@@ -288,6 +288,23 @@ async fn main() -> Result<()> {
             result
         };
 
+        // Ensure a bench-agent Participant exists so the post-query
+        // episode recording has somewhere to attach `RECORDED_BY`.
+        let bench_agent_id = format!("bench-agent-{}", item.question_id);
+        let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
+            std::collections::HashMap::new();
+        agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
+        agent_props.insert(
+            "name".into(),
+            uni_db::Value::String("bench-agent".into()),
+        );
+        if let Err(e) = kb
+            .merge_node("Participant", "participant_id", &bench_agent_id, &agent_props)
+            .await
+        {
+            tracing::warn!(error = %e, "failed to create bench-agent Participant");
+        }
+
         // Query.
         let gold = data::gold_answer(item);
         let qr = query::run_lme_query(
@@ -340,6 +357,35 @@ async fn main() -> Result<()> {
             recall_ms = qr.recall_latency_ms,
             "query complete",
         );
+
+        // Record query-outcome episode (best-effort).
+        let outcome = match judge_score {
+            Some(s) if s >= 0.5 => "success",
+            Some(_) => "failure",
+            None => {
+                if qr.context_contains_answer {
+                    "success"
+                } else {
+                    "failure"
+                }
+            }
+        };
+        let state = serde_json::json!({
+            "topic": item.question.clone(),
+            "question": item.question.clone(),
+            "question_type": item.question_type.name(),
+            "question_id": item.question_id.clone(),
+        });
+        let params = uniko_memory::RecordEpisodeParams {
+            action_type: "retrieve".into(),
+            outcome: Some(outcome.into()),
+            state: Some(state),
+            importance: Some(judge_score.unwrap_or(0.5).clamp(0.0, 1.0)),
+            ..Default::default()
+        };
+        if let Err(e) = uniko_memory::record_episode(&kb, &bench_agent_id, params).await {
+            tracing::debug!(error = %e, "episode recording failed");
+        }
 
         all_results.push((qr, judge_score));
 

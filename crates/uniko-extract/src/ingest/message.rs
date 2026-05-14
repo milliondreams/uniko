@@ -4,23 +4,14 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
 use uni_db::Value;
 
 use uniko_pipes::types::IngestMessage;
+use uniko_store::types::datetime_value;
 use uniko_store::{KnowledgeBase, NodeId};
 
 use super::chunking::{ChunkConfig, count_tokens, select_chunker};
 use super::session::{ensure_participant, get_or_create_session, link_participant_to_session};
-
-/// Convert a `chrono::DateTime<Utc>` to `uni_db::Value::Temporal(DateTime)`.
-fn datetime_value(dt: DateTime<Utc>) -> Value {
-    Value::Temporal(uni_db::common::TemporalValue::DateTime {
-        nanos_since_epoch: dt.timestamp_nanos_opt().unwrap_or(0),
-        offset_seconds: 0,
-        timezone_name: None,
-    })
-}
 
 /// Result of ingesting a single message.
 #[derive(Debug)]
@@ -47,7 +38,6 @@ pub async fn ingest_message(
     msg: &IngestMessage,
     session_ctx: &mut super::context::SessionContext,
 ) -> uniko_store::Result<MessageIngestResult> {
-    let ts = msg.timestamp.to_rfc3339();
     let ts_value = datetime_value(msg.timestamp);
 
     // 1. Idempotency: skip if this message already exists.
@@ -80,13 +70,13 @@ pub async fn ingest_message(
         if nid != 0 {
             nid
         } else {
-            let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
+            let nid = ensure_participant(kb, &msg.sender_id, msg.timestamp).await?;
             link_participant_to_session(kb, nid, session_nid).await?;
             session_ctx.register_participant(&msg.sender_id, nid);
             nid
         }
     } else {
-        let nid = ensure_participant(kb, &msg.sender_id, &ts).await?;
+        let nid = ensure_participant(kb, &msg.sender_id, msg.timestamp).await?;
         link_participant_to_session(kb, nid, session_nid).await?;
         session_ctx.register_participant(&msg.sender_id, nid);
         nid
@@ -186,7 +176,7 @@ async fn resolve_recipients(
         let mut nids = Vec::with_capacity(ids.len());
         for pid in ids {
             let nid =
-                super::session::ensure_participant(kb, pid, &msg.timestamp.to_rfc3339()).await?;
+                super::session::ensure_participant(kb, pid, msg.timestamp).await?;
             nids.push(nid);
         }
         Ok(nids)

@@ -18,16 +18,18 @@ const STDLIB_RULES: &[(&str, &str, &str, &str)] = &[
         "stdlib_relevance_decay",
         "relevance_decay",
         "Compute decayed relevance for episodes based on age. Older episodes \
-         lose relevance exponentially. Episodes below 0.05 relevance are \
-         effectively forgotten.",
+         lose relevance exponentially via `importance * exp(-decay_rate * age_days)`. \
+         `decay_rate` is derived from a configurable half-life: \
+         `decay_rate = ln(2) / half_life_days`. Episodes below the configured \
+         threshold are effectively forgotten.",
         "CREATE RULE relevance_decay AS \
          MATCH (e:Episode)-[:RECORDED_BY]->(p:Participant {participant_id: $agent_id}) \
          WITH e, \
               duration.inDays(e.timestamp, datetime()) AS age_days, \
               e.importance AS base_importance \
          WITH e, \
-              base_importance * exp(-0.05 * age_days) AS decayed \
-         WHERE decayed > 0.05 \
+              base_importance * exp(-$decay_rate * age_days) AS decayed \
+         WHERE decayed > $decay_threshold \
          YIELD KEY e, VALUE decayed AS relevance",
     ),
     (
@@ -95,7 +97,7 @@ const STDLIB_RULES: &[(&str, &str, &str, &str)] = &[
 /// Returns [`UnikoError::Storage`] if graph operations fail, or
 /// [`UnikoError::Locy`] if rule registration fails.
 pub async fn register_stdlib_rules(kb: &KnowledgeBase) -> Result<(), UnikoError> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = uniko_store::types::datetime_value(chrono::Utc::now());
 
     for &(rule_id, name, natural_language, source) in STDLIB_RULES {
         // Create Rule node in the graph.
@@ -110,7 +112,7 @@ pub async fn register_stdlib_rules(kb: &KnowledgeBase) -> Result<(), UnikoError>
         props.insert("status".into(), Value::String("active".to_string()));
         props.insert("version".into(), Value::Int(1));
         props.insert("confidence".into(), Value::Float(1.0));
-        props.insert("created_at".into(), Value::String(now.clone()));
+        props.insert("created_at".into(), now.clone());
 
         kb.merge_node("Rule", "rule_id", rule_id, &props).await?;
 
@@ -137,6 +139,35 @@ pub fn is_stdlib_rule(source_type: &str) -> bool {
     source_type == "stdlib"
 }
 
+/// Build the parameter map for the `relevance_decay` Locy rule.
+///
+/// Converts a half-life in days into the exponential decay rate the rule
+/// expects (`decay_rate = ln(2) / half_life_days`) and packages it
+/// alongside the prune threshold and the agent id.  Pass the returned
+/// map to [`KnowledgeBase::execute_rule`].
+///
+/// # Panics
+///
+/// Panics if `half_life_days <= 0.0`.  Callers must validate config
+/// before invoking — [`UnikoConfig::validate`] already rejects non-
+/// positive half-lives.
+pub fn relevance_decay_params(
+    agent_id: &str,
+    half_life_days: f64,
+    decay_threshold: f64,
+) -> HashMap<String, Value> {
+    assert!(
+        half_life_days > 0.0,
+        "half_life_days must be positive (got {half_life_days})"
+    );
+    let decay_rate = std::f64::consts::LN_2 / half_life_days;
+    let mut params = HashMap::new();
+    params.insert("agent_id".into(), Value::String(agent_id.to_string()));
+    params.insert("decay_rate".into(), Value::Float(decay_rate));
+    params.insert("decay_threshold".into(), Value::Float(decay_threshold));
+    params
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +182,42 @@ mod tests {
         assert!(is_stdlib_rule("stdlib"));
         assert!(!is_stdlib_rule("authored"));
         assert!(!is_stdlib_rule("induced"));
+    }
+
+    #[test]
+    fn test_relevance_decay_rate_from_half_life() {
+        // 14-day half-life → 14-day-old episode should retain half its importance.
+        let params = relevance_decay_params("agent-1", 14.0, 0.05);
+        let decay_rate = match params.get("decay_rate") {
+            Some(Value::Float(r)) => *r,
+            other => panic!("expected Float decay_rate, got {other:?}"),
+        };
+        // ln(2) / 14 ≈ 0.04951.
+        assert!(
+            (decay_rate - (std::f64::consts::LN_2 / 14.0)).abs() < 1e-12,
+            "decay_rate = {decay_rate}",
+        );
+        // Sanity: applying the rate to 14 days gives 0.5.
+        let retained = (-decay_rate * 14.0_f64).exp();
+        assert!((retained - 0.5).abs() < 1e-9, "retained = {retained}");
+    }
+
+    #[test]
+    fn test_relevance_decay_params_contains_agent_id_and_threshold() {
+        let params = relevance_decay_params("agent-xyz", 30.0, 0.1);
+        match params.get("agent_id") {
+            Some(Value::String(s)) => assert_eq!(s, "agent-xyz"),
+            other => panic!("expected String agent_id, got {other:?}"),
+        }
+        match params.get("decay_threshold") {
+            Some(Value::Float(t)) => assert!((t - 0.1).abs() < 1e-12),
+            other => panic!("expected Float decay_threshold, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "half_life_days must be positive")]
+    fn test_relevance_decay_params_rejects_zero_half_life() {
+        let _ = relevance_decay_params("agent-1", 0.0, 0.05);
     }
 }

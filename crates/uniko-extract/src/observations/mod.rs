@@ -228,12 +228,12 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 if let Some(anchor) = raw.temporal_anchor {
                     props.insert(
                         "temporal_anchor".into(),
-                        Value::String(anchor.to_rfc3339()),
+                        uniko_store::types::datetime_value(anchor),
                     );
                 }
                 props.insert(
                     "observed_at".into(),
-                    Value::String(raw.observed_at.to_rfc3339()),
+                    uniko_store::types::datetime_value(raw.observed_at),
                 );
                 props.insert("confidence".into(), Value::Float(raw.confidence));
                 props

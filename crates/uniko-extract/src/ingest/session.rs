@@ -8,16 +8,8 @@ use chrono::{DateTime, Utc};
 use uni_db::Value;
 
 use uniko_store::schema::constants::edges;
+use uniko_store::types::datetime_value;
 use uniko_store::{KnowledgeBase, NodeId};
-
-/// Convert a `chrono::DateTime<Utc>` to `uni_db::Value::Temporal(DateTime)`.
-fn datetime_value(dt: &DateTime<Utc>) -> Value {
-    Value::Temporal(uni_db::common::TemporalValue::DateTime {
-        nanos_since_epoch: dt.timestamp_nanos_opt().unwrap_or(0),
-        offset_seconds: 0,
-        timezone_name: None,
-    })
-}
 
 /// Get or create a Session node by `session_id`.
 ///
@@ -44,7 +36,7 @@ pub(crate) async fn get_or_create_session(
     // Create a new session.
     let mut props = HashMap::new();
     props.insert("session_id".into(), Value::String(session_id.to_string()));
-    props.insert("started_at".into(), datetime_value(timestamp));
+    props.insert("started_at".into(), datetime_value(*timestamp));
     kb.create_node("Session", &props).await
 }
 
@@ -59,12 +51,12 @@ pub(crate) async fn get_or_create_session(
 pub(crate) async fn ensure_participant(
     kb: &KnowledgeBase,
     participant_id: &str,
-    timestamp: &str,
+    timestamp: DateTime<Utc>,
 ) -> uniko_store::Result<NodeId> {
     let mut props = HashMap::new();
     props.insert("name".into(), Value::String(participant_id.to_string()));
     props.insert("kind".into(), Value::String("unknown".to_string()));
-    props.insert("last_seen".into(), Value::String(timestamp.to_string()));
+    props.insert("last_seen".into(), datetime_value(timestamp));
     kb.merge_node("Participant", "participant_id", participant_id, &props)
         .await
 }

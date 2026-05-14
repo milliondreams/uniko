@@ -3,8 +3,12 @@
 //! Each fixture builds a synthetic DEP tree, runs both the legacy
 //! Rust function and the new YAML-driven matcher with the bundled
 //! `english.yml`, and asserts they emit the same observation set.
+//! Gated on the `onnx` feature — both `nlp` and `observations::rules_engine`
+//! are themselves ONNX-gated.
 //!
-//! Run: cargo nextest run -p uniko-extract --test observation_rules_parity_test
+//! Run: cargo nextest run -p uniko-extract --features onnx --test observation_rules_parity_test
+
+#![cfg(feature = "onnx")]
 
 use uniko_extract::ingest::context::SentenceContext;
 use uniko_extract::nlp::decode::extract_dep_observations;

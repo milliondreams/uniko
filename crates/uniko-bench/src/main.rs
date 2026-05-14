@@ -383,14 +383,23 @@ async fn main() -> Result<()> {
         )
         .await
         {
-            Ok(stats) => tracing::info!(
-                sample_id = %sample.sample_id,
-                processed = stats.observations_processed,
-                facts_created = stats.facts_created,
-                facts_reinforced = stats.facts_reinforced,
-                duration_ms = cycle_start.elapsed().as_millis(),
-                "consolidation cycle complete",
-            ),
+            Ok(stats) => {
+                tracing::info!(
+                    sample_id = %sample.sample_id,
+                    processed = stats.observations_processed,
+                    facts_created = stats.facts_created,
+                    facts_reinforced = stats.facts_reinforced,
+                    duration_ms = cycle_start.elapsed().as_millis(),
+                    "consolidation cycle complete",
+                );
+                verify_label_visible(
+                    &kb,
+                    "ConsolidationCycle",
+                    "agent_id",
+                    &sample.sample_id,
+                )
+                .await;
+            }
             Err(e) => tracing::warn!(
                 sample_id = %sample.sample_id,
                 error = %e,
@@ -400,6 +409,23 @@ async fn main() -> Result<()> {
 
         // Build evidence lookup for retrieval evaluation.
         let evidence_lookup = build_evidence_lookup(&sessions);
+
+        // Ensure a Participant exists for the bench "agent" so we can
+        // record query-outcome Episodes against it.  `merge_node` is
+        // idempotent so `--reuse` paths are safe.
+        let bench_agent_id = format!("bench-agent-{}", sample.sample_id);
+        let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
+            std::collections::HashMap::new();
+        agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
+        agent_props.insert("name".into(), uni_db::Value::String("bench-agent".into()));
+        if let Err(e) = kb
+            .merge_node("Participant", "participant_id", &bench_agent_id, &agent_props)
+            .await
+        {
+            tracing::warn!(error = %e, "failed to create bench-agent Participant — skipping episode recording");
+        } else {
+            verify_label_visible(&kb, "Participant", "participant_id", &bench_agent_id).await;
+        }
 
         // Query each question.
         let questions: Vec<_> = sample
@@ -459,6 +485,32 @@ async fn main() -> Result<()> {
                 None
             };
 
+            // Record an Episode tagging this retrieval outcome.  Feeds
+            // procedure promotion (P5), relevance decay, and Phase 2 of
+            // the recall cascade.  Errors here are non-fatal — bench
+            // accuracy is unaffected.
+            let outcome = if f1 >= 0.5 { "success" } else { "failure" };
+            let state = serde_json::json!({
+                "topic": qr.question.clone(),
+                "question": qr.question.clone(),
+                "category": format!("{:?}", qr.category),
+                "sample_id": qr.sample_id.clone(),
+                "question_index": qr.question_index,
+            });
+            let params = uniko_memory::RecordEpisodeParams {
+                action_type: "retrieve".into(),
+                outcome: Some(outcome.into()),
+                state: Some(state),
+                importance: Some(f1.clamp(0.0, 1.0)),
+                ..Default::default()
+            };
+            match uniko_memory::record_episode(&kb, &bench_agent_id, params).await {
+                Ok(episode_nid) => {
+                    verify_node_visible_by_label(&kb, "Episode", episode_nid).await;
+                }
+                Err(e) => tracing::debug!(error = %e, "episode recording failed"),
+            }
+
             all_results.push((qr, f1, judge_score));
         }
 
@@ -509,4 +561,60 @@ async fn main() -> Result<()> {
     tracing::info!(path = %cli.output.display(), "results written");
 
     Ok(())
+}
+
+/// Verify a node is visible to a label-anchored MATCH after writing.
+///
+/// Watches for a uni-db symptom seen on conv-26 where vertices written
+/// during the bench run are visible to unconstrained `MATCH (n)` (via
+/// edge traversal or `id(n)=$vid`) but invisible to `MATCH (n:Label)`.
+/// Catches the bug at write time instead of finding 0 nodes after shutdown.
+async fn verify_label_visible(
+    kb: &Arc<uniko_store::KnowledgeBase>,
+    label: &str,
+    ext_id_field: &str,
+    ext_id: &str,
+) {
+    let cypher = format!(
+        "MATCH (n:{label}) WHERE n.{ext_id_field} = $eid RETURN count(n) AS c"
+    );
+    match kb.db().session().query_with(&cypher).param("eid", ext_id).fetch_all().await {
+        Ok(r) => {
+            let n: i64 = r.rows().first().and_then(|row| row.get("c").ok()).unwrap_or(-1);
+            if n == 0 {
+                tracing::warn!(
+                    label,
+                    ext_id_field,
+                    ext_id,
+                    "verify_label_visible: label-anchored MATCH returned 0 — vertex written but invisible to label-scan"
+                );
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, label, "verify_label_visible query failed"),
+    }
+}
+
+/// Verify a node id is visible to a label-anchored MATCH after writing.
+///
+/// Same idea as [`verify_label_visible`] but keyed by NodeId — used when
+/// the writer returns the vid directly (e.g. `record_episode`).
+async fn verify_node_visible_by_label(
+    kb: &Arc<uniko_store::KnowledgeBase>,
+    label: &str,
+    node_id: uniko_store::NodeId,
+) {
+    let cypher = format!("MATCH (n:{label}) WHERE id(n) = $v RETURN count(n) AS c");
+    match kb.db().session().query_with(&cypher).param("v", node_id).fetch_all().await {
+        Ok(r) => {
+            let n: i64 = r.rows().first().and_then(|row| row.get("c").ok()).unwrap_or(-1);
+            if n == 0 {
+                tracing::warn!(
+                    label,
+                    node_id,
+                    "verify_node_visible_by_label: label-anchored MATCH returned 0 for known vid"
+                );
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, label, "verify_node_visible_by_label query failed"),
+    }
 }

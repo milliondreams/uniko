@@ -4,4 +4,4 @@
 
 pub mod stdlib;
 
-pub use stdlib::register_stdlib_rules;
+pub use stdlib::{is_stdlib_rule, register_stdlib_rules, relevance_decay_params};
