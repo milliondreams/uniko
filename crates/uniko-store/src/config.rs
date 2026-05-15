@@ -159,7 +159,12 @@ fn default_nlp_srl_enabled() -> bool {
 }
 
 fn default_phase1_strategy() -> String {
-    "merge".to_string()
+    // `boost` validated 2026-05-14 to beat `merge` by +0.5pts overall
+    // and +0.9pts on Multi-hop on conv-26+conv-30 with reranker on,
+    // `recall_limit=15`, `reranker_top_n=50`.  Boost only takes effect
+    // when `recall_limit < reranker_top_n` so its session-level Fact
+    // boosts can push chunks above the truncation cutoff.
+    "boost".to_string()
 }
 
 fn default_phase2_mmr_lambda() -> f64 {
@@ -178,6 +183,14 @@ fn default_phase2_graph_enabled() -> bool {
     true
 }
 
+fn default_consolidation_cluster_objects() -> bool {
+    true
+}
+
+fn default_consolidation_date_augment_embedding() -> bool {
+    true
+}
+
 fn default_phase2_graph_damping() -> f64 {
     0.85
 }
@@ -187,7 +200,10 @@ fn default_phase2_graph_max_iter() -> usize {
 }
 
 fn default_phase1_boost_alpha() -> f64 {
-    0.3
+    // Validated 2026-05-14: α=0.6 with `recall_limit=15`,
+    // `reranker_top_n=50`, `phase1_strategy=boost` ties or beats α=0.3
+    // on every category in conv-26+conv-30, no regressions.
+    0.6
 }
 
 impl RerankerConfig {
@@ -217,8 +233,18 @@ impl RerankerConfig {
 }
 
 impl Default for RerankerConfig {
+    /// Default: `cross-encoder/ms-marco-MiniLM-L-6-v2`, **enabled**.
+    ///
+    /// MiniLM is 22M params and ~12× faster than BGE-reranker-base,
+    /// so default-on costs ~50-100ms per query — small relative to
+    /// the rest of recall and the rerank quality lift on multi-hop /
+    /// open-domain.  Disable via `RerankerConfig { enabled: false, ..
+    /// Default::default() }` or `--no-reranker` on the bench CLI.
     fn default() -> Self {
-        Self::bge_base()
+        Self {
+            enabled: true,
+            ..Self::minilm_l6()
+        }
     }
 }
 
@@ -504,6 +530,24 @@ pub struct UnikoConfig {
     /// `uniko_memory::recall::default_phase2_graph_edge_weights`).
     #[serde(default)]
     pub phase2_graph_edge_weights: std::collections::HashMap<String, f64>,
+
+    /// Enable cosine-similarity clustering of object surface forms in
+    /// P4 Consolidation.  When `true` (default), near-duplicate object
+    /// phrasings ("adoption agency" / "adoption agencies") collapse
+    /// into one vote bucket before mode-voting picks the canonical.
+    /// When `false`, fall back to legacy exact-string bucketing.
+    #[serde(default = "default_consolidation_cluster_objects")]
+    pub consolidation_cluster_objects: bool,
+
+    /// Prepend a human-readable month-year prefix (e.g. `"January 2024"`)
+    /// to the text embedded for each Fact in P4 Consolidation.  Pulls
+    /// the date from `first_observed` (the Fact's `valid_at_lo`) so
+    /// temporally-near Facts co-locate in the embedding space.
+    /// Asymmetric on purpose: queries are not augmented, since uniko's
+    /// Phase-2 temporal channel already handles query-side temporal
+    /// cues via BTIC overlap.
+    #[serde(default = "default_consolidation_date_augment_embedding")]
+    pub consolidation_date_augment_embedding: bool,
 }
 
 impl Default for UnikoConfig {
@@ -555,6 +599,8 @@ impl Default for UnikoConfig {
             phase2_graph_damping: default_phase2_graph_damping(),
             phase2_graph_max_iter: default_phase2_graph_max_iter(),
             phase2_graph_edge_weights: std::collections::HashMap::new(),
+            consolidation_cluster_objects: default_consolidation_cluster_objects(),
+            consolidation_date_augment_embedding: default_consolidation_date_augment_embedding(),
         }
     }
 }

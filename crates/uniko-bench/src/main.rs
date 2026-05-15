@@ -149,12 +149,11 @@ struct Cli {
     #[arg(long, default_value = "bge-small")]
     embedding: String,
 
-    /// Enable the reranker to re-score the top recall candidates before
-    /// truncating to limit. Costs an extra ONNX call per query but
-    /// typically helps multi-hop / open-domain where bi-encoder ranking
-    /// misses synonym/implication links.
+    /// Disable the reranker.  Reranker is **on by default** (ms-marco
+    /// MiniLM-L-6-v2) — pass `--no-reranker` to fall back to pure
+    /// recall ranking.  Useful for A/B comparison or low-latency runs.
     #[arg(long)]
-    reranker: bool,
+    no_reranker: bool,
 
     /// HuggingFace model id for the reranker. xervo 0.11 auto-detects
     /// `token_type_ids`, so XLM-R-based models (e.g.
@@ -162,7 +161,7 @@ struct Cli {
     /// (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`). For
     /// `--reranker-style generative`, use a decoder-LM export such as
     /// `onnx-community/Qwen3-Reranker-0.6B-ONNX`.
-    #[arg(long, default_value = "BAAI/bge-reranker-base")]
+    #[arg(long, default_value = "cross-encoder/ms-marco-MiniLM-L-6-v2")]
     reranker_model: String,
 
     /// Reranker code path. `cross-encoder` (default) for BERT-family
@@ -187,25 +186,41 @@ struct Cli {
     recall_limit: Option<usize>,
 
     /// Phase 1 (Compact) contribution strategy:
-    /// - `merge` (default) — cap=3 interleave Facts by score into the
-    ///   Phase 3 bundle.
-    /// - `boost` — Facts/Observations only influence chunk ranking via
-    ///   a session-level boost; bundle stays 100% Chunks.
+    /// - `boost` (default) — Facts/Observations influence chunk ranking
+    ///   via a session-level boost; bundle stays 100% Chunks.  Validated
+    ///   to beat `merge` on conv-26+conv-30.
+    /// - `merge` — cap=3 interleave Facts by score into the Phase 3
+    ///   bundle.
     /// - `off` — skip Phase 1 entirely.
-    #[arg(long, default_value = "merge")]
+    #[arg(long, default_value = "boost")]
     phase1_strategy: String,
 
     /// Multiplicative weight applied to Fact scores when computing the
-    /// session-chunk boost under `--phase1-strategy boost`.
-    #[arg(long, default_value = "0.3")]
+    /// session-chunk boost under `--phase1-strategy boost`.  α=0.6 is
+    /// the validated default; α only has effect when `recall_limit <
+    /// reranker_top_n` (boost reorders the post-rerank set and pushes
+    /// boosted chunks above the truncation cutoff).
+    #[arg(long, default_value = "0.6")]
     phase1_boost_alpha: f64,
 
     /// Comma-separated list of query-reformulation variants to enable.
     /// Recognised: `keywords`, `original`, `declarative`, `type_anchored`.
-    /// Empty / unset uses the default 4-variant configuration. Pass
-    /// `keywords` alone for legacy single-query behaviour.
+    /// Empty / unset uses the *legacy single-variant default* (keywords
+    /// only).  Pass an explicit list to opt into multi-query fan-out.
     #[arg(long, default_value = "")]
     variants: String,
+
+    /// Disable cosine-similarity clustering of object surface forms in
+    /// P4 Consolidation.  Default: clustering on.  Useful for A/B
+    /// comparison against legacy exact-string vote bucketing.
+    #[arg(long)]
+    no_consolidation_cluster: bool,
+
+    /// Disable the `"[Month Year] "` date prefix prepended to Fact
+    /// embed text in P4 Consolidation.  Default: date-augment on.
+    /// Useful for A/B comparison against unaugmented embeddings.
+    #[arg(long)]
+    no_date_augment_embedding: bool,
 }
 
 #[tokio::main]
@@ -264,8 +279,12 @@ async fn main() -> Result<()> {
     if let Some(dim) = cli.embedding_dim {
         config.embedding.dimensions = dim;
     }
-    if cli.reranker {
-        config.reranker.enabled = true;
+    // Reranker is default-on via `RerankerConfig::default()`.  Apply
+    // CLI overrides (model/style/top_n) regardless, so the user can
+    // swap models without explicitly enabling.  `--no-reranker`
+    // disables.
+    config.reranker.enabled = !cli.no_reranker;
+    if config.reranker.enabled {
         config.reranker.model_id = cli.reranker_model.clone();
         config.reranker.style = cli.reranker_style.clone();
         config.reranker.top_n = cli.reranker_top_n;
@@ -283,6 +302,8 @@ async fn main() -> Result<()> {
     config.phase2_graph_enabled = !cli.no_phase2_graph;
     config.phase2_temporal_enabled = !cli.no_phase2_temporal;
     config.phase1_boost_alpha = cli.phase1_boost_alpha;
+    config.consolidation_cluster_objects = !cli.no_consolidation_cluster;
+    config.consolidation_date_augment_embedding = !cli.no_date_augment_embedding;
     if !cli.variants.trim().is_empty() {
         config.query_variants = cli
             .variants
@@ -327,6 +348,11 @@ async fn main() -> Result<()> {
     } else {
         cli.llm_alias.as_deref()
     };
+    // OpenAI gpt-5 / o-series rejects custom temperature and `max_tokens`
+    // — pass `GenerationOptions::default()` for those.  Auto-detected
+    // from the resolved provider (set explicitly, or implied by
+    // `--llm-base-url`).
+    let llm_use_default_options = matches!(llm_provider, Some("remote/openai"));
     let judge_alias = if cli.no_judge || cli.retrieval_only {
         None
     } else {
@@ -473,6 +499,7 @@ async fn main() -> Result<()> {
                 qa,
                 &evidence_texts,
                 llm_alias,
+                llm_use_default_options,
             )
             .await?;
 

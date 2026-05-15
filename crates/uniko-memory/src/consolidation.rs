@@ -4,7 +4,7 @@
 //! 1. Queries unprocessed Observations carrying a structured triple
 //!    (`subject` and `predicate` non-null).
 //! 2. Groups by `(subject, predicate)`; picks a canonical object per
-//!    group (mode, tie-broken by recency).
+//!    group (cosine-clustered mode, tie-broken by recency).
 //! 3. Upserts a Fact per group via
 //!    [`KnowledgeBase::upsert_fact_by_triple`]; first observation in a
 //!    cluster becomes the embedding source.
@@ -14,11 +14,19 @@
 //!    `CREATED`, and `INVOLVED` edges — the `PROCESSED` edges are the
 //!    idempotency anchor so future cycles skip the same Observations.
 //!
+//! Object surface forms within a group are clustered by cosine
+//! similarity over their document embeddings before mode-voting.  This
+//! keeps near-duplicate phrasings ("adoption agencies" / "adoption
+//! agency") from splitting the vote between three exact buckets and
+//! letting an off-topic recency-winner take canonical.
+//!
 //! F38 contradiction detection: when contradicting observations within
 //! a `(subject, predicate)` group exceed [`CONTRADICTION_THRESHOLD`] of
 //! the total, any prior open-BTIC Fact for that pair with a different
 //! object is invalidated (BTIC `hi` closed; `INVALIDATES` edge wired
-//! from the new Fact).
+//! from the new Fact).  "Different" here means *outside* the cluster
+//! that contains the prior Fact's object, so paraphrase-only changes
+//! don't trigger spurious invalidations.
 //!
 //! F39 entity drift: each invalidation records against the subject
 //! Entity's `invalidation_count`; once cumulative invalidations exceed
@@ -27,11 +35,11 @@
 
 // Rust guideline compliant
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
-use uniko_extract::embedding::embed_document;
+use uniko_extract::embedding::{embed_batch, embed_document};
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use crate::llm_triples::{ObservationInput, refine_triples};
@@ -69,6 +77,16 @@ const DRIFT_THRESHOLD: i64 = 4;
 /// Caps work per cycle so a long-running ingest doesn't starve other
 /// agents.  Spillover is picked up on the next sweep.
 const DEFAULT_BATCH_SIZE: i64 = 500;
+
+/// Cosine similarity at or above which two object surface forms are
+/// treated as paraphrases of the same canonical claim.
+///
+/// Tuned for BGE-small-en (the bench default).  BGE embeds short noun
+/// phrases tightly — exact paraphrases land in the 0.93+ range and
+/// genuine different objects ("Rust" vs "Go") sit well below 0.7, so
+/// 0.88 is a safe split that collapses inflection / article variation
+/// without merging distinct entities.
+const COSINE_THRESHOLD: f32 = 0.88;
 
 /// Source of `(subject, predicate, object)` triples for grouping.
 ///
@@ -140,8 +158,6 @@ pub async fn run_cycle_with(
     if let TripleSource::Llm { alias } = triple_source
         && !observations.is_empty()
     {
-        // Borrow observations immutably to build the input batch,
-        // then drop the borrow before mutating below.
         let (inputs, requested) = {
             let inputs: Vec<ObservationInput> = observations
                 .iter()
@@ -178,8 +194,6 @@ pub async fn run_cycle_with(
         );
     }
     if observations.is_empty() {
-        // Empty cycles are still recorded so the audit trail is
-        // contiguous and metrics show a heartbeat.
         let completed_at = Utc::now();
         kb.write_consolidation_cycle(
             agent_id,
@@ -208,11 +222,6 @@ pub async fn run_cycle_with(
             Some(prev) => prev.min(obs.observed_at),
             None => obs.observed_at,
         });
-        // Phase A: track the earliest `temporal_anchor` across
-        // contributors so derived Facts get a BTIC `valid_at_lo` that
-        // reflects when the claim first held, not just when it was
-        // observed.  Falls back to `first_observed_at` when no
-        // contributor carried a resolved anchor.
         if let Some(anchor) = obs.temporal_anchor {
             entry.first_temporal_anchor = Some(match entry.first_temporal_anchor {
                 Some(prev) => prev.min(anchor),
@@ -226,36 +235,26 @@ pub async fn run_cycle_with(
         });
     }
 
-    let mut created_facts: Vec<NodeId> = Vec::new();
-    let mut reinforced_facts: Vec<NodeId> = Vec::new();
-    let mut invalidated_facts: Vec<NodeId> = Vec::new();
-    let mut drift_alerts: usize = 0;
-
-    for ((subject, predicate), group) in groups {
-        let canonical = canonical_object(&group.object_votes);
-
-        // F38: identify prior open Facts for (subject, predicate) and,
-        // for each, decide whether the votes in this cycle contradict
-        // its established object.  An open Fact with a stored object X
-        // is "contradicted" when > CONTRADICTION_THRESHOLD of the
-        // votes carry an object != X (case-insensitive, trimmed).
-        let prior_open = match kb.find_stale_open_facts(&subject, &predicate, None).await {
+    // Pre-pass: look up prior open Facts per group and read their
+    // stored object text.  We do this before clustering so prior
+    // objects participate in the cluster assignment alongside the
+    // votes — F38 must compare in cluster-space, not raw-string space.
+    let mut group_priors: HashMap<(String, String), Vec<PriorFact>> = HashMap::new();
+    for key in groups.keys() {
+        let prior_open = match kb.find_stale_open_facts(&key.0, &key.1, None).await {
             Ok(facts) => facts,
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    subject = %subject,
-                    predicate = %predicate,
+                    subject = %key.0,
+                    predicate = %key.1,
                     "open Fact lookup failed (continuing without F38)",
                 );
                 Vec::new()
             }
         };
-        let mut prior_stale: Vec<(NodeId, uni_db::common::uni_btic::Btic, String)> = Vec::new();
+        let mut priors: Vec<PriorFact> = Vec::with_capacity(prior_open.len());
         for (nid, btic) in &prior_open {
-            // Fetch the Fact's object so we can vote-compare.  Reuse
-            // the Node already loaded by find_stale_open_facts isn't
-            // possible across the API boundary; do a focused read.
             let session = kb.db().session();
             let row_set = match session
                 .query_with("MATCH (f:Fact) WHERE id(f) = $vid RETURN f.object AS obj")
@@ -271,35 +270,139 @@ pub async fn run_cycle_with(
                 .first()
                 .and_then(|r| r.get::<String>("obj").ok())
                 .unwrap_or_default();
-            let (total, agree) = vote_tallies(&group.object_votes, Some(&prior_obj));
+            priors.push(PriorFact {
+                node_id: *nid,
+                btic: *btic,
+                object: prior_obj,
+            });
+        }
+        if !priors.is_empty() {
+            group_priors.insert(key.clone(), priors);
+        }
+    }
+
+    // Collect every unique non-empty object surface form (votes +
+    // prior Fact objects), single batch embed call.  Per-group
+    // clusters are computed from a slice of this shared map below.
+    let mut unique_objects: HashSet<String> = HashSet::new();
+    for group in groups.values() {
+        for v in &group.object_votes {
+            if let Some(text) = &v.text {
+                let k = normalize_object(text);
+                if !k.is_empty() {
+                    unique_objects.insert(k);
+                }
+            }
+        }
+    }
+    for priors in group_priors.values() {
+        for p in priors {
+            let k = normalize_object(&p.object);
+            if !k.is_empty() {
+                unique_objects.insert(k);
+            }
+        }
+    }
+    let unique_vec: Vec<String> = unique_objects.into_iter().collect();
+    let cluster_objects = kb.config().consolidation_cluster_objects;
+    let object_embeddings: HashMap<String, Vec<f32>> = if unique_vec.is_empty() || !cluster_objects
+    {
+        // Disabled clustering: skip the batch embed entirely.
+        // `build_clusters` falls back to singleton-per-key when an
+        // embedding is missing, which reproduces the legacy exact-
+        // string mode/vote behavior.
+        HashMap::new()
+    } else {
+        let refs: Vec<&str> = unique_vec.iter().map(String::as_str).collect();
+        let doc_prefix = kb.config().embedding.document_prefix.clone();
+        match embed_batch(kb, &refs, doc_prefix.as_deref()).await {
+            Ok(embs) if embs.len() == unique_vec.len() => {
+                unique_vec.iter().cloned().zip(embs).collect()
+            }
+            Ok(embs) => {
+                tracing::warn!(
+                    requested = unique_vec.len(),
+                    returned = embs.len(),
+                    "object embedding batch length mismatch; falling back to string-exact dedup",
+                );
+                HashMap::new()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "object embedding batch failed; falling back to string-exact dedup",
+                );
+                HashMap::new()
+            }
+        }
+    };
+
+    let mut created_facts: Vec<NodeId> = Vec::new();
+    let mut reinforced_facts: Vec<NodeId> = Vec::new();
+    let mut invalidated_facts: Vec<NodeId> = Vec::new();
+    let mut drift_alerts: usize = 0;
+
+    for ((subject, predicate), group) in groups {
+        let priors = group_priors
+            .remove(&(subject.clone(), predicate.clone()))
+            .unwrap_or_default();
+
+        // Build the cluster map for this group from the shared
+        // embedding cache.  Includes vote surface forms AND prior Fact
+        // object so F38 can compare in cluster-space.
+        let mut group_keys: HashSet<String> = HashSet::new();
+        for v in &group.object_votes {
+            if let Some(text) = &v.text {
+                let k = normalize_object(text);
+                if !k.is_empty() {
+                    group_keys.insert(k);
+                }
+            }
+        }
+        for p in &priors {
+            let k = normalize_object(&p.object);
+            if !k.is_empty() {
+                group_keys.insert(k);
+            }
+        }
+        let clusters = build_clusters(&group_keys, &object_embeddings, COSINE_THRESHOLD);
+
+        let canonical = canonical_object(&group.object_votes, &clusters);
+
+        // F38: identify prior open Facts whose object's cluster gets
+        // outvoted in this cycle.
+        let mut prior_stale: Vec<(NodeId, uni_db::common::uni_btic::Btic, String)> = Vec::new();
+        for prior in &priors {
+            let prior_key = normalize_object(&prior.object);
+            let prior_cluster = clusters.get(&prior_key).copied();
+            let (total, agree) = vote_tallies(&group.object_votes, prior_cluster, &clusters);
             if total == 0 {
                 continue;
             }
             let contradicting = total - agree;
             if (contradicting as f64) / (total as f64) > CONTRADICTION_THRESHOLD {
-                prior_stale.push((*nid, *btic, prior_obj));
+                prior_stale.push((prior.node_id, prior.btic, prior.object.clone()));
             }
         }
-        // Prefer the earliest resolved `temporal_anchor` (when the
-        // claim first held) over `observed_at` (when the message was
-        // recorded).  This propagates to Fact.valid_at_lo via
-        // `upsert_fact_by_triple`, so BTIC intervals match the claim
-        // timeline rather than the conversation timeline.
+
         let first_observed = group
             .first_temporal_anchor
             .or(group.first_observed_at)
             .unwrap_or(started_at);
 
-        // Compute the embedding text from the canonical (subject,
-        // predicate, object) triple.  Falls back to the freshest
-        // contributing observation's `content` when the object slot is
-        // empty — that text is at least a paraphrase of the same claim
-        // and yields a usable embedding for Phase 1 retrieval.
-        let embed_text = match &canonical {
-            Some(obj) => format!("{subject} {predicate} {obj}"),
-            None => freshest_content(&group.object_votes)
-                .unwrap_or_else(|| format!("{subject} {predicate}")),
-        };
+        // Compute the embedding text from the canonical triple.  When
+        // the object slot is empty, embed the freshest contributor's
+        // content as a paraphrase fallback.  Optionally prepend a
+        // `"%B %Y"` date prefix (e.g. `"[January 2024] "`) so temporally-
+        // near Facts co-locate in the embedding space.
+        let embed_text = compose_embed_text(
+            first_observed,
+            &subject,
+            &predicate,
+            canonical.as_deref(),
+            freshest_content(&group.object_votes).as_deref(),
+            kb.config().consolidation_date_augment_embedding,
+        );
         let embedding = match embed_document(kb, &embed_text).await {
             Ok(v) => Some(v),
             Err(e) => {
@@ -333,11 +436,6 @@ pub async fn run_cycle_with(
             reinforced_facts.push(upsert.node_id);
         }
 
-        // F38: invalidate every prior Fact we identified as contested
-        // by this cycle's vote distribution.  Skip if the stale Fact
-        // happens to be the same node we just upserted (the new
-        // canonical matches the prior canonical — `upsert_fact_by_triple`
-        // is idempotent on subject|predicate|object).
         if !prior_stale.is_empty() {
             let now = Utc::now();
             for (stale_nid, stale_btic, _stale_obj) in &prior_stale {
@@ -365,9 +463,6 @@ pub async fn run_cycle_with(
                 }
                 invalidated_facts.push(*stale_nid);
 
-                // F39: account the invalidation against the subject
-                // Entity.  Flips `unstable` when cumulative
-                // invalidations exceed DRIFT_THRESHOLD.
                 match kb
                     .record_entity_invalidation(&subject, now, DRIFT_THRESHOLD)
                     .await
@@ -414,15 +509,148 @@ pub async fn run_cycle_with(
     })
 }
 
-/// Tally `(total, canonical)` non-empty object votes for F38.
+/// Canonical normalization for clustering keys: trim + lowercase.
 ///
-/// `total` counts every contributing observation that supplied a non-
-/// empty object string; `canonical` counts how many of those matched
-/// the chosen canonical text (case-insensitively, trimmed).
-fn vote_tallies(votes: &[ObjectVote], canonical: Option<&str>) -> (usize, usize) {
-    let canonical_key = canonical.map(|s| s.trim().to_ascii_lowercase());
+/// Keeps surface-form variations (e.g. casing, surrounding whitespace)
+/// from producing distinct cluster keys before semantic clustering even
+/// has a chance to dedupe them.
+fn normalize_object(text: &str) -> String {
+    text.trim().to_ascii_lowercase()
+}
+
+/// Cosine similarity over two equal-length float vectors.
+///
+/// Returns 0.0 when either input is zero-norm; mismatched lengths are
+/// truncated to the shorter prefix (callers should pass vectors from
+/// the same embedding model so lengths always match in practice).
+fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+    let len = a.len().min(b.len());
+    if len == 0 {
+        return 0.0;
+    }
+    let mut dot = 0.0_f32;
+    let mut na = 0.0_f32;
+    let mut nb = 0.0_f32;
+    for i in 0..len {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+    }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na.sqrt() * nb.sqrt())
+    }
+}
+
+/// Assign each normalized key to a cluster id via single-pass greedy
+/// agglomeration over cosine similarity.
+///
+/// Iterates keys in deterministic sorted order so the cluster ids are
+/// stable across runs with the same input set.  Centroids are running
+/// means updated each time a key joins.  When a key has no embedding
+/// in the cache (or the cache itself is empty), it's placed in its
+/// own singleton cluster — that gives string-exact behavior as a
+/// natural fallback when embedding is unavailable.
+fn build_clusters(
+    keys: &HashSet<String>,
+    embeddings: &HashMap<String, Vec<f32>>,
+    threshold: f32,
+) -> HashMap<String, usize> {
+    let mut sorted: Vec<&String> = keys.iter().collect();
+    sorted.sort();
+
+    let mut centroids: Vec<Vec<f32>> = Vec::new();
+    let mut counts: Vec<usize> = Vec::new();
+    let mut out: HashMap<String, usize> = HashMap::with_capacity(keys.len());
+
+    for key in sorted {
+        let Some(emb) = embeddings.get(key) else {
+            // No embedding available — singleton cluster.
+            let id = centroids.len();
+            centroids.push(Vec::new());
+            counts.push(1);
+            out.insert(key.clone(), id);
+            continue;
+        };
+
+        let mut best: Option<(usize, f32)> = None;
+        for (i, c) in centroids.iter().enumerate() {
+            if c.is_empty() {
+                continue;
+            }
+            let s = cosine_sim(emb, c);
+            if s > best.map(|(_, x)| x).unwrap_or(f32::MIN) {
+                best = Some((i, s));
+            }
+        }
+
+        match best {
+            Some((i, s)) if s >= threshold => {
+                let n = counts[i] as f32;
+                let centroid = &mut centroids[i];
+                for (j, x) in emb.iter().enumerate() {
+                    if j < centroid.len() {
+                        centroid[j] = (centroid[j] * n + x) / (n + 1.0);
+                    }
+                }
+                counts[i] += 1;
+                out.insert(key.clone(), i);
+            }
+            _ => {
+                let id = centroids.len();
+                centroids.push(emb.clone());
+                counts.push(1);
+                out.insert(key.clone(), id);
+            }
+        }
+    }
+    out
+}
+
+/// Tally `(total, agree)` votes for F38, in cluster space.
+///
+/// `total` counts every contributing observation with a non-empty
+/// object string.  `agree` counts those whose object falls in the same
+/// cluster as the prior Fact's object (`canonical_cluster`).  When no
+/// prior cluster is supplied (e.g. prior object was empty), `agree`
+/// is always 0 — caller will see contradicting = total and apply the
+/// threshold accordingly.
+fn vote_tallies(
+    votes: &[ObjectVote],
+    canonical_cluster: Option<usize>,
+    clusters: &HashMap<String, usize>,
+) -> (usize, usize) {
     let mut total = 0usize;
-    let mut canonical_count = 0usize;
+    let mut agree = 0usize;
+    for vote in votes {
+        let Some(text) = vote.text.as_ref() else {
+            continue;
+        };
+        let key = normalize_object(text);
+        if key.is_empty() {
+            continue;
+        }
+        total += 1;
+        if let (Some(target), Some(&cid)) = (canonical_cluster, clusters.get(&key))
+            && cid == target
+        {
+            agree += 1;
+        }
+    }
+    (total, agree)
+}
+
+/// Pick the canonical object text for a `(subject, predicate)` cluster.
+///
+/// Mode over **clusters** (not raw strings); within the winning cluster,
+/// mode over the surface forms; ties broken by the most recent
+/// `observed_at`.  Returns `None` when no contributing Observation had
+/// an object slot.
+fn canonical_object(votes: &[ObjectVote], clusters: &HashMap<String, usize>) -> Option<String> {
+    let mut cluster_count: HashMap<usize, (usize, DateTime<Utc>)> = HashMap::new();
+    let mut surface_count: HashMap<(usize, String), (usize, DateTime<Utc>)> = HashMap::new();
+
     for vote in votes {
         let Some(text) = vote.text.as_ref() else {
             continue;
@@ -431,14 +659,35 @@ fn vote_tallies(votes: &[ObjectVote], canonical: Option<&str>) -> (usize, usize)
         if trimmed.is_empty() {
             continue;
         }
-        total += 1;
-        if let Some(ref key) = canonical_key
-            && trimmed.to_ascii_lowercase() == *key
-        {
-            canonical_count += 1;
+        let key = trimmed.to_ascii_lowercase();
+        let Some(&cid) = clusters.get(&key) else {
+            continue;
+        };
+
+        let ce = cluster_count.entry(cid).or_insert((0, vote.observed_at));
+        ce.0 += 1;
+        if vote.observed_at > ce.1 {
+            ce.1 = vote.observed_at;
+        }
+
+        let se = surface_count
+            .entry((cid, trimmed.to_string()))
+            .or_insert((0, vote.observed_at));
+        se.0 += 1;
+        if vote.observed_at > se.1 {
+            se.1 = vote.observed_at;
         }
     }
-    (total, canonical_count)
+
+    let (winning_cluster, _) = cluster_count
+        .into_iter()
+        .max_by(|a, b| a.1.0.cmp(&b.1.0).then_with(|| a.1.1.cmp(&b.1.1)))?;
+
+    surface_count
+        .into_iter()
+        .filter(|((cid, _), _)| *cid == winning_cluster)
+        .max_by(|a, b| a.1.0.cmp(&b.1.0).then_with(|| a.1.1.cmp(&b.1.1)))
+        .map(|((_, text), _)| text)
 }
 
 /// Pull unprocessed Observations carrying a structured triple.
@@ -505,33 +754,39 @@ async fn fetch_unprocessed_observations(
     Ok(out)
 }
 
-/// Pick the canonical object text for a `(subject, predicate)` cluster.
+/// Compose the text that gets embedded for a Fact.
 ///
-/// Mode over non-empty object phrases; ties broken by the most recent
-/// `observed_at`.  Returns `None` when no contributing Observation had
-/// an object slot (the triple is `(subject, predicate, _)`).
-fn canonical_object(votes: &[ObjectVote]) -> Option<String> {
-    let mut tallies: HashMap<String, (usize, DateTime<Utc>)> = HashMap::new();
-    for vote in votes {
-        let Some(text) = vote.text.as_ref() else {
-            continue;
-        };
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let entry = tallies
-            .entry(trimmed.to_string())
-            .or_insert((0, vote.observed_at));
-        entry.0 += 1;
-        if vote.observed_at > entry.1 {
-            entry.1 = vote.observed_at;
-        }
+/// Canonical path: `"{subject} {predicate} {object}"`.  Fallback path
+/// (no canonical object): the freshest contributor's `content`, else
+/// `"{subject} {predicate}"`.  When `date_augment` is `true`, a
+/// `"[Month Year] "` prefix derived from `first_observed` is prepended
+/// to the result — pulls temporally-near Facts together in the
+/// embedding space at the cost of one chrono format call.
+///
+/// Asymmetric on purpose: queries are not augmented this way.  Uniko's
+/// Phase-2 temporal channel already handles query-side temporal cues
+/// via BTIC overlap, so the prefix only needs to bias the document
+/// side of the encoder.
+fn compose_embed_text(
+    first_observed: DateTime<Utc>,
+    subject: &str,
+    predicate: &str,
+    canonical: Option<&str>,
+    fallback_content: Option<&str>,
+    date_augment: bool,
+) -> String {
+    let body = match canonical {
+        Some(obj) => format!("{subject} {predicate} {obj}"),
+        None => fallback_content
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{subject} {predicate}")),
+    };
+    if date_augment {
+        let prefix = first_observed.format("%B %Y").to_string();
+        format!("[{prefix}] {body}")
+    } else {
+        body
     }
-    tallies
-        .into_iter()
-        .max_by(|a, b| a.1.0.cmp(&b.1.0).then_with(|| a.1.1.cmp(&b.1.1)))
-        .map(|(k, _)| k)
 }
 
 /// Freshest contributing observation's `content`, used as embedding
@@ -562,9 +817,6 @@ struct GroupBuilder {
     contributing: Vec<NodeId>,
     object_votes: Vec<ObjectVote>,
     first_observed_at: Option<DateTime<Utc>>,
-    /// Earliest `temporal_anchor` across this group's contributors.
-    /// Used as the Fact's `valid_at_lo` when present so the BTIC
-    /// interval reflects the claim timeline.
     first_temporal_anchor: Option<DateTime<Utc>>,
 }
 
@@ -575,6 +827,13 @@ struct ObjectVote {
     content: String,
 }
 
+#[derive(Debug, Clone)]
+struct PriorFact {
+    node_id: NodeId,
+    btic: uni_db::common::uni_btic::Btic,
+    object: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +841,23 @@ mod tests {
 
     fn ts(y: i32, m: u32, d: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap()
+    }
+
+    /// Trivial cluster map: each distinct normalized string is its own
+    /// cluster id.  Reproduces the pre-clustering string-exact behavior
+    /// so the legacy mode/recency tests still pin meaningful invariants.
+    fn singleton_clusters(votes: &[ObjectVote]) -> HashMap<String, usize> {
+        let mut out = HashMap::new();
+        for v in votes {
+            if let Some(t) = &v.text {
+                let k = normalize_object(t);
+                if !k.is_empty() && !out.contains_key(&k) {
+                    let id = out.len();
+                    out.insert(k, id);
+                }
+            }
+        }
+        out
     }
 
     #[test]
@@ -603,8 +879,9 @@ mod tests {
                 content: "Caroline also looking at foster care".into(),
             },
         ];
+        let clusters = singleton_clusters(&votes);
         assert_eq!(
-            canonical_object(&votes).as_deref(),
+            canonical_object(&votes, &clusters).as_deref(),
             Some("adoption agencies")
         );
     }
@@ -623,7 +900,8 @@ mod tests {
                 content: "".into(),
             },
         ];
-        assert_eq!(canonical_object(&votes).as_deref(), Some("Go"));
+        let clusters = singleton_clusters(&votes);
+        assert_eq!(canonical_object(&votes, &clusters).as_deref(), Some("Go"));
     }
 
     #[test]
@@ -633,6 +911,158 @@ mod tests {
             observed_at: ts(2024, 1, 1),
             content: "Caroline is happy".into(),
         }];
-        assert!(canonical_object(&votes).is_none());
+        let clusters = singleton_clusters(&votes);
+        assert!(canonical_object(&votes, &clusters).is_none());
+    }
+
+    #[test]
+    fn canonical_object_clustered_paraphrase_wins() {
+        // "adoption agencies" + "adoption agency" cluster together
+        // (3 votes), out-vote the single "foster care" (1 vote).  Pre-
+        // clustering these would split 2/1/1 and let recency winner
+        // "foster care" take canonical.
+        let votes = vec![
+            ObjectVote {
+                text: Some("adoption agencies".into()),
+                observed_at: ts(2024, 1, 1),
+                content: "".into(),
+            },
+            ObjectVote {
+                text: Some("adoption agencies".into()),
+                observed_at: ts(2024, 1, 2),
+                content: "".into(),
+            },
+            ObjectVote {
+                text: Some("adoption agency".into()),
+                observed_at: ts(2024, 1, 3),
+                content: "".into(),
+            },
+            ObjectVote {
+                text: Some("foster care".into()),
+                observed_at: ts(2024, 1, 4),
+                content: "".into(),
+            },
+        ];
+        // Synthetic clusters: agencies/agency share id 0, foster id 1.
+        let mut clusters = HashMap::new();
+        clusters.insert("adoption agencies".to_string(), 0);
+        clusters.insert("adoption agency".to_string(), 0);
+        clusters.insert("foster care".to_string(), 1);
+        // Winning cluster is 0 (3 votes); within it the agencies
+        // surface form has 2 votes vs agency's 1, so agencies wins.
+        assert_eq!(
+            canonical_object(&votes, &clusters).as_deref(),
+            Some("adoption agencies"),
+        );
+    }
+
+    #[test]
+    fn vote_tallies_clustered_counts_in_cluster_space() {
+        // Prior Fact: object = "agencies" (cluster 0).
+        // Votes: 3 in cluster 0, 1 in cluster 1.  Without clustering,
+        // string-exact would see only 1 "agencies" vote agreeing.
+        let votes = vec![
+            ObjectVote {
+                text: Some("adoption agencies".into()),
+                observed_at: ts(2024, 1, 1),
+                content: "".into(),
+            },
+            ObjectVote {
+                text: Some("adoption agency".into()),
+                observed_at: ts(2024, 1, 2),
+                content: "".into(),
+            },
+            ObjectVote {
+                text: Some("adoption agencies".into()),
+                observed_at: ts(2024, 1, 3),
+                content: "".into(),
+            },
+            ObjectVote {
+                text: Some("foster care".into()),
+                observed_at: ts(2024, 1, 4),
+                content: "".into(),
+            },
+        ];
+        let mut clusters = HashMap::new();
+        clusters.insert("adoption agencies".to_string(), 0);
+        clusters.insert("adoption agency".to_string(), 0);
+        clusters.insert("foster care".to_string(), 1);
+        let (total, agree) = vote_tallies(&votes, Some(0), &clusters);
+        assert_eq!(total, 4);
+        assert_eq!(agree, 3);
+    }
+
+    #[test]
+    fn build_clusters_collapses_near_duplicates() {
+        // Two vectors at cos ~= 0.99, one at cos ~= 0.1 — the first
+        // two should land in the same cluster, the third in its own.
+        let mut embs: HashMap<String, Vec<f32>> = HashMap::new();
+        embs.insert("agencies".into(), vec![1.0, 0.0, 0.0, 0.0]);
+        embs.insert("agency".into(), vec![0.99, 0.14, 0.0, 0.0]);
+        embs.insert("foster care".into(), vec![0.0, 1.0, 0.0, 0.0]);
+        let mut keys = HashSet::new();
+        keys.insert("agencies".to_string());
+        keys.insert("agency".to_string());
+        keys.insert("foster care".to_string());
+
+        let clusters = build_clusters(&keys, &embs, 0.88);
+        assert_eq!(clusters["agencies"], clusters["agency"]);
+        assert_ne!(clusters["agencies"], clusters["foster care"]);
+    }
+
+    #[test]
+    fn build_clusters_missing_embedding_is_singleton() {
+        // No embeddings — every key its own cluster.
+        let keys: HashSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let clusters = build_clusters(&keys, &HashMap::new(), 0.88);
+        let unique_ids: HashSet<usize> = clusters.values().copied().collect();
+        assert_eq!(unique_ids.len(), 3);
+    }
+
+    #[test]
+    fn date_prefix_appears_in_embed_text_for_canonical_path() {
+        let t = ts(2024, 1, 15);
+        let s = compose_embed_text(t, "Caroline", "has_pet", Some("cockatiel"), None, true);
+        assert_eq!(s, "[January 2024] Caroline has_pet cockatiel");
+    }
+
+    #[test]
+    fn date_prefix_appears_in_embed_text_for_fallback_path() {
+        let t = ts(2024, 3, 1);
+        let s = compose_embed_text(
+            t,
+            "Caroline",
+            "feels",
+            None,
+            Some("Caroline is feeling happy today"),
+            true,
+        );
+        assert_eq!(
+            s,
+            "[March 2024] Caroline is feeling happy today",
+            "fallback path should embed the freshest contributor's content prefixed with the date"
+        );
+    }
+
+    #[test]
+    fn date_augment_disabled_omits_prefix() {
+        let t = ts(2024, 1, 15);
+        let s = compose_embed_text(t, "Caroline", "has_pet", Some("cockatiel"), None, false);
+        assert_eq!(s, "Caroline has_pet cockatiel");
+    }
+
+    #[test]
+    fn embed_text_falls_back_to_subject_predicate_when_nothing_else() {
+        let t = ts(2024, 6, 1);
+        // Canonical None, fallback_content None → "{subject} {predicate}".
+        let s = compose_embed_text(t, "Melanie", "likes", None, None, true);
+        assert_eq!(s, "[June 2024] Melanie likes");
+    }
+
+    #[test]
+    fn cosine_sim_basic() {
+        assert!((cosine_sim(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+        assert!(cosine_sim(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
+        assert_eq!(cosine_sim(&[0.0, 0.0], &[1.0, 0.0]), 0.0);
     }
 }

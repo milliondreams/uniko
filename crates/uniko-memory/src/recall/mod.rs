@@ -1051,90 +1051,80 @@ async fn phase2_temporal(
     let lo_val = uniko_store::types::datetime_value(lo);
     let hi_val = uniko_store::types::datetime_value(hi);
 
+    // Single Cypher with three `UNION ALL` arms — Fact via BTIC overlap,
+    // Observation + Episode via BTree range on their timestamp columns.
+    // Per-arm `WITH ... LIMIT` preserves the historical 20/20/10 budget
+    // (a single trailing LIMIT could starve one arm if another saturates
+    // it first).  A `source` discriminator column is projected per arm
+    // so future per-source scoring can fan back out without re-querying.
     let session = kb.db().session();
-    let (facts, obs, eps) = tokio::join!(
-        async {
-            let cypher = "MATCH (f:Fact) \
-                          WHERE f.valid_at IS NOT NULL \
-                            AND btic_overlaps(f.valid_at, $qbtic) \
-                          RETURN id(f) AS nid, labels(f)[0] AS lbl, \
-                                 (coalesce(f.subject, '') + ' ' \
-                                  + coalesce(f.predicate, '') + ' ' \
-                                  + coalesce(f.object, '')) AS content \
-                          LIMIT $lim";
-            session
-                .query_with(cypher)
-                .param("qbtic", qbtic.clone())
-                .param("lim", 20i64)
-                .fetch_all()
-                .await
-                .map_err(|e| {
-                    tracing::debug!(error = %e, "phase2_temporal Fact query failed");
-                })
-                .ok()
-        },
-        async {
-            let cypher = "MATCH (o:Observation) \
-                          WHERE o.temporal_anchor >= $lo \
-                            AND o.temporal_anchor < $hi \
-                          RETURN id(o) AS nid, labels(o)[0] AS lbl, \
-                                 coalesce(o.content, '') AS content \
-                          LIMIT $lim";
-            session
-                .query_with(cypher)
-                .param("lo", lo_val.clone())
-                .param("hi", hi_val.clone())
-                .param("lim", 20i64)
-                .fetch_all()
-                .await
-                .map_err(|e| {
-                    tracing::debug!(error = %e, "phase2_temporal Observation query failed");
-                })
-                .ok()
-        },
-        async {
-            let cypher = "MATCH (e:Episode) \
-                          WHERE e.timestamp >= $lo \
-                            AND e.timestamp < $hi \
-                          RETURN id(e) AS nid, labels(e)[0] AS lbl, \
-                                 coalesce(e.action_type, '') AS content \
-                          LIMIT $lim";
-            session
-                .query_with(cypher)
-                .param("lo", lo_val.clone())
-                .param("hi", hi_val.clone())
-                .param("lim", 10i64)
-                .fetch_all()
-                .await
-                .map_err(|e| {
-                    tracing::debug!(error = %e, "phase2_temporal Episode query failed");
-                })
-                .ok()
-        }
-    );
+    let cypher = "MATCH (f:Fact) \
+                  WHERE f.valid_at IS NOT NULL \
+                    AND btic_overlaps(f.valid_at, $qbtic) \
+                  WITH f LIMIT $lim_fact \
+                  RETURN id(f) AS nid, labels(f)[0] AS lbl, 'fact' AS source, \
+                         (coalesce(f.subject, '') + ' ' \
+                          + coalesce(f.predicate, '') + ' ' \
+                          + coalesce(f.object, '')) AS content \
+                  UNION ALL \
+                  MATCH (o:Observation) \
+                  WHERE o.temporal_anchor >= $lo \
+                    AND o.temporal_anchor < $hi \
+                  WITH o LIMIT $lim_obs \
+                  RETURN id(o) AS nid, labels(o)[0] AS lbl, 'observation' AS source, \
+                         coalesce(o.content, '') AS content \
+                  UNION ALL \
+                  MATCH (e:Episode) \
+                  WHERE e.timestamp >= $lo \
+                    AND e.timestamp < $hi \
+                  WITH e LIMIT $lim_eps \
+                  RETURN id(e) AS nid, labels(e)[0] AS lbl, 'episode' AS source, \
+                         coalesce(e.action_type, '') AS content";
+
+    let unified = session
+        .query_with(cypher)
+        .param("qbtic", qbtic.clone())
+        .param("lo", lo_val.clone())
+        .param("hi", hi_val.clone())
+        .param("lim_fact", 20i64)
+        .param("lim_obs", 20i64)
+        .param("lim_eps", 10i64)
+        .fetch_all()
+        .await;
 
     // Flat score 1.0 for every hit — the window is the discriminator,
     // not proximity-within-window.  RRF rank order is what matters
     // downstream, and a narrow query window already restricts the
     // candidate set tightly.
     let mut ranked: Vec<RankedHit> = Vec::new();
-    for (res, default_label) in [(facts, "Fact"), (obs, "Observation"), (eps, "Episode")] {
-        let Some(res) = res else { continue };
-        for row in res.rows() {
-            let Ok(nid) = row.get::<i64>("nid") else {
-                continue;
-            };
-            let lbl: String = row.get("lbl").unwrap_or_else(|_| default_label.into());
-            let content: String = row.get("content").unwrap_or_default();
-            if content.trim().is_empty() {
-                continue;
+    match unified {
+        Ok(res) => {
+            for row in res.rows() {
+                let Ok(nid) = row.get::<i64>("nid") else {
+                    continue;
+                };
+                let source: String = row.get("source").unwrap_or_default();
+                let default_label = match source.as_str() {
+                    "fact" => "Fact",
+                    "observation" => "Observation",
+                    "episode" => "Episode",
+                    _ => "Unknown",
+                };
+                let lbl: String = row.get("lbl").unwrap_or_else(|_| default_label.into());
+                let content: String = row.get("content").unwrap_or_default();
+                if content.trim().is_empty() {
+                    continue;
+                }
+                ranked.push(RankedHit {
+                    node_id: nid,
+                    label: lbl,
+                    content,
+                    raw_score: 1.0,
+                });
             }
-            ranked.push(RankedHit {
-                node_id: nid,
-                label: lbl,
-                content,
-                raw_score: 1.0,
-            });
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "phase2_temporal unified query failed");
         }
     }
 

@@ -69,6 +69,7 @@ pub async fn run_query(
     qa: &QaPair,
     evidence_texts: &[String],
     llm_alias: Option<&str>,
+    llm_use_default_options: bool,
 ) -> Result<QueryResult> {
     // Pull recall settings from the KB's UnikoConfig so the bench
     // honors `--reranker` and other recall overrides set on the
@@ -88,7 +89,7 @@ pub async fn run_query(
     // Generate answer.
     let gen_start = Instant::now();
     let predicted_answer = if let Some(alias) = llm_alias {
-        generate_answer(kb, &bundle, &qa.question, alias).await?
+        generate_answer(kb, &bundle, &qa.question, alias, llm_use_default_options).await?
     } else {
         uniko_bench::retrieval_answer(&bundle, 5)
     };
@@ -131,6 +132,7 @@ async fn generate_answer(
     bundle: &ContextBundle,
     question: &str,
     llm_alias: &str,
+    use_default_options: bool,
 ) -> Result<String> {
     use uni_db::xervo::{GenerationOptions, Message};
 
@@ -162,10 +164,19 @@ async fn generate_answer(
     // 2048 leaves headroom for ~1500 reasoning tokens + a 1-2 sentence
     // answer. For non-reasoning models this is just an upper bound;
     // they self-terminate at the EOS well before hitting it.
-    let options = GenerationOptions {
-        max_tokens: Some(2048),
-        temperature: Some(0.1),
-        ..Default::default()
+    // Reasoning models (gemma4 / phi4 via mistralrs) need a token budget
+    // for chain-of-thought; non-reasoning local models tolerate the
+    // custom temperature. OpenAI's gpt-5/o-series rejects both — it
+    // requires `max_completion_tokens` and only accepts the default
+    // temperature.  Caller passes `use_default_options=true` for those.
+    let options = if use_default_options {
+        GenerationOptions::default()
+    } else {
+        GenerationOptions {
+            max_tokens: Some(2048),
+            temperature: Some(0.1),
+            ..Default::default()
+        }
     };
 
     let result = kb
