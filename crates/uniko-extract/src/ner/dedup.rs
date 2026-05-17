@@ -11,9 +11,8 @@ use std::collections::HashMap;
 use uni_db::Value;
 
 use uniko_store::schema::constants::{edges, labels};
-use uniko_store::storage::edges::Direction;
 use uniko_store::types::datetime_value;
-use uniko_store::{KnowledgeBase, NodeId};
+use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use super::types::{EntityMatch, RawEntity};
 
@@ -46,86 +45,210 @@ pub fn deduplicate_raw(raw: Vec<RawEntity>) -> Vec<(RawEntity, u32)> {
 
 /// Upsert deduplicated entities into the graph and create MENTIONS edges.
 ///
-/// For each entity:
-/// 1. Look up by `entity_id` (format: `"{type}:{canonical_name}"`).
-/// 2. If exists: increment frequency, update `last_seen` and confidence.
-/// 3. If new: create Entity node with all properties.
-/// 4. Create or update a `MENTIONS` edge from `source_node_id`.
+/// Split-batch implementation that avoids `MERGE`'s per-row executor
+/// loop (rustic-ai/uni-db#69). Issues four batched operations per call:
+///
+/// 1. Read-only `UNWIND … MATCH (n:Entity {entity_id: eid})` to find
+///    which entity ids already exist — one indexed lookup per row, no
+///    writer lock.
+/// 2. [`KnowledgeBase::batch_create_nodes`] for the not-found subset —
+///    one bulk `UNWIND … CREATE` that uni-db optimizes via the
+///    HashJoin-friendly fast path.
+/// 3. `UNWIND … MATCH WHERE id(n)=u.nid SET …` to bump frequency /
+///    last_seen / confidence on the found subset — `id()`-equality
+///    triggers the HashJoin rewrite (uni-db #53/#54).
+/// 4. [`KnowledgeBase::batch_create_edges_fast`] for MENTIONS edges from
+///    `source_node_id` to every resolved entity. Safe to create (not
+///    MERGE): `source_node_id` is the freshly-ingested `Message` node,
+///    so no prior MENTIONS edges from it can exist.
+///
+/// `entity_id` is `"{type}:{canonical_name}"` and uniquely identifies
+/// an entity. On a match: frequency is incremented by `mention_count`,
+/// `last_seen` is refreshed, confidence is raised to the new value if
+/// higher. On a create: all properties initialised from the input.
+///
+/// Returns one [`EntityMatch`] per input row in input order.
 ///
 /// # Errors
 ///
-/// Returns a storage error if any graph operation fails.
+/// Returns [`UnikoError::Storage`] if any underlying query or
+/// transaction fails. Partial state is possible if the run aborts
+/// between phases (e.g. nodes created but their MENTIONS edges not
+/// wired); the original per-entity loop had the same property.
 pub async fn upsert_entities(
     kb: &KnowledgeBase,
     source_node_id: NodeId,
     deduped: Vec<(RawEntity, u32)>,
 ) -> uniko_store::Result<Vec<EntityMatch>> {
-    let mut matches = Vec::with_capacity(deduped.len());
+    if deduped.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let now_value = datetime_value(chrono::Utc::now());
 
-    for (entity, mention_count) in deduped {
-        let entity_id = format!("{}:{}", entity.entity_type.as_str(), &entity.canonical_name);
+    // Pre-compute the entity_id strings once; reused across phases.
+    let entity_ids: Vec<String> = deduped
+        .iter()
+        .map(|(entity, _)| format!("{}:{}", entity.entity_type.as_str(), &entity.canonical_name))
+        .collect();
 
-        // Check for existing entity.
-        let existing = kb
-            .get_node_by_ext_id(labels::ENTITY, "entity_id", &entity_id)
-            .await?;
+    // ── Phase 1: batched MATCH to discover which entity_ids exist.
+    // Read-only, no transaction — the executor iterates per row but
+    // each row is a single indexed hash lookup (no writer lock, no
+    // pattern plan beyond the index). Returns one row per match;
+    // entries that didn't exist simply don't appear in the result.
+    let eids_list: Vec<Value> = entity_ids.iter().cloned().map(Value::String).collect();
+    let match_cypher = "\
+        UNWIND $eids AS eid \
+        MATCH (n:Entity {entity_id: eid}) \
+        RETURN eid AS entity_id, id(n) AS nid, \
+               n.frequency AS frequency, n.confidence AS confidence";
 
-        let (node_id, was_existing) = match existing {
-            Some((nid, props)) => {
-                // Update existing entity.
-                let old_freq = props.get("frequency").and_then(|v| v.as_i64()).unwrap_or(0);
-                let mut update = HashMap::new();
-                update.insert(
-                    "frequency".into(),
-                    Value::Int(old_freq + mention_count as i64),
-                );
-                update.insert("last_seen".into(), now_value.clone());
+    let session = kb.db().session();
+    let match_result = session
+        .query_with(match_cypher)
+        .param("eids", Value::List(eids_list))
+        .fetch_all()
+        .await
+        .map_err(|err| UnikoError::Storage(err.to_string()))?;
 
-                let old_conf = props
-                    .get("confidence")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                if entity.confidence > old_conf {
-                    update.insert("confidence".into(), Value::Float(entity.confidence));
-                }
-
-                kb.update_node(nid, &update).await?;
-                (nid, true)
-            }
-            None => {
-                // Create new entity. Skip embedding similarity search
-                // during ingestion — exact entity_id match handles
-                // canonical dedup. Embedding-based dedup can be done
-                // as a post-processing batch step if needed.
-                let entity_type_str = entity.entity_type.as_str();
-                let mut props = HashMap::new();
-                props.insert("entity_id".into(), Value::String(entity_id));
-                props.insert("name".into(), Value::String(entity.canonical_name.clone()));
-                props.insert(
-                    "entity_type".into(),
-                    Value::String(entity_type_str.to_string()),
-                );
-                props.insert("first_seen".into(), now_value.clone());
-                props.insert("last_seen".into(), now_value.clone());
-                props.insert("frequency".into(), Value::Int(mention_count as i64));
-                props.insert("confidence".into(), Value::Float(entity.confidence));
-
-                let nid = kb.create_node(labels::ENTITY, &props).await?;
-                (nid, false)
-            }
-        };
-
-        // Create or update MENTIONS edge.
-        upsert_mentions_edge(kb, source_node_id, node_id, mention_count).await?;
-
-        matches.push(EntityMatch {
-            canonical_name: entity.canonical_name,
-            node_id,
-            was_existing,
-            mention_count,
-        });
+    let mut existing: HashMap<String, (NodeId, i64, f64)> =
+        HashMap::with_capacity(match_result.rows().len());
+    for row in match_result.rows() {
+        let entity_id: String = row
+            .get("entity_id")
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        let nid: i64 = row
+            .get("nid")
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        let frequency: i64 = row
+            .get("frequency")
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        let confidence: f64 = row
+            .get("confidence")
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        existing.insert(entity_id, (nid, frequency, confidence));
     }
+
+    // Partition into (existing → batched UPDATE) and (new → batched
+    // CREATE). `matches` is pre-filled with the right length so we can
+    // fill node_id by index for the new rows once batch_create_nodes
+    // returns them.
+    let mut matches: Vec<EntityMatch> = Vec::with_capacity(deduped.len());
+    let mut updates_list: Vec<Value> = Vec::new();
+    let mut new_props: Vec<HashMap<String, Value>> = Vec::new();
+    let mut new_indices: Vec<usize> = Vec::new();
+
+    for (i, ((entity, mention_count), entity_id)) in
+        deduped.iter().zip(entity_ids.iter()).enumerate()
+    {
+        if let Some(&(nid, old_freq, old_conf)) = existing.get(entity_id) {
+            let new_freq = old_freq + i64::from(*mention_count);
+            let new_conf = if entity.confidence > old_conf {
+                entity.confidence
+            } else {
+                old_conf
+            };
+
+            let mut update = HashMap::with_capacity(3);
+            update.insert("nid".into(), Value::Int(nid));
+            update.insert("new_frequency".into(), Value::Int(new_freq));
+            update.insert("new_confidence".into(), Value::Float(new_conf));
+            updates_list.push(Value::Map(update));
+
+            matches.push(EntityMatch {
+                canonical_name: entity.canonical_name.clone(),
+                node_id: nid,
+                was_existing: true,
+                mention_count: *mention_count,
+            });
+        } else {
+            let mut props = HashMap::with_capacity(7);
+            props.insert("entity_id".into(), Value::String(entity_id.clone()));
+            props.insert("name".into(), Value::String(entity.canonical_name.clone()));
+            props.insert(
+                "entity_type".into(),
+                Value::String(entity.entity_type.as_str().to_string()),
+            );
+            props.insert("first_seen".into(), now_value.clone());
+            props.insert("last_seen".into(), now_value.clone());
+            props.insert("frequency".into(), Value::Int(i64::from(*mention_count)));
+            props.insert("confidence".into(), Value::Float(entity.confidence));
+            new_props.push(props);
+            new_indices.push(i);
+
+            // Placeholder node_id; filled in after Phase 2.
+            matches.push(EntityMatch {
+                canonical_name: entity.canonical_name.clone(),
+                node_id: 0,
+                was_existing: false,
+                mention_count: *mention_count,
+            });
+        }
+    }
+
+    // ── Phase 2: batched CREATE for not-found entities.
+    if !new_props.is_empty() {
+        let new_nids = kb.batch_create_nodes(labels::ENTITY, &new_props).await?;
+        if new_nids.len() != new_indices.len() {
+            return Err(UnikoError::Storage(format!(
+                "upsert_entities: batch_create_nodes returned {} nids for {} new inputs",
+                new_nids.len(),
+                new_indices.len()
+            )));
+        }
+        for (&i, &nid) in new_indices.iter().zip(new_nids.iter()) {
+            matches[i].node_id = nid;
+        }
+    }
+
+    // ── Phase 3: batched UPDATE for found entities.
+    if !updates_list.is_empty() {
+        let update_cypher = "\
+            UNWIND $updates AS u \
+            MATCH (n) WHERE id(n) = u.nid \
+            SET n.frequency = u.new_frequency, \
+                n.last_seen = $now, \
+                n.confidence = u.new_confidence";
+        let tx = session
+            .tx()
+            .await
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        tx.execute_with(update_cypher)
+            .param("updates", Value::List(updates_list))
+            .param("now", now_value)
+            .run()
+            .await
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+    }
+
+    // ── Phase 4: batched MENTIONS edges. Source is always the
+    // freshly-created Message node ingested by `EntityExtractionStep`,
+    // so no MENTIONS edges from it exist yet — plain CREATE is safe
+    // and skips MERGE's per-row penalty. The src_label="Message" hint
+    // narrows the planner's source scan.
+    let mentions_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = matches
+        .iter()
+        .map(|m| {
+            let mut props = HashMap::with_capacity(1);
+            props.insert("count".into(), Value::Int(i64::from(m.mention_count)));
+            (source_node_id, m.node_id, props)
+        })
+        .collect();
+    kb.batch_create_edges_fast(
+        edges::MENTIONS,
+        Some(labels::MESSAGE),
+        Some(labels::ENTITY),
+        &mentions_edges,
+    )
+    .await?;
+
+    // Touch the labels constant so import stays load-bearing; the
+    // hardcoded "Entity" string in the Cypher must match it.
+    debug_assert_eq!(labels::ENTITY, "Entity");
 
     Ok(matches)
 }
@@ -221,38 +344,6 @@ fn types_compatible(a: &str, b: &str) -> bool {
             | ("location", "organization")
             | ("code_import", "code_symbol")
     )
-}
-
-/// Create or increment a MENTIONS edge from `source` to `entity`.
-async fn upsert_mentions_edge(
-    kb: &KnowledgeBase,
-    source: NodeId,
-    entity: NodeId,
-    mention_count: u32,
-) -> uniko_store::Result<()> {
-    let existing_edges = kb
-        .get_edges(source, edges::MENTIONS, Direction::Outgoing)
-        .await?;
-
-    if let Some(edge) = existing_edges.iter().find(|e| e.to == entity) {
-        // Increment existing count.
-        let old_count = edge
-            .properties
-            .get("count")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let mut props = HashMap::new();
-        props.insert("count".into(), Value::Int(old_count + mention_count as i64));
-        kb.update_edge(edge.id, &props).await?;
-    } else {
-        // Create new MENTIONS edge.
-        let mut props = HashMap::new();
-        props.insert("count".into(), Value::Int(mention_count as i64));
-        kb.create_edge(edges::MENTIONS, source, entity, &props)
-            .await?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

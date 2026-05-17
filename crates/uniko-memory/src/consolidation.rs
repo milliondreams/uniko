@@ -39,7 +39,11 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
-use uniko_extract::embedding::{embed_batch, embed_document};
+use uni_db::Value;
+
+use uniko_extract::embedding::embed_batch_chunked;
+use uniko_store::operations::facts::FactUpsertInput;
+use uniko_store::schema::constants::{edges, labels};
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use crate::llm_triples::{ObservationInput, refine_triples};
@@ -87,6 +91,15 @@ const DEFAULT_BATCH_SIZE: i64 = 500;
 /// 0.88 is a safe split that collapses inflection / article variation
 /// without merging distinct entities.
 const COSINE_THRESHOLD: f32 = 0.88;
+
+/// Maximum input texts per single ONNX embedding forward.
+///
+/// Caps activation memory per call. The unchunked path crashed the
+/// ORT BFC arena at ~6k inputs requesting 1.3 GB — chunks of 64 keep
+/// each forward in tens of megabytes of activations for the BGE-small
+/// model used in the bench, with negligible per-call overhead at this
+/// chunk size on GPU.
+const EMBED_BATCH_CHUNK_SIZE: usize = 64;
 
 /// Source of `(subject, predicate, object)` triples for grouping.
 ///
@@ -315,7 +328,9 @@ pub async fn run_cycle_with(
     } else {
         let refs: Vec<&str> = unique_vec.iter().map(String::as_str).collect();
         let doc_prefix = kb.config().embedding.document_prefix.clone();
-        match embed_batch(kb, &refs, doc_prefix.as_deref()).await {
+        // Chunked to avoid the BFC arena OOM seen with single-call
+        // batches at ~6k inputs (~1.3 GB activation buffer for BGE).
+        match embed_batch_chunked(kb, &refs, doc_prefix.as_deref(), EMBED_BATCH_CHUNK_SIZE).await {
             Ok(embs) if embs.len() == unique_vec.len() => {
                 unique_vec.iter().cloned().zip(embs).collect()
             }
@@ -342,13 +357,27 @@ pub async fn run_cycle_with(
     let mut invalidated_facts: Vec<NodeId> = Vec::new();
     let mut drift_alerts: usize = 0;
 
+    // Per-group preparation pass — no I/O. Collects every input the
+    // batched embed and upsert phases need so they each run as a
+    // single batched op, regardless of group count.
+    struct FactPlan {
+        subject: String,
+        predicate: String,
+        canonical: Option<String>,
+        contributing: Vec<NodeId>,
+        prior_stale: Vec<(NodeId, uni_db::common::uni_btic::Btic, String)>,
+        first_observed: DateTime<Utc>,
+        embed_text: String,
+    }
+
+    let mut plans: Vec<FactPlan> = Vec::with_capacity(groups.len());
     for ((subject, predicate), group) in groups {
         let priors = group_priors
             .remove(&(subject.clone(), predicate.clone()))
             .unwrap_or_default();
 
         // Build the cluster map for this group from the shared
-        // embedding cache.  Includes vote surface forms AND prior Fact
+        // embedding cache. Includes vote surface forms AND prior Fact
         // object so F38 can compare in cluster-space.
         let mut group_keys: HashSet<String> = HashSet::new();
         for v in &group.object_votes {
@@ -390,11 +419,11 @@ pub async fn run_cycle_with(
             .or(group.first_observed_at)
             .unwrap_or(started_at);
 
-        // Compute the embedding text from the canonical triple.  When
+        // Compose the embedding text from the canonical triple. When
         // the object slot is empty, embed the freshest contributor's
-        // content as a paraphrase fallback.  Optionally prepend a
-        // `"%B %Y"` date prefix (e.g. `"[January 2024] "`) so temporally-
-        // near Facts co-locate in the embedding space.
+        // content as a paraphrase fallback. Optionally prepend a
+        // `"%B %Y"` date prefix (e.g. `"[January 2024] "`) so
+        // temporally-near Facts co-locate in the embedding space.
         let embed_text = compose_embed_text(
             first_observed,
             &subject,
@@ -403,84 +432,146 @@ pub async fn run_cycle_with(
             freshest_content(&group.object_votes).as_deref(),
             kb.config().consolidation_date_augment_embedding,
         );
-        let embedding = match embed_document(kb, &embed_text).await {
-            Ok(v) => Some(v),
-            Err(e) => {
+
+        plans.push(FactPlan {
+            subject,
+            predicate,
+            canonical,
+            contributing: group.contributing,
+            prior_stale,
+            first_observed,
+            embed_text,
+        });
+    }
+
+    // Single chunked-batched embedding call for every Fact in the
+    // cycle (replaces 2 874+ sequential `embed_document` calls). A
+    // partial / failed batch degrades to storing Facts without an
+    // embedding — same fallback the per-group path used.
+    let embed_texts: Vec<&str> = plans.iter().map(|p| p.embed_text.as_str()).collect();
+    let doc_prefix = kb.config().embedding.document_prefix.clone();
+    let fact_embeddings: Vec<Option<Vec<f32>>> = match embed_batch_chunked(
+        kb,
+        &embed_texts,
+        doc_prefix.as_deref(),
+        EMBED_BATCH_CHUNK_SIZE,
+    )
+    .await
+    {
+        Ok(embs) if embs.len() == plans.len() => embs.into_iter().map(Some).collect(),
+        Ok(embs) => {
+            tracing::warn!(
+                requested = plans.len(),
+                returned = embs.len(),
+                "fact embedding batch length mismatch; storing Facts without embeddings",
+            );
+            vec![None; plans.len()]
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "fact embedding batch failed; storing Facts without embeddings",
+            );
+            vec![None; plans.len()]
+        }
+    };
+
+    // Batched fact upsert: one batched MATCH, one batched CREATE for
+    // new facts, one batched UPDATE for reinforced facts. Replaces
+    // the per-fact `upsert_fact_by_triple` loop.
+    let upsert_inputs: Vec<FactUpsertInput> = plans
+        .iter()
+        .zip(fact_embeddings)
+        .map(|(plan, embedding)| FactUpsertInput {
+            subject: plan.subject.clone(),
+            predicate: plan.predicate.clone(),
+            object: plan.canonical.clone(),
+            observation_count: plan.contributing.len() as i64,
+            observed_at: plan.first_observed,
+            embedding,
+        })
+        .collect();
+    let upserts = kb.batch_upsert_facts(upsert_inputs).await?;
+
+    // Collect every SUPPORTED_BY edge across the entire cycle into one
+    // batched call. Idempotency invariant from `attach_supported_by`
+    // is preserved: cycles only process observations with no inbound
+    // PROCESSED edge from prior cycles, so each (fact, obs) pair is
+    // wired exactly once.
+    let mut all_supported_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
+    for (plan, up) in plans.iter().zip(upserts.iter()) {
+        for &obs_nid in &plan.contributing {
+            let mut props = HashMap::with_capacity(1);
+            props.insert("weight".into(), Value::Float(1.0));
+            all_supported_edges.push((up.node_id, obs_nid, props));
+        }
+    }
+    if !all_supported_edges.is_empty() {
+        kb.batch_create_edges_fast(
+            edges::SUPPORTED_BY,
+            Some(labels::FACT),
+            Some(labels::OBSERVATION),
+            &all_supported_edges,
+        )
+        .await?;
+    }
+
+    // Classify upserts and drive invalidations. Invalidations are
+    // still per-stale (the contradiction path is rare and each one
+    // also bumps the Entity's drift counter, which has its own
+    // read-modify-write semantics inside the helper).
+    for (plan, up) in plans.iter().zip(upserts.iter()) {
+        if up.was_created {
+            created_facts.push(up.node_id);
+        } else {
+            reinforced_facts.push(up.node_id);
+        }
+        if plan.prior_stale.is_empty() {
+            continue;
+        }
+        let now = Utc::now();
+        for (stale_nid, stale_btic, _stale_obj) in &plan.prior_stale {
+            if *stale_nid == up.node_id {
+                continue;
+            }
+            if let Err(e) = kb
+                .invalidate_fact(
+                    *stale_nid,
+                    stale_btic,
+                    now,
+                    Some(up.node_id),
+                    Some("consolidation contradiction"),
+                )
+                .await
+            {
                 tracing::warn!(
                     error = %e,
-                    subject = %subject,
-                    predicate = %predicate,
-                    "fact embedding failed; storing Fact without embedding"
+                    stale_fact = stale_nid,
+                    subject = %plan.subject,
+                    predicate = %plan.predicate,
+                    "fact invalidation failed (continuing)",
                 );
-                None
+                continue;
             }
-        };
+            invalidated_facts.push(*stale_nid);
 
-        let upsert = kb
-            .upsert_fact_by_triple(
-                &subject,
-                &predicate,
-                canonical.as_deref(),
-                group.contributing.len() as i64,
-                first_observed,
-                embedding,
-            )
-            .await?;
-
-        kb.attach_supported_by(upsert.node_id, &group.contributing)
-            .await?;
-
-        if upsert.was_created {
-            created_facts.push(upsert.node_id);
-        } else {
-            reinforced_facts.push(upsert.node_id);
-        }
-
-        if !prior_stale.is_empty() {
-            let now = Utc::now();
-            for (stale_nid, stale_btic, _stale_obj) in &prior_stale {
-                if *stale_nid == upsert.node_id {
-                    continue;
-                }
-                if let Err(e) = kb
-                    .invalidate_fact(
-                        *stale_nid,
-                        stale_btic,
-                        now,
-                        Some(upsert.node_id),
-                        Some("consolidation contradiction"),
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        error = %e,
-                        stale_fact = stale_nid,
-                        subject = %subject,
-                        predicate = %predicate,
-                        "fact invalidation failed (continuing)",
+            match kb
+                .record_entity_invalidation(&plan.subject, now, DRIFT_THRESHOLD)
+                .await
+            {
+                Ok(true) => {
+                    drift_alerts += 1;
+                    tracing::info!(
+                        subject = %plan.subject,
+                        "entity transitioned to unstable",
                     );
-                    continue;
                 }
-                invalidated_facts.push(*stale_nid);
-
-                match kb
-                    .record_entity_invalidation(&subject, now, DRIFT_THRESHOLD)
-                    .await
-                {
-                    Ok(true) => {
-                        drift_alerts += 1;
-                        tracing::info!(
-                            subject = %subject,
-                            "entity transitioned to unstable",
-                        );
-                    }
-                    Ok(false) => {}
-                    Err(e) => tracing::warn!(
-                        error = %e,
-                        subject = %subject,
-                        "drift accounting failed (continuing)",
-                    ),
-                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    subject = %plan.subject,
+                    "drift accounting failed (continuing)",
+                ),
             }
         }
     }
@@ -1038,8 +1129,7 @@ mod tests {
             true,
         );
         assert_eq!(
-            s,
-            "[March 2024] Caroline is feeling happy today",
+            s, "[March 2024] Caroline is feeling happy today",
             "fallback path should embed the freshest contributor's content prefixed with the date"
         );
     }

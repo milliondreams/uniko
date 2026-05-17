@@ -31,6 +31,28 @@ pub struct FactUpsert {
     pub observation_count: i64,
 }
 
+/// One Fact to upsert in [`KnowledgeBase::batch_upsert_facts`].
+///
+/// Mirrors the per-Fact inputs of [`KnowledgeBase::upsert_fact_by_triple`].
+/// `embedding` may be `None` for individual entries when the Layer 2
+/// batch embed succeeded only for a subset — those Facts will be stored
+/// without an embedding (same semantic as the single-call helper).
+#[derive(Debug, Clone)]
+pub struct FactUpsertInput {
+    /// Triple subject (lower-cased by `fact_id_for` for the id).
+    pub subject: String,
+    /// Triple predicate.
+    pub predicate: String,
+    /// Triple object; `None` collapses to empty string in `fact_id`.
+    pub object: Option<String>,
+    /// Number of observations contributing to this upsert.
+    pub observation_count: i64,
+    /// Earliest observed_at among the contributing observations.
+    pub observed_at: DateTime<Utc>,
+    /// Pre-computed embedding from Layer 2, or `None` to store without.
+    pub embedding: Option<Vec<f32>>,
+}
+
 /// Build the deterministic external `fact_id` for a triple.
 ///
 /// Idempotency anchor: callers upserting the same triple on subsequent
@@ -184,6 +206,269 @@ impl KnowledgeBase {
             &edge_specs,
         )
         .await
+    }
+
+    /// Upsert many Facts via the same per-Fact semantics as
+    /// [`KnowledgeBase::upsert_fact_by_triple`], in batched operations.
+    ///
+    /// Issues at most four storage ops per call regardless of input
+    /// size, replacing the per-Fact transaction loop. The split mirrors
+    /// the entity-dedup batched path:
+    ///
+    /// 1. Read-only `UNWIND … MATCH (f:Fact {fact_id: fid})` to find
+    ///    which `fact_id`s already exist (one indexed lookup per row).
+    /// 2. [`KnowledgeBase::batch_create_nodes`] for the not-found subset.
+    /// 3. `UNWIND … MATCH WHERE id(n)=u.nid SET …` for the reinforce
+    ///    subset, including the conditional BTIC certainty upgrade
+    ///    pre-computed per row.
+    ///
+    /// Returns one [`FactUpsert`] per input row in input order, with
+    /// the freshly resolved node id and the post-upsert observation
+    /// count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::UnikoError::Storage`] on any storage
+    /// failure. Partial state is possible if the call aborts between
+    /// phases — same property as the per-Fact loop it replaces.
+    pub async fn batch_upsert_facts(
+        &self,
+        inputs: Vec<FactUpsertInput>,
+    ) -> Result<Vec<FactUpsert>> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Pre-compute fact_ids once; reused across phases.
+        let fact_ids: Vec<String> = inputs
+            .iter()
+            .map(|i| fact_id_for(&i.subject, &i.predicate, i.object.as_deref()))
+            .collect();
+
+        // Within-batch dedup by fact_id. Multiple input rows can map
+        // to the same fact_id when the caller's grouping key
+        // (subject, predicate) differs only in case from another
+        // entry — `fact_id_for` lower-cases both sides. The original
+        // per-row `upsert_fact_by_triple` loop folded these via its
+        // MATCH-then-create-or-update; the batched path must do the
+        // same in Rust because two UNWIND rows over the same MERGE
+        // node would otherwise clobber each other's counts (for the
+        // existing path) or create duplicate Fact nodes (for the
+        // new path — the schema has no unique constraint on
+        // `fact_id`).
+        //
+        // First occurrence wins for subject / predicate / object /
+        // embedding; `observation_count` is summed across all rows
+        // with the same fact_id, and `observed_at` is reduced to the
+        // earliest. `first_idx` records the input index that
+        // introduced each fact_id so the output `was_created` flag
+        // can mirror the per-row helper (true only for the first
+        // appearance of a freshly-created Fact).
+        let mut canonical: HashMap<String, FactUpsertInput> =
+            HashMap::with_capacity(fact_ids.len());
+        let mut first_idx: HashMap<String, usize> = HashMap::with_capacity(fact_ids.len());
+        let mut unique_fids: Vec<String> = Vec::with_capacity(fact_ids.len());
+        for (i, (input, fid)) in inputs.iter().zip(fact_ids.iter()).enumerate() {
+            match canonical.entry(fid.clone()) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(input.clone());
+                    first_idx.insert(fid.clone(), i);
+                    unique_fids.push(fid.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let cur = e.get_mut();
+                    cur.observation_count =
+                        cur.observation_count.saturating_add(input.observation_count);
+                    if input.observed_at < cur.observed_at {
+                        cur.observed_at = input.observed_at;
+                    }
+                }
+            }
+        }
+
+        // Phase 1: batched MATCH to discover which (deduped) fact_ids
+        // exist. Returns one row per match; absent fact_ids simply
+        // don't appear.
+        let fid_list: Vec<Value> = unique_fids.iter().cloned().map(Value::String).collect();
+        let match_cypher = "\
+            UNWIND $fids AS fid \
+            MATCH (n:Fact {fact_id: fid}) \
+            RETURN fid AS fact_id, id(n) AS nid, \
+                   n.observation_count AS observation_count, \
+                   n.valid_at AS valid_at";
+
+        let session = self.db.session();
+        let match_result = session
+            .query_with(match_cypher)
+            .param("fids", Value::List(fid_list))
+            .fetch_all()
+            .await
+            .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+
+        // Build fact_id → (nid, prior_count, prior_btic) map.
+        let mut existing: HashMap<String, (NodeId, i64, Option<Btic>)> =
+            HashMap::with_capacity(match_result.rows().len());
+        for row in match_result.rows() {
+            let fid: String = row
+                .get("fact_id")
+                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            let nid: i64 = row
+                .get("nid")
+                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            let prior_count: i64 = row
+                .get("observation_count")
+                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            // valid_at comes back as the BTIC Temporal Value; extract
+            // structurally rather than going through a string roundtrip.
+            // `Row::value` returns the raw `&Value`; `Row::get<T>` would
+            // require `T: FromValue` which `Value` itself does not
+            // implement.
+            let prior_btic = extract_btic(row.value("valid_at"));
+            existing.insert(fid, (nid, prior_count, prior_btic));
+        }
+
+        // Partition deduped canonical entries into existing (UPDATE)
+        // and new (CREATE). `resolved` maps each unique fact_id to
+        // its post-upsert node_id and post-upsert observation_count;
+        // it's keyed by fact_id so the final output loop can fan it
+        // back out across every original input row (including the
+        // collapsed duplicates).
+        let mut updates_list: Vec<Value> = Vec::new();
+        let mut new_props: Vec<HashMap<String, Value>> = Vec::new();
+        let mut new_fids_in_order: Vec<String> = Vec::new();
+        let mut resolved: HashMap<String, (NodeId, i64)> = HashMap::with_capacity(unique_fids.len());
+
+        for fid in &unique_fids {
+            let canon = canonical
+                .get(fid)
+                .expect("canonical map populated above for every unique_fids entry");
+
+            if let Some((nid, prior_count, prior_btic)) = existing.get(fid) {
+                let new_count = prior_count.saturating_add(canon.observation_count);
+                let confidence = laplace_confidence(new_count);
+
+                let mut update = HashMap::with_capacity(4);
+                update.insert("nid".into(), Value::Int(*nid));
+                update.insert("new_count".into(), Value::Int(new_count));
+                update.insert("new_confidence".into(), Value::Float(confidence));
+
+                // Conditional certainty upgrade — match the single-row
+                // path exactly: only upgrade once we cross the
+                // threshold from below, and only when we still have a
+                // readable prior BTIC to upgrade.
+                let upgrade_valid_at = if (*prior_count as u64) < CERTAINTY_THRESHOLD
+                    && (new_count as u64) >= CERTAINTY_THRESHOLD
+                {
+                    prior_btic
+                        .as_ref()
+                        .map(|b| btic_to_value(&btic_upgrade_certainty(b)))
+                } else {
+                    None
+                };
+                // Always send a `valid_at` key so the SET clause is
+                // the same shape across rows; rows that don't need an
+                // upgrade get `Value::Null` and the COALESCE in the
+                // UPDATE statement keeps the existing column value.
+                update.insert("valid_at".into(), upgrade_valid_at.unwrap_or(Value::Null));
+                updates_list.push(Value::Map(update));
+
+                resolved.insert(fid.clone(), (*nid, new_count));
+            } else {
+                let valid_at = btic_active(canon.observed_at);
+                let confidence = laplace_confidence(canon.observation_count);
+
+                let mut props: HashMap<String, Value> = HashMap::with_capacity(9);
+                props.insert("fact_id".into(), Value::String(fid.clone()));
+                props.insert("subject".into(), Value::String(canon.subject.clone()));
+                props.insert("predicate".into(), Value::String(canon.predicate.clone()));
+                if let Some(obj) = &canon.object {
+                    props.insert("object".into(), Value::String(obj.clone()));
+                }
+                props.insert("confidence".into(), Value::Float(confidence));
+                props.insert(
+                    "observation_count".into(),
+                    Value::Int(canon.observation_count),
+                );
+                props.insert("valid_at".into(), btic_to_value(&valid_at));
+                props.insert(
+                    "source_rule".into(),
+                    Value::String("consolidation_v1".into()),
+                );
+                if let Some(vec) = canon.embedding.clone() {
+                    props.insert("embedding".into(), Value::Vector(vec));
+                }
+                new_props.push(props);
+                new_fids_in_order.push(fid.clone());
+            }
+        }
+
+        // Phase 2: batched CREATE for not-found Facts.
+        if !new_props.is_empty() {
+            let new_nids = self.batch_create_nodes(labels::FACT, &new_props).await?;
+            if new_nids.len() != new_fids_in_order.len() {
+                return Err(crate::error::UnikoError::Storage(format!(
+                    "batch_upsert_facts: batch_create_nodes returned {} nids for {} new inputs",
+                    new_nids.len(),
+                    new_fids_in_order.len()
+                )));
+            }
+            for (fid, nid) in new_fids_in_order.into_iter().zip(new_nids) {
+                let canon_count = canonical
+                    .get(&fid)
+                    .map(|c| c.observation_count)
+                    .unwrap_or(0);
+                resolved.insert(fid, (nid, canon_count));
+            }
+        }
+
+        // Phase 3: batched UPDATE for reinforce. The COALESCE keeps the
+        // existing valid_at when u.valid_at is null (no certainty
+        // upgrade this round); otherwise it adopts the upgraded BTIC.
+        if !updates_list.is_empty() {
+            let update_cypher = "\
+                UNWIND $updates AS u \
+                MATCH (n) WHERE id(n) = u.nid \
+                SET n.observation_count = u.new_count, \
+                    n.confidence = u.new_confidence, \
+                    n.valid_at = COALESCE(u.valid_at, n.valid_at)";
+            let tx = session
+                .tx()
+                .await
+                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            tx.execute_with(update_cypher)
+                .param("updates", Value::List(updates_list))
+                .run()
+                .await
+                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+        }
+
+        // Fan resolved (fact_id → node_id) back out across every
+        // original input row, preserving caller-visible order. The
+        // `was_created` flag is true only for the input that
+        // introduced its fact_id AND only when that fact_id wasn't
+        // already in the DB before this call — mirroring the
+        // per-row `upsert_fact_by_triple` exactly.
+        let mut outputs: Vec<FactUpsert> = Vec::with_capacity(inputs.len());
+        for (i, fid) in fact_ids.iter().enumerate() {
+            let (nid, post_count) = *resolved
+                .get(fid)
+                .expect("resolved populated for every fact_id");
+            let was_first_input = first_idx
+                .get(fid)
+                .map(|&first| first == i)
+                .unwrap_or(false);
+            let was_newly_created = !existing.contains_key(fid);
+            outputs.push(FactUpsert {
+                node_id: nid,
+                was_created: was_first_input && was_newly_created,
+                observation_count: post_count,
+            });
+        }
+
+        Ok(outputs)
     }
 
     /// Create a `ConsolidationCycle` audit node and wire its edges.

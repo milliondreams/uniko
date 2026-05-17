@@ -96,6 +96,41 @@ pub async fn embed_batch(
         .map_err(|e| UnikoError::Embedding(e.to_string()))
 }
 
+/// Embed many texts via repeated [`embed_batch`] calls of at most `chunk_size`.
+///
+/// The underlying ONNX runtime's BFC arena can OOM on a single batched
+/// forward when input count × seq_len × hidden_dim grows large — the
+/// 384-d BGE-small model has crashed in the consolidation cycle at
+/// ~6 000 inputs requesting a 1.3 GB activation buffer. Issuing the
+/// same total work in fixed-size chunks (default 64) keeps each forward
+/// well under VRAM while preserving throughput, since per-call overhead
+/// is amortized across the chunk.
+///
+/// Order is preserved: result `i` corresponds to input `i`.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Embedding`] if any chunk fails. The caller
+/// receives no partial results — chunks are issued sequentially and the
+/// first failure short-circuits.
+pub async fn embed_batch_chunked(
+    kb: &KnowledgeBase,
+    texts: &[&str],
+    prefix: Option<&str>,
+    chunk_size: usize,
+) -> Result<Vec<Vec<f32>>, UnikoError> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let chunk_size = chunk_size.max(1);
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for chunk in texts.chunks(chunk_size) {
+        let mut got = embed_batch(kb, chunk, prefix).await?;
+        out.append(&mut got);
+    }
+    Ok(out)
+}
+
 /// Compute and store an embedding for an Entity node.
 ///
 /// Formula: `"name (entity_type)"` or just `"name"` if the type is
