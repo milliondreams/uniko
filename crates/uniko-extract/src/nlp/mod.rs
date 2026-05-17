@@ -36,9 +36,9 @@ use types::NlpResult;
 pub struct NlpPipeline {
     runner: Arc<dyn RawTensorModel>,
     /// Mirror of `UnikoConfig.nlp_srl_enabled`. When `true`, after the
-    /// main forward pass `analyze` runs one extra inference per VERB
-    /// token with `predicate_idx` set, and decodes the resulting
-    /// `srl_logits` into `NlpResult.srl_frames`.
+    /// main forward pass we issue a single batched inference covering
+    /// every `(sentence, verb)` pair in the message and decode the
+    /// resulting `srl_logits` into per-sentence `NlpResult.srl_frames`.
     srl_enabled: bool,
 }
 
@@ -162,24 +162,32 @@ impl NlpPipeline {
         );
         let sentence_class = decode::decode_cls(cls_index, &labels.cls_labels);
 
-        // 8. SRL frames — one extra forward per VERB token. The cascade
-        // takes `predicate_idx: i64[1]` and emits `srl_logits` for that
-        // predicate; we identify VERBs from the POS argmax we just
-        // decoded, then iterate. Skipped when the kill-switch
+        // 8. SRL frames — one batched forward covering every VERB token in
+        // this sentence. The cascade takes `predicate_idx: i64[V]` and
+        // emits `srl_logits: f32[V, S, C]`; we identify VERBs from the POS
+        // argmax we just decoded, pack them all into a single inference
+        // call, then decode per row. Skipped when the kill-switch
         // `nlp_srl_enabled = false` is set on UnikoConfig.
         let srl_frames = if self.srl_enabled {
             let srl_input_ids: Vec<i64> = ids.iter().map(|&x| x as i64).collect();
             let srl_attention: Vec<i64> = attention.iter().map(|&x| x as i64).collect();
-            self.compute_srl_frames(
-                &srl_input_ids,
-                &srl_attention,
-                &word_ids,
-                &words,
-                &pos_indices,
-                &labels.pos_labels,
-                &labels.srl_labels,
-            )
-            .await
+            let pad_id: i64 = tokenizer
+                .token_to_id("[PAD]")
+                .map(|v| v as i64)
+                .unwrap_or(0);
+            let mut frames_per_row = self
+                .compute_srl_frames_batched(
+                    std::slice::from_ref(&srl_input_ids),
+                    std::slice::from_ref(&srl_attention),
+                    std::slice::from_ref(&word_ids),
+                    std::slice::from_ref(&words),
+                    std::slice::from_ref(&pos_indices),
+                    pad_id,
+                    &labels.pos_labels,
+                    &labels.srl_labels,
+                )
+                .await;
+            frames_per_row.pop().unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -198,86 +206,132 @@ impl NlpPipeline {
         })
     }
 
-    /// Run one SRL re-forward per VERB token in the sentence.
+    /// Run SRL inference for every VERB across a message in a single
+    /// batched forward pass.
     ///
-    /// The model accepts `predicate_idx: i64[batch]`; we re-use the
-    /// already-tokenised input and only swap that one tensor. Each
-    /// re-forward is a full cascade pass — this is conservative; a
-    /// future optimisation could batch all predicates for one sentence
-    /// into a single forward by replicating the row.
-    #[allow(clippy::too_many_arguments)]
-    async fn compute_srl_frames(
+    /// The cascade accepts `predicate_idx: i64[V]` and emits
+    /// `srl_logits: f32[V, S, C]`. We flatten `(row_i, verb_word_idx)`
+    /// pairs across every input row (one row per sentence in a message),
+    /// pack the source row's `input_ids` / `attention_mask` for each
+    /// pair into a `[V_total, max_seq_len]` tensor, and issue **one**
+    /// `runner.run` regardless of how many sentences or verbs the
+    /// message contains.
+    ///
+    /// Output is per-row: `frames_per_row[i]` is the `SrlFrame` list for
+    /// the `i`-th input row, with frame word indices remaining local to
+    /// that row's `words` vec. Rows with zero VERB tokens get an empty
+    /// `Vec`. If the whole message has zero VERBs, we return early
+    /// without invoking the model. On any runner or tensor-shape
+    /// failure, every row's frames fall back to empty (consistent with
+    /// the pre-batching per-verb skip behavior, scaled to the new unit
+    /// of failure).
+    #[expect(clippy::too_many_arguments, reason = "decode requires per-row state")]
+    async fn compute_srl_frames_batched(
         &self,
-        input_ids: &[i64],
-        attention_mask: &[i64],
-        word_ids: &[Option<u32>],
-        words: &[String],
-        pos_indices: &[usize],
+        row_ids: &[Vec<i64>],
+        row_attention: &[Vec<i64>],
+        row_word_ids: &[Vec<Option<u32>>],
+        row_words: &[Vec<String>],
+        row_pos_indices: &[Vec<usize>],
+        pad_id: i64,
         pos_labels: &[String],
         srl_labels: &[String],
-    ) -> Vec<types::SrlFrame> {
-        let mut frames = Vec::new();
-        let seq_len = input_ids.len();
+    ) -> Vec<Vec<types::SrlFrame>> {
+        let n_rows = row_ids.len();
+        let mut frames_per_row: Vec<Vec<types::SrlFrame>> = vec![Vec::new(); n_rows];
 
-        // Identify VERB-tagged words. POS indices are word-aligned —
-        // each entry corresponds to one word, in order.
-        let verb_word_indices: Vec<usize> = pos_indices
-            .iter()
-            .enumerate()
-            .filter_map(|(word_idx, &pos_idx)| {
+        // 1. Collect (row_i, word_idx, subword_idx) for every VERB in
+        //    every row. POS indices are word-aligned; predicate_idx must
+        //    be subword-aligned, so map via first_subword_per_word.
+        let mut pairs: Vec<(usize, usize, usize)> = Vec::new();
+        for (row_i, pos_indices) in row_pos_indices.iter().enumerate() {
+            let word_to_subword = first_subword_per_word(&row_word_ids[row_i]);
+            for (word_idx, &pos_idx) in pos_indices.iter().enumerate() {
                 let pos = pos_labels.get(pos_idx).map(String::as_str).unwrap_or("");
-                if pos == "VERB" { Some(word_idx) } else { None }
-            })
-            .collect();
-
-        if verb_word_indices.is_empty() {
-            return frames;
-        }
-
-        // Map word_idx → first matching subword index for the
-        // `predicate_idx` input (which is subword-indexed).
-        let word_to_subword = first_subword_per_word(word_ids);
-
-        for &word_idx in &verb_word_indices {
-            let Some(&subword_idx) = word_to_subword.get(&word_idx) else {
-                continue;
-            };
-            let mut inputs = TensorBatch::default();
-            let Ok(ids_arr) = ArrayD::from_shape_vec(vec![1, seq_len], input_ids.to_vec()) else {
-                continue;
-            };
-            let Ok(mask_arr) = ArrayD::from_shape_vec(vec![1, seq_len], attention_mask.to_vec())
-            else {
-                continue;
-            };
-            inputs.insert("input_ids", TensorValue::I64(ids_arr));
-            inputs.insert("attention_mask", TensorValue::I64(mask_arr));
-            let Ok(pred_arr) = ArrayD::from_shape_vec(vec![1], vec![subword_idx as i64]) else {
-                continue;
-            };
-            inputs.insert("predicate_idx", TensorValue::I64(pred_arr));
-
-            let outputs = match self.runner.run(&inputs).await {
-                Ok(o) => o,
-                Err(e) => {
-                    tracing::debug!(error = %e, word_idx, "SRL re-forward failed; skipping");
+                if pos != "VERB" {
                     continue;
                 }
-            };
-            let Ok(srl_logits) = extract_f32_2d(&outputs, "srl_logits") else {
-                continue;
-            };
-            let srl_subword = decode::argmax_rows(&srl_logits.view());
-            let srl_word_indices = decode::align_to_words(&srl_subword, word_ids);
-            frames.push(decode::decode_srl_frame(
+                let Some(&subword_idx) = word_to_subword.get(&word_idx) else {
+                    continue;
+                };
+                pairs.push((row_i, word_idx, subword_idx));
+            }
+        }
+
+        if pairs.is_empty() {
+            return frames_per_row;
+        }
+
+        // 2. Build [V_total, max_seq_len] padded tensors. All pairs share
+        //    one steady tensor shape, so the runner sees a single
+        //    well-formed batched call.
+        let max_seq_len = row_ids.iter().map(Vec::len).max().unwrap_or(0);
+        if max_seq_len == 0 {
+            return frames_per_row;
+        }
+        let v_total = pairs.len();
+        let mut flat_ids: Vec<i64> = Vec::with_capacity(v_total * max_seq_len);
+        let mut flat_attn: Vec<i64> = Vec::with_capacity(v_total * max_seq_len);
+        let mut pidx: Vec<i64> = Vec::with_capacity(v_total);
+        for &(row_i, _word_idx, subword_idx) in &pairs {
+            let ids = &row_ids[row_i];
+            let attn = &row_attention[row_i];
+            flat_ids.extend_from_slice(ids);
+            flat_ids.resize(flat_ids.len() + (max_seq_len - ids.len()), pad_id);
+            flat_attn.extend_from_slice(attn);
+            flat_attn.resize(flat_attn.len() + (max_seq_len - attn.len()), 0);
+            pidx.push(subword_idx as i64);
+        }
+
+        let mut inputs = TensorBatch::default();
+        let Ok(ids_arr) = ArrayD::from_shape_vec(vec![v_total, max_seq_len], flat_ids) else {
+            tracing::debug!(v_total, max_seq_len, "SRL batched: input_ids shape failed");
+            return frames_per_row;
+        };
+        let Ok(attn_arr) = ArrayD::from_shape_vec(vec![v_total, max_seq_len], flat_attn) else {
+            tracing::debug!(v_total, max_seq_len, "SRL batched: attention shape failed");
+            return frames_per_row;
+        };
+        let Ok(pred_arr) = ArrayD::from_shape_vec(vec![v_total], pidx) else {
+            tracing::debug!(v_total, "SRL batched: predicate_idx shape failed");
+            return frames_per_row;
+        };
+        inputs.insert("input_ids", TensorValue::I64(ids_arr));
+        inputs.insert("attention_mask", TensorValue::I64(attn_arr));
+        inputs.insert("predicate_idx", TensorValue::I64(pred_arr));
+
+        // 3. One ONNX forward for every (sentence, verb) pair.
+        let outputs = match self.runner.run(&inputs).await {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::debug!(error = %e, v_total, "SRL batched forward failed");
+                return frames_per_row;
+            }
+        };
+        let srl_logits = match extract_f32_3d(&outputs, "srl_logits", v_total, max_seq_len) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!(error = %e, "SRL batched: extract srl_logits failed");
+                return frames_per_row;
+            }
+        };
+
+        // 4. Scatter back per pair; slice to the source row's true
+        //    seq_len so padded positions do not leak into decode.
+        for (v, &(row_i, word_idx, _subword_idx)) in pairs.iter().enumerate() {
+            let seq_len_i = row_ids[row_i].len();
+            let slice = srl_logits.slice(ndarray::s![v, ..seq_len_i, ..]);
+            let srl_subword = decode::argmax_rows(&slice);
+            let srl_word_indices = decode::align_to_words(&srl_subword, &row_word_ids[row_i]);
+            frames_per_row[row_i].push(decode::decode_srl_frame(
                 &srl_word_indices,
-                words,
+                &row_words[row_i],
                 srl_labels,
                 word_idx,
             ));
         }
 
-        frames
+        frames_per_row
     }
 
     /// Analyze text by splitting into sentences first.
@@ -398,8 +452,16 @@ impl NlpPipeline {
         let label = extract_f32_4d(&outputs, "label_scores", batch, max_seq_len)?;
         let cls = extract_f32_2d_batch(&outputs, "cls_logits", batch)?;
 
-        // 5. Per-row decode using each sentence's true seq_len.
+        // 5. Per-row decode using each sentence's true seq_len. SRL is
+        //    deferred — we collect per-row state and run a single
+        //    message-wide SRL batch after the loop.
         let mut results = Vec::with_capacity(batch);
+        let mut row_ids_vec: Vec<Vec<i64>> = Vec::with_capacity(batch);
+        let mut row_attn_vec: Vec<Vec<i64>> = Vec::with_capacity(batch);
+        let mut row_word_ids_vec: Vec<Vec<Option<u32>>> = Vec::with_capacity(batch);
+        let mut row_words_vec: Vec<Vec<String>> = Vec::with_capacity(batch);
+        let mut row_pos_indices_vec: Vec<Vec<usize>> = Vec::with_capacity(batch);
+
         for (i, r) in rows.into_iter().enumerate() {
             let seq = r.ids.len();
             let ner_slice = ner.slice(ndarray::s![i, ..seq, ..]);
@@ -426,26 +488,12 @@ impl NlpPipeline {
             );
             let sentence_class = decode::decode_cls(cls_index, &labels.cls_labels);
 
-            // SRL frames: one extra forward per VERB token. Each
-            // sentence is independent here (its own row.ids /
-            // row.attention / row.word_ids); we don't attempt to batch
-            // predicates across sentences in v1.
-            let srl_frames = if self.srl_enabled {
-                let srl_input_ids: Vec<i64> = r.ids.iter().map(|&x| x as i64).collect();
-                let srl_attention: Vec<i64> = r.attention.iter().map(|&x| x as i64).collect();
-                self.compute_srl_frames(
-                    &srl_input_ids,
-                    &srl_attention,
-                    &r.word_ids,
-                    &words,
-                    &pos_indices,
-                    &labels.pos_labels,
-                    &labels.srl_labels,
-                )
-                .await
-            } else {
-                Vec::new()
-            };
+            // Stash per-row state for the post-loop batched SRL call.
+            row_ids_vec.push(r.ids);
+            row_attn_vec.push(r.attention);
+            row_word_ids_vec.push(r.word_ids);
+            row_words_vec.push(words.clone());
+            row_pos_indices_vec.push(pos_indices.clone());
 
             results.push(NlpResult {
                 words,
@@ -457,8 +505,29 @@ impl NlpPipeline {
                 entities,
                 dep_arcs,
                 sentence_class,
-                srl_frames,
+                srl_frames: Vec::new(),
             });
+        }
+
+        // 6. Message-scope SRL: one ONNX forward for every (sentence,
+        //    verb) pair across the entire message. Empty messages or
+        //    messages with zero VERBs skip the call entirely.
+        if self.srl_enabled {
+            let frames_per_row = self
+                .compute_srl_frames_batched(
+                    &row_ids_vec,
+                    &row_attn_vec,
+                    &row_word_ids_vec,
+                    &row_words_vec,
+                    &row_pos_indices_vec,
+                    pad_id,
+                    &labels.pos_labels,
+                    &labels.srl_labels,
+                )
+                .await;
+            for (r, frames) in results.iter_mut().zip(frames_per_row) {
+                r.srl_frames = frames;
+            }
         }
 
         Ok(results)
