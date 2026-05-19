@@ -311,6 +311,7 @@ pub async fn chunk_session_observations(
             })
             .collect();
         // Observation chunks → entities. Source is :Chunk, target is :Entity.
+        let about_start = std::time::Instant::now();
         kb.batch_create_edges_fast(
             "ABOUT",
             Some(uniko_store::schema::constants::labels::CHUNK),
@@ -318,6 +319,15 @@ pub async fn chunk_session_observations(
             &about_edges,
         )
         .await?;
+        let ms = about_start.elapsed().as_millis() as u64;
+        tracing::info!(
+            target: "tx_perf",
+            tx_phase = "obs_chunk_about_entity",
+            total_ms = ms,
+            commit_ms = ms,
+            edge_count = about_edges.len() as u64,
+            "tx phase",
+        );
     }
 
     // Also propagate Participant ABOUT edges so an obs Chunk is
@@ -347,6 +357,7 @@ pub async fn chunk_session_observations(
                     .map(move |&p_nid| (chunk_nid, p_nid, HashMap::new()))
             })
             .collect();
+        let p_start = std::time::Instant::now();
         kb.batch_create_edges_fast(
             "ABOUT",
             Some(uniko_store::schema::constants::labels::CHUNK),
@@ -354,6 +365,15 @@ pub async fn chunk_session_observations(
             &p_edges,
         )
         .await?;
+        let ms = p_start.elapsed().as_millis() as u64;
+        tracing::info!(
+            target: "tx_perf",
+            tx_phase = "obs_chunk_about_participant",
+            total_ms = ms,
+            commit_ms = ms,
+            edge_count = p_edges.len() as u64,
+            "tx phase",
+        );
     }
 
     tracing::info!(

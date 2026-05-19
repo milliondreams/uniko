@@ -84,6 +84,7 @@ pub async fn upsert_entities(
         return Ok(Vec::new());
     }
 
+    let phase_start = std::time::Instant::now();
     let now_value = datetime_value(chrono::Utc::now());
 
     // Pre-compute the entity_id strings once; reused across phases.
@@ -92,11 +93,23 @@ pub async fn upsert_entities(
         .map(|(entity, _)| format!("{}:{}", entity.entity_type.as_str(), &entity.canonical_name))
         .collect();
 
+    // Open one transaction for all four phases (MATCH lookup + create
+    // new + reinforce existing + MENTIONS edges). Replaces the prior
+    // 3 separate transactions. The Phase 1 MATCH runs inside this tx
+    // — at this point we haven't written anything, so reading
+    // committed-only state is exactly the same as the previous
+    // out-of-tx `session.query_with`.
+    let session = kb.db().session();
+    let tx = session
+        .tx()
+        .await
+        .map_err(|err| UnikoError::Storage(err.to_string()))?;
+
     // ── Phase 1: batched MATCH to discover which entity_ids exist.
-    // Read-only, no transaction — the executor iterates per row but
-    // each row is a single indexed hash lookup (no writer lock, no
-    // pattern plan beyond the index). Returns one row per match;
-    // entries that didn't exist simply don't appear in the result.
+    // The executor iterates per row but each row is a single indexed
+    // hash lookup (no writer lock yet, no pattern plan beyond the
+    // index). Returns one row per match; entries that didn't exist
+    // simply don't appear in the result.
     let eids_list: Vec<Value> = entity_ids.iter().cloned().map(Value::String).collect();
     let match_cypher = "\
         UNWIND $eids AS eid \
@@ -104,8 +117,7 @@ pub async fn upsert_entities(
         RETURN eid AS entity_id, id(n) AS nid, \
                n.frequency AS frequency, n.confidence AS confidence";
 
-    let session = kb.db().session();
-    let match_result = session
+    let match_result = tx
         .query_with(match_cypher)
         .param("eids", Value::List(eids_list))
         .fetch_all()
@@ -187,9 +199,12 @@ pub async fn upsert_entities(
         }
     }
 
-    // ── Phase 2: batched CREATE for not-found entities.
+    // ── Phase 2: batched CREATE for not-found entities, inside the
+    // shared tx so it commits with everything else at the end.
     if !new_props.is_empty() {
-        let new_nids = kb.batch_create_nodes(labels::ENTITY, &new_props).await?;
+        let new_nids = kb
+            .batch_create_nodes_in_tx(&tx, labels::ENTITY, &new_props)
+            .await?;
         if new_nids.len() != new_indices.len() {
             return Err(UnikoError::Storage(format!(
                 "upsert_entities: batch_create_nodes returned {} nids for {} new inputs",
@@ -202,7 +217,7 @@ pub async fn upsert_entities(
         }
     }
 
-    // ── Phase 3: batched UPDATE for found entities.
+    // ── Phase 3: batched UPDATE for found entities, in the same tx.
     if !updates_list.is_empty() {
         let update_cypher = "\
             UNWIND $updates AS u \
@@ -210,17 +225,10 @@ pub async fn upsert_entities(
             SET n.frequency = u.new_frequency, \
                 n.last_seen = $now, \
                 n.confidence = u.new_confidence";
-        let tx = session
-            .tx()
-            .await
-            .map_err(|err| UnikoError::Storage(err.to_string()))?;
         tx.execute_with(update_cypher)
             .param("updates", Value::List(updates_list))
             .param("now", now_value)
             .run()
-            .await
-            .map_err(|err| UnikoError::Storage(err.to_string()))?;
-        tx.commit()
             .await
             .map_err(|err| UnikoError::Storage(err.to_string()))?;
     }
@@ -238,13 +246,33 @@ pub async fn upsert_entities(
             (source_node_id, m.node_id, props)
         })
         .collect();
-    kb.batch_create_edges_fast(
+    kb.batch_create_edges_fast_in_tx(
+        &tx,
         edges::MENTIONS,
         Some(labels::MESSAGE),
         Some(labels::ENTITY),
         &mentions_edges,
     )
     .await?;
+
+    // Single commit folds the MATCH-batched-result, the new-entity
+    // CREATEs, the existing-entity UPDATEs, and the MENTIONS edges
+    // into one WAL fsync.
+    let commit_start = std::time::Instant::now();
+    tx.commit()
+        .await
+        .map_err(|err| UnikoError::Storage(err.to_string()))?;
+    let commit_ms = commit_start.elapsed().as_millis() as u64;
+    let total_ms = phase_start.elapsed().as_millis() as u64;
+    tracing::info!(commit_ms, "dedup commit");
+    tracing::info!(
+        target: "tx_perf",
+        tx_phase = "entity_upsert",
+        total_ms,
+        commit_ms,
+        entity_count = deduped.len() as u64,
+        "tx phase",
+    );
 
     // Touch the labels constant so import stays load-bearing; the
     // hardcoded "Entity" string in the Cypher must match it.

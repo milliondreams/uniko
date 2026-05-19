@@ -249,50 +249,42 @@ pub async fn run_cycle_with(
     }
 
     // Pre-pass: look up prior open Facts per group and read their
-    // stored object text.  We do this before clustering so prior
-    // objects participate in the cluster assignment alongside the
-    // votes — F38 must compare in cluster-space, not raw-string space.
-    let mut group_priors: HashMap<(String, String), Vec<PriorFact>> = HashMap::new();
-    for key in groups.keys() {
-        let prior_open = match kb.find_stale_open_facts(&key.0, &key.1, None).await {
-            Ok(facts) => facts,
+    // stored object text. Single batched query — replaces the
+    // previous loop of one `find_stale_open_facts` call per group
+    // (~2,800 round-trips per cycle) plus a follow-up per-Fact
+    // `MATCH ... RETURN f.object` (~10-50 extra round-trips). The
+    // batched helper returns the object surface form alongside the
+    // BTIC so no second query is needed.
+    //
+    // We do this before clustering so prior objects participate in
+    // the cluster assignment alongside the votes — F38 must compare
+    // in cluster-space, not raw-string space.
+    let group_keys: Vec<(String, String)> = groups.keys().cloned().collect();
+    let mut group_priors: HashMap<(String, String), Vec<PriorFact>> =
+        match kb.find_stale_open_facts_batched(&group_keys).await {
+            Ok(map) => map
+                .into_iter()
+                .map(|(key, rows)| {
+                    let priors: Vec<PriorFact> = rows
+                        .into_iter()
+                        .map(|(nid, btic, object)| PriorFact {
+                            node_id: nid,
+                            btic,
+                            object,
+                        })
+                        .collect();
+                    (key, priors)
+                })
+                .collect(),
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    subject = %key.0,
-                    predicate = %key.1,
-                    "open Fact lookup failed (continuing without F38)",
+                    group_count = group_keys.len(),
+                    "batched open-Fact lookup failed (continuing without F38)",
                 );
-                Vec::new()
+                HashMap::new()
             }
         };
-        let mut priors: Vec<PriorFact> = Vec::with_capacity(prior_open.len());
-        for (nid, btic) in &prior_open {
-            let session = kb.db().session();
-            let row_set = match session
-                .query_with("MATCH (f:Fact) WHERE id(f) = $vid RETURN f.object AS obj")
-                .param("vid", *nid)
-                .fetch_all()
-                .await
-            {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            let prior_obj = row_set
-                .rows()
-                .first()
-                .and_then(|r| r.get::<String>("obj").ok())
-                .unwrap_or_default();
-            priors.push(PriorFact {
-                node_id: *nid,
-                btic: *btic,
-                object: prior_obj,
-            });
-        }
-        if !priors.is_empty() {
-            group_priors.insert(key.clone(), priors);
-        }
-    }
 
     // Collect every unique non-empty object surface form (votes +
     // prior Fact objects), single batch embed call.  Per-group

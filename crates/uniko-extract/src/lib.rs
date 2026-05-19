@@ -1,3 +1,9 @@
+// Same fix as uniko-memory: trait-check overflow on `Send`/`Sync` for
+// the boxed pipeline-step futures, which transitively contain uni-db's
+// session/tx types → datafusion + sqlparser AST. 256 clears it; matches
+// uni-db's own crate setting.
+#![recursion_limit = "256"]
+
 //! # uniko-extract — Layer 3: Content Processing
 //!
 //! Content intelligence steps: NER (entity extraction), observation extraction,

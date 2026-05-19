@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use uni_db::Value;
+use uni_db::{Transaction, Value};
 
 use super::{KnowledgeBase, build_set_clause, validate_edge_type};
 use crate::error::{Result, UnikoError};
@@ -113,49 +113,188 @@ impl KnowledgeBase {
         if edges.is_empty() {
             return Ok(Vec::new());
         }
-        for &(edge_type, _, _, _) in edges {
-            validate_edge_type(edge_type)?;
-        }
-
         let session = self.db.session();
         let tx = session
             .tx()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-
-        // Multi-MATCH (split cartesian product) and skip RETURN since
-        // callers discard the edge IDs.
-        let edge_ids: Vec<EdgeId> = Vec::new();
-        for (edge_type, from, to, props) in edges {
-            let (set_clause, params) = build_set_clause("r", props, 0)?;
-            let cypher = if set_clause.is_empty() {
-                format!(
-                    "MATCH (a) WHERE id(a) = $src \
-                     MATCH (b) WHERE id(b) = $dst \
-                     CREATE (a)-[r:{edge_type}]->(b)"
-                )
-            } else {
-                format!(
-                    "MATCH (a) WHERE id(a) = $src \
-                     MATCH (b) WHERE id(b) = $dst \
-                     CREATE (a)-[r:{edge_type}]->(b) {set_clause}"
-                )
-            };
-
-            let mut qb = tx.execute_with(&cypher);
-            qb = qb.param("src", *from).param("dst", *to);
-            for (k, v) in &params {
-                qb = qb.param(k.as_str(), v.clone());
-            }
-            qb.run()
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        }
-
+        let edge_ids = self.create_edges_in_tx(&tx, edges).await?;
         tx.commit()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
         Ok(edge_ids)
+    }
+
+    /// Create mixed-type edges within an existing transaction.
+    ///
+    /// Like [`KnowledgeBase::create_edges_tx`] but defers the commit
+    /// to the caller, so several batches can share one tx (per-message
+    /// ingest path folds Message + edges + chunks under a single
+    /// commit using this).
+    ///
+    /// Internally groups input edges by `edge_type` and issues one
+    /// UNWIND-batched statement per type via
+    /// [`KnowledgeBase::batch_create_edges_fast_in_tx`], passing
+    /// (src_label, dst_label) hints from a schema-driven table so the
+    /// planner can narrow the `MATCH ... WHERE id() = $src` scan to a
+    /// single label rather than scanning every node table. The hints
+    /// are the main perf lever here — for message ingest the typical
+    /// per-type count is N=1, so UNWIND-grouping alone is marginal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Schema`] if any edge type is unknown or
+    /// a property name is invalid, or [`UnikoError::Storage`] on
+    /// transaction failure.
+    pub async fn create_edges_in_tx(
+        &self,
+        tx: &Transaction,
+        edges: &[(&str, NodeId, NodeId, HashMap<String, Value>)],
+    ) -> Result<Vec<EdgeId>> {
+        if edges.is_empty() {
+            return Ok(Vec::new());
+        }
+        for &(edge_type, _, _, _) in edges {
+            validate_edge_type(edge_type)?;
+        }
+
+        // Group by edge_type, preserving input order within each group.
+        // BTreeMap so the per-type call order is deterministic — eases
+        // log/diff inspection and is irrelevant to correctness.
+        let mut by_type: std::collections::BTreeMap<
+            &str,
+            Vec<(NodeId, NodeId, HashMap<String, Value>)>,
+        > = std::collections::BTreeMap::new();
+        for (edge_type, from, to, props) in edges {
+            by_type
+                .entry(*edge_type)
+                .or_default()
+                .push((*from, *to, props.clone()));
+        }
+
+        for (edge_type, group) in by_type {
+            let (src_label, dst_label) = edge_type_label_hints(edge_type);
+            self.batch_create_edges_fast_in_tx(tx, edge_type, src_label, dst_label, &group)
+                .await?;
+        }
+
+        // Edge IDs are intentionally discarded by this helper — callers
+        // that need them should use `batch_create_edges` directly.
+        Ok(Vec::new())
+    }
+
+    /// Write all per-message edges via `tx.bulk_insert_edges`.
+    ///
+    /// Specialised for the message-ingest hot path: SENT_BY (always),
+    /// IN_SESSION (always), 0..N ADDRESSED_TO, and 0..1 NEXT. Each
+    /// edge type is one direct call into uni-db's bulk API — no
+    /// Cypher parse/plan, no per-row MATCH lookup. The VIDs are
+    /// already known at the call site (Message + Participant +
+    /// Session were created earlier in the same tx).
+    ///
+    /// Prior implementation packed all edge types into one
+    /// multi-clause Cypher; per-call exec at sess=24 averaged ~370 ms
+    /// despite the writes being trivially fast — the cost was Cypher
+    /// executor overhead, not the writes themselves. uni-db's own
+    /// `edge_commit_contention.rs` microbench shows the bulk path
+    /// achieves ~150 µs/edge at sess=24 (COLD, 10 edges/tx). Switching
+    /// pulls us off the Cypher critical path entirely.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on transaction failure.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "specialised hot-path helper — bundling args into a struct \
+                  would just move the boilerplate to the call site"
+    )]
+    pub async fn create_message_edges_in_tx(
+        &self,
+        tx: &Transaction,
+        msg_nid: NodeId,
+        sender_nid: NodeId,
+        sender_role: &str,
+        session_nid: NodeId,
+        recipient_nids: &[NodeId],
+        prev_msg_nid: Option<NodeId>,
+    ) -> Result<()> {
+        use uni_db::Vid;
+        let t_start = std::time::Instant::now();
+
+        // SENT_BY — always one edge, with `role` property.
+        let mut sent_props: HashMap<String, Value> = HashMap::with_capacity(1);
+        sent_props.insert("role".into(), Value::String(sender_role.to_string()));
+        tx.bulk_insert_edges(
+            "SENT_BY",
+            vec![(
+                Vid::new(msg_nid as u64),
+                Vid::new(sender_nid as u64),
+                sent_props,
+            )],
+        )
+        .await
+        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+
+        // IN_SESSION — always one edge, no properties.
+        tx.bulk_insert_edges(
+            "IN_SESSION",
+            vec![(
+                Vid::new(msg_nid as u64),
+                Vid::new(session_nid as u64),
+                HashMap::new(),
+            )],
+        )
+        .await
+        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+
+        // ADDRESSED_TO — 0..N edges, batched in one call.
+        if !recipient_nids.is_empty() {
+            let edges: Vec<(Vid, Vid, HashMap<String, Value>)> = recipient_nids
+                .iter()
+                .map(|&r| {
+                    (
+                        Vid::new(msg_nid as u64),
+                        Vid::new(r as u64),
+                        HashMap::new(),
+                    )
+                })
+                .collect();
+            tx.bulk_insert_edges("ADDRESSED_TO", edges)
+                .await
+                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        }
+
+        // NEXT — 0 or 1 edge, with gap_ms=0 (Phase 3 will populate).
+        if let Some(prev_nid) = prev_msg_nid {
+            let mut next_props: HashMap<String, Value> = HashMap::with_capacity(1);
+            next_props.insert("gap_ms".into(), Value::Int(0));
+            tx.bulk_insert_edges(
+                "NEXT",
+                vec![(
+                    Vid::new(prev_nid as u64),
+                    Vid::new(msg_nid as u64),
+                    next_props,
+                )],
+            )
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        }
+
+        let t_query = t_start.elapsed().as_micros() as u64;
+        tracing::info!(
+            target: "query_metrics",
+            site = "create_message_edges_in_tx",
+            parse_us = 0u64,
+            plan_us = 0u64,
+            exec_us = t_query,
+            total_us = t_query,
+            cache_hit = false,
+            recipients = recipient_nids.len() as u64,
+            has_prev = prev_msg_nid.is_some(),
+            bulk = true,
+            "query metrics",
+        );
+        Ok(())
     }
 
     /// Retrieve edges of a given type incident to `node_id`.
@@ -365,4 +504,29 @@ fn rows_to_edge_records(result: &uni_db::QueryResult) -> Result<Vec<EdgeRecord>>
         });
     }
     Ok(records)
+}
+
+/// Static (src_label, dst_label) hints for edge types created by
+/// the per-message ingest path.
+///
+/// Used by [`KnowledgeBase::create_edges_in_tx`] to narrow the
+/// `MATCH ... WHERE id() = $src` scan to a single label table. Edge
+/// types not in this table fall back to (None, None) — the planner
+/// will then scan all labels for the id match, which is the legacy
+/// behavior.
+///
+/// The map is intentionally local to this module: it's a small,
+/// closed set of ingest-path edge types, and centralising it next
+/// to the helper that consumes it keeps the schema knowledge in one
+/// place. If observation- or fact-side helpers ever route mixed-type
+/// edges through `create_edges_in_tx`, extend this table.
+fn edge_type_label_hints(edge_type: &str) -> (Option<&'static str>, Option<&'static str>) {
+    use crate::schema::constants::labels;
+    match edge_type {
+        "SENT_BY" => (Some(labels::MESSAGE), Some(labels::PARTICIPANT)),
+        "IN_SESSION" => (Some(labels::MESSAGE), Some(labels::SESSION)),
+        "ADDRESSED_TO" => (Some(labels::MESSAGE), Some(labels::PARTICIPANT)),
+        "NEXT" => (Some(labels::MESSAGE), Some(labels::MESSAGE)),
+        _ => (None, None),
+    }
 }

@@ -183,6 +183,90 @@ impl KnowledgeBase {
         })
     }
 
+    /// Build a single ONNX/Xervo runtime that multiple KBs can share.
+    ///
+    /// At `--question-concurrency N` the bench opens N persistent KBs;
+    /// without sharing, each opens its own `ModelRuntime`, which loads
+    /// its own ONNX sessions (the per-session BFC arena dominates GPU
+    /// VRAM). Sharing one runtime keeps weights and the activation
+    /// arena resident exactly once.
+    ///
+    /// Implementation note: uni-db's `UniBuilder::xervo_runtime` takes
+    /// a pre-built `Arc<ModelRuntime>`, but the runtime's provider
+    /// registration is gated by `#[cfg(feature = "provider-*")]`
+    /// inside uni-db — reproducing that gating outside the crate is
+    /// fragile. Instead, we bootstrap by opening a tiny
+    /// `Uni::in_memory()` with the catalog (which goes through all
+    /// the provider-registration gates correctly), extract the
+    /// resulting `Arc<ModelRuntime>`, and drop the bootstrap `Uni`.
+    /// The model warmup runs once here, so callers get a hot runtime
+    /// they can hand to many [`KnowledgeBase::open_with_runtime`]
+    /// calls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Config`] if catalog validation fails,
+    /// or [`UnikoError::Storage`] if the bootstrap `Uni` cannot be
+    /// opened (the in-memory backend should not fail in practice).
+    /// Returns [`UnikoError::Internal`] if the bootstrap `Uni`
+    /// somehow finishes without registering an xervo runtime.
+    pub async fn build_shared_runtime(
+        config: &UnikoConfig,
+        extra_catalog: &[ModelAliasSpec],
+    ) -> Result<Arc<uni_xervo::runtime::ModelRuntime>> {
+        config.validate()?;
+        let catalog = load_catalog(config, extra_catalog)?;
+        let bootstrap = Uni::in_memory()
+            .xervo_catalog(catalog)
+            .build()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let runtime = bootstrap.xervo().raw_runtime().cloned().ok_or_else(|| {
+            UnikoError::Internal(
+                "bootstrap Uni did not register an xervo runtime (was the catalog empty?)".into(),
+            )
+        })?;
+        // Warm every alias up front so the first inference per KB
+        // doesn't pay the cold-start latency.
+        prefetch_models(&bootstrap).await;
+        // Dropping the bootstrap Uni at the end of scope is fine —
+        // the runtime is held by the returned `Arc`.
+        drop(bootstrap);
+        Ok(runtime)
+    }
+
+    /// Open a persistent KB that **shares** the supplied `ModelRuntime`.
+    ///
+    /// Use with [`KnowledgeBase::build_shared_runtime`] to run many
+    /// concurrent KBs against one ONNX session, instead of paying the
+    /// per-KB session cost. Each KB still has its own graph storage
+    /// on disk; only the inference runtime is shared.
+    ///
+    /// Skips the per-KB model prefetch (the shared runtime is already
+    /// warmed up at construction). Still applies the schema per-KB.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Config`] if validation fails, or
+    /// [`UnikoError::Storage`] if the database cannot be opened.
+    pub async fn open_with_runtime(
+        path: impl AsRef<Path>,
+        config: UnikoConfig,
+        runtime: Arc<uni_xervo::runtime::ModelRuntime>,
+    ) -> Result<Self> {
+        config.validate()?;
+        let db = Uni::open(path.as_ref().to_string_lossy())
+            .xervo_runtime(runtime)
+            .build()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        apply_schema(&db, &config).await?;
+        Ok(Self {
+            db: Arc::new(db),
+            config,
+        })
+    }
+
     /// Direct access to the underlying uni-db instance.
     ///
     /// Escape hatch for advanced operations not covered by the

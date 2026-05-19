@@ -22,10 +22,20 @@
 //! ```
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use futures::stream::{self, StreamExt};
+
+// mimalloc as global allocator — measured ~3x throughput on uni-db's
+// concurrent_mutations benchmark (uni-db commit 65399a2b). Allocation
+// is on the hot path for every Cypher parse/plan/execute cycle and
+// every Lance L0 buffer write, so the global allocator choice
+// materially shifts ingest throughput. M-MIMALLOC-APPS.
+#[global_allocator]
+static GLOBAL: uni_db::MiMalloc = uni_db::MiMalloc;
 
 use uniko_bench::longmemeval::data::{self, LmeQuestionType};
 use uniko_bench::longmemeval::eval;
@@ -60,6 +70,20 @@ struct Cli {
     #[arg(long)]
     max_questions: Option<usize>,
 
+    /// Maximum number of LME items (questions) processed concurrently.
+    /// Each item has its own isolated KB so there's no shared-state
+    /// contention. Memory scales linearly: each in-flight item holds
+    /// its KB + loaded NLP models. Set to 1 for fully sequential runs.
+    #[arg(long, default_value = "8")]
+    question_concurrency: usize,
+
+    /// Maximum number of chat sessions ingested concurrently within a
+    /// single LME item. All workers write to the per-item KB, so the
+    /// win is capped by uni-db's concurrent-write throughput. Set to 1
+    /// to ingest sessions sequentially (matches pre-parallel behavior).
+    #[arg(long, default_value = "8")]
+    session_concurrency: usize,
+
     /// Token budget for recall (default 8192).
     #[arg(long, default_value = "8192")]
     token_budget: usize,
@@ -75,6 +99,32 @@ struct Cli {
     /// Separate LLM alias for judge (defaults to llm-alias).
     #[arg(long)]
     judge_alias: Option<String>,
+
+    /// HuggingFace model ID (or provider model name) for the judge LLM.
+    /// Defaults to llm-model-id.
+    #[arg(long)]
+    judge_model_id: Option<String>,
+
+    /// Provider for the judge LLM (e.g. "remote/openai" for GPT-5).
+    /// Defaults to "local/mistralrs".
+    #[arg(long)]
+    judge_provider: Option<String>,
+
+    /// Provider for the generation LLM. Defaults to "local/mistralrs".
+    #[arg(long)]
+    llm_provider: Option<String>,
+
+    /// Base URL of an OpenAI-compatible HTTP server for the generation
+    /// LLM (e.g. "http://127.0.0.1:1234/v1"). When set, the gen alias
+    /// is registered against `remote/openai` with this base URL. Implies
+    /// `--llm-provider remote/openai`.
+    #[arg(long)]
+    llm_base_url: Option<String>,
+
+    /// Base URL of an OpenAI-compatible server for the judge LLM.
+    /// Defaults to OpenAI's public API.
+    #[arg(long)]
+    judge_base_url: Option<String>,
 
     /// Skip LLM judge evaluation.
     #[arg(long)]
@@ -110,21 +160,79 @@ struct Cli {
     #[arg(long, default_value = "nomic")]
     embedding: String,
 
-    /// Enable cross-encoder reranker on top of RRF candidates.
+    /// Disable the reranker. Reranker is **on by default** — pass
+    /// `--no-reranker` to fall back to pure recall ranking. Matches
+    /// the LoCoMo bench so the two harnesses tune to the same defaults.
     #[arg(long)]
-    reranker: bool,
+    no_reranker: bool,
 
     /// HuggingFace reranker model id. xervo 0.11 auto-detects whether
     /// the ONNX graph expects `token_type_ids`, so XLM-R-based models
     /// (e.g. `BAAI/bge-reranker-base`) work alongside BERT-based ones
-    /// (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`).
-    #[arg(long, default_value = "BAAI/bge-reranker-base")]
+    /// (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`). For
+    /// `--reranker-style generative`, use a decoder-LM export such as
+    /// `onnx-community/Qwen3-Reranker-0.6B-ONNX`.
+    #[arg(long, default_value = "cross-encoder/ms-marco-MiniLM-L-6-v2")]
     reranker_model: String,
+
+    /// Reranker code path. `cross-encoder` (default) for BERT-family
+    /// cross-encoders that emit a relevance logit; `generative` for
+    /// decoder-LM rerankers that score yes/no via next-token logits.
+    #[arg(long, default_value = "cross-encoder")]
+    reranker_style: String,
 
     /// Top-N RRF candidates to send through the reranker. Must be
     /// `>= recall_limit` when reranker is enabled.
     #[arg(long, default_value = "50")]
     reranker_top_n: usize,
+
+    /// Maximum items in the recall bundle (overrides `recall_limit`
+    /// in the embedding config).
+    #[arg(long)]
+    recall_limit: Option<usize>,
+
+    /// Phase 1 (Compact) contribution strategy:
+    /// - `boost` (default) — Facts/Observations influence chunk ranking
+    ///   via a session-level boost; bundle stays 100% Chunks.
+    /// - `merge` — cap=3 interleave Facts by score into the Phase 3 bundle.
+    /// - `off` — skip Phase 1 entirely.
+    #[arg(long, default_value = "boost")]
+    phase1_strategy: String,
+
+    /// Multiplicative weight applied to Fact scores when computing the
+    /// session-chunk boost under `--phase1-strategy boost`. α=0.6 is
+    /// the validated default.
+    #[arg(long, default_value = "0.6")]
+    phase1_boost_alpha: f64,
+
+    /// Disable the graph spreading-activation channel in Phase 2 recall.
+    /// Default: on. Channel only fires when the query has at least one
+    /// resolvable entity seed.
+    #[arg(long)]
+    no_phase2_graph: bool,
+
+    /// Disable the temporal-interval channel in Phase 2 recall.
+    /// Default: on. Channel only fires when the query has a parsed
+    /// temporal phrase.
+    #[arg(long)]
+    no_phase2_temporal: bool,
+
+    /// When set, P4 Consolidation refines each Observation's
+    /// `(subject, predicate, object)` triple via the LLM at this
+    /// alias before grouping into Facts. Off by default — keeps the
+    /// SRL/DEP triple P3 produces.
+    #[arg(long)]
+    extract_triples_llm_alias: Option<String>,
+
+    /// Disable cosine-similarity clustering of object surface forms in
+    /// P4 Consolidation. Default: clustering on.
+    #[arg(long)]
+    no_consolidation_cluster: bool,
+
+    /// Disable the `"[Month Year] "` date prefix prepended to Fact
+    /// embed text in P4 Consolidation. Default: date-augment on.
+    #[arg(long)]
+    no_date_augment_embedding: bool,
 
     /// Comma-separated list of query-reformulation variants to enable.
     /// Recognised: `keywords`, `original`, `declarative`, `type_anchored`.
@@ -192,17 +300,18 @@ async fn main() -> Result<()> {
         tracing::info!(truncated = items.len(), "limited to max questions");
     }
 
-    // Determine LLM mode.
+    // Determine LLM mode.  Eagerly clone alias strings here so cli can
+    // be moved into an Arc later without keeping live borrows.
     let retrieval_only = cli.phase1 || cli.llm_alias.is_none();
-    let llm_alias = if retrieval_only {
+    let llm_alias_owned: Option<String> = if retrieval_only {
         None
     } else {
-        cli.llm_alias.as_deref()
+        cli.llm_alias.clone()
     };
-    let judge_alias = if cli.no_judge || retrieval_only {
+    let judge_alias_owned: Option<String> = if cli.no_judge || retrieval_only {
         None
     } else {
-        cli.judge_alias.as_deref().or(cli.llm_alias.as_deref())
+        cli.judge_alias.clone().or_else(|| cli.llm_alias.clone())
     };
 
     // Build config.
@@ -223,11 +332,27 @@ async fn main() -> Result<()> {
     if let Some(dim) = cli.embedding_dim {
         config.embedding.dimensions = dim;
     }
-    if cli.reranker {
-        config.reranker.enabled = true;
+    // Reranker is default-on via `RerankerConfig::default()`. Apply
+    // CLI overrides (model/style/top_n) regardless, so the user can
+    // swap models without explicitly enabling. `--no-reranker` disables.
+    config.reranker.enabled = !cli.no_reranker;
+    if config.reranker.enabled {
         config.reranker.model_id = cli.reranker_model.clone();
+        config.reranker.style = cli.reranker_style.clone();
         config.reranker.top_n = cli.reranker_top_n;
     }
+    if let Some(limit) = cli.recall_limit {
+        config.recall_limit = limit;
+        if config.reranker.enabled && config.reranker.top_n < limit {
+            config.reranker.top_n = limit;
+        }
+    }
+    config.phase1_strategy = cli.phase1_strategy.clone();
+    config.phase1_boost_alpha = cli.phase1_boost_alpha;
+    config.phase2_graph_enabled = !cli.no_phase2_graph;
+    config.phase2_temporal_enabled = !cli.no_phase2_temporal;
+    config.consolidation_cluster_objects = !cli.no_consolidation_cluster;
+    config.consolidation_date_augment_embedding = !cli.no_date_augment_embedding;
     if !cli.variants.trim().is_empty() {
         config.query_variants = cli
             .variants
@@ -237,171 +362,288 @@ async fn main() -> Result<()> {
             .collect();
     }
 
-    // Build LLM catalog.
+    // Build LLM catalog. `--llm-base-url` implies `remote/openai`
+    // unless `--llm-provider` is explicitly set.
+    let llm_provider = cli.llm_provider.as_deref().or_else(|| {
+        if cli.llm_base_url.is_some() {
+            Some("remote/openai")
+        } else {
+            None
+        }
+    });
     let extra_catalog = uniko_bench::build_llm_catalog(
         cli.llm_alias.as_deref(),
         cli.llm_model_id.as_deref(),
-        None,
-        None,
+        llm_provider,
+        cli.llm_base_url.as_deref(),
         cli.judge_alias.as_deref(),
-        None,
-        None,
-        None,
+        cli.judge_model_id.as_deref(),
+        cli.judge_provider.as_deref(),
+        cli.judge_base_url.as_deref(),
     );
+    for spec in &extra_catalog {
+        tracing::info!(
+            alias = %spec.alias,
+            provider = %spec.provider_id,
+            model = %spec.model_id,
+            options = %spec.options,
+            "catalog entry"
+        );
+    }
 
-    // Run benchmark.
-    let mut all_results: Vec<(query::LmeQueryResult, Option<f64>)> = Vec::new();
+    // Run benchmark.  Items are processed concurrently up to
+    // `--question-concurrency`; each item owns its own KB so there's
+    // no cross-item write contention.  Results land in a shared Vec
+    // (order is the completion order, not the input order — the
+    // aggregation routines key on question_id, not position).
+    let all_results: Arc<tokio::sync::Mutex<Vec<(query::LmeQueryResult, Option<f64>)>>> =
+        Arc::new(tokio::sync::Mutex::new(Vec::with_capacity(items.len())));
     let bench_start = Instant::now();
     let total_items = items.len();
+    let question_concurrency = cli.question_concurrency.max(1);
 
-    for (item_idx, item) in items.iter().enumerate() {
-        tracing::info!(
-            "[{}/{}] Processing {} (type={}, sessions={})",
-            item_idx + 1,
-            total_items,
-            item.question_id,
-            item.question_type.name(),
-            item.haystack_sessions.len(),
-        );
-
-        // Ingest or reuse KB.
-        let kb_dir = cli.ingest_dir.join(&item.question_id);
-        let (kb, evidence_map) = if cli.reuse && kb_dir.exists() {
-            tracing::info!(path = %kb_dir.display(), "reusing existing KB");
-            let kb = uniko_bench::open_kb(&kb_dir, config.clone(), &extra_catalog).await?;
-            // Reconstruct evidence map from item data.
-            let evidence_map = ingest::EvidenceMap {
-                answer_session_ids: item.answer_session_ids.iter().cloned().collect(),
-                answer_message_ids: Vec::new(), // not available when reusing
-                session_to_messages: std::collections::HashMap::new(),
-            };
-            (kb, evidence_map)
-        } else {
-            let ingest_start = Instant::now();
-            let result = ingest::ingest_item(item, &kb_dir, config.clone(), &extra_catalog)
-                .await
-                .with_context(|| format!("ingesting {}", item.question_id))?;
-            tracing::info!(
-                elapsed_ms = ingest_start.elapsed().as_millis(),
-                "ingestion complete"
-            );
-            result
-        };
-
-        // Ensure a bench-agent Participant exists so the post-query
-        // episode recording has somewhere to attach `RECORDED_BY`.
-        let bench_agent_id = format!("bench-agent-{}", item.question_id);
-        let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
-            std::collections::HashMap::new();
-        agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
-        agent_props.insert("name".into(), uni_db::Value::String("bench-agent".into()));
-        if let Err(e) = kb
-            .merge_node(
-                "Participant",
-                "participant_id",
-                &bench_agent_id,
-                &agent_props,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "failed to create bench-agent Participant");
-        }
-
-        // Query.
-        let gold = data::gold_answer(item);
-        let qr = query::run_lme_query(
-            &kb,
-            &item.question_id,
-            &item.question,
-            item.question_type,
-            gold,
-            &evidence_map,
-            cli.token_budget,
-            llm_alias,
-        )
+    // Build the ONNX/Xervo runtime **once**, before the per-item
+    // loop, and share its `Arc` across every concurrent KB. Without
+    // this, q≥3 on an 8 GB GPU OOMs because each KB loads its own
+    // model session (~3.7 GB each). See
+    // `uniko_store::KnowledgeBase::build_shared_runtime`.
+    let shared_runtime = uniko_store::KnowledgeBase::build_shared_runtime(&config, &extra_catalog)
         .await
-        .with_context(|| format!("querying {}", item.question_id))?;
+        .context("building shared Xervo runtime")?;
+    tracing::info!(
+        question_concurrency,
+        "shared Xervo runtime built; all KBs in this process will reuse it"
+    );
 
-        // Run judge (if enabled).
-        let judge_score = if let Some(alias) = judge_alias {
-            let is_abstention = LmeQuestionType::is_abstention(&item.question_id);
-            if is_abstention {
-                // For abstention questions, use rule-based scoring.
-                Some(eval::abstention_score(&qr.predicted_answer))
-            } else {
-                match eval::lme_judge(
+    // Captures shared by every per-item worker.  All Arc-cloneable or
+    // Copy/cheap-Clone.  llm_alias_owned/judge_alias_owned were already
+    // built upfront (line ~297) so cli can move into Arc freely.
+    let cli = Arc::new(cli);
+    let config = Arc::new(config);
+
+    stream::iter(items.into_iter().enumerate())
+        .for_each_concurrent(question_concurrency, |(item_idx, item)| {
+            let cli = cli.clone();
+            let config = config.clone();
+            let runtime = shared_runtime.clone();
+            let all_results = all_results.clone();
+            let llm_alias_owned = llm_alias_owned.clone();
+            let judge_alias_owned = judge_alias_owned.clone();
+            async move {
+                tracing::info!(
+                    "[{}/{}] Processing {} (type={}, sessions={})",
+                    item_idx + 1,
+                    total_items,
+                    item.question_id,
+                    item.question_type.name(),
+                    item.haystack_sessions.len(),
+                );
+
+                let kb_dir = cli.ingest_dir.join(&item.question_id);
+                let (kb, evidence_map) = if cli.reuse && kb_dir.exists() {
+                    tracing::info!(path = %kb_dir.display(), "reusing existing KB");
+                    match uniko_bench::open_kb_with_runtime(
+                        &kb_dir,
+                        (*config).clone(),
+                        runtime.clone(),
+                    )
+                    .await
+                    {
+                        Ok(kb) => {
+                            let evidence_map = ingest::EvidenceMap {
+                                answer_session_ids: item
+                                    .answer_session_ids
+                                    .iter()
+                                    .cloned()
+                                    .collect(),
+                                answer_message_ids: Vec::new(),
+                                session_to_messages: std::collections::HashMap::new(),
+                            };
+                            (kb, evidence_map)
+                        }
+                        Err(e) => {
+                            tracing::warn!(question_id = %item.question_id, error = %e, "open_kb failed; skipping item");
+                            return;
+                        }
+                    }
+                } else {
+                    let ingest_start = Instant::now();
+                    match ingest::ingest_item(
+                        &item,
+                        &kb_dir,
+                        (*config).clone(),
+                        runtime.clone(),
+                        cli.session_concurrency,
+                    )
+                    .await
+                    {
+                        Ok(result) => {
+                            tracing::info!(
+                                question_id = %item.question_id,
+                                elapsed_ms = ingest_start.elapsed().as_millis(),
+                                "ingestion complete"
+                            );
+                            result
+                        }
+                        Err(e) => {
+                            tracing::warn!(question_id = %item.question_id, error = %e, "ingest failed; skipping item");
+                            return;
+                        }
+                    }
+                };
+
+                // P4 Consolidation: see longmemeval_main rationale.
+                let cycle_start = Instant::now();
+                let triple_source = match cli.extract_triples_llm_alias.as_deref() {
+                    Some(alias) => uniko_memory::consolidation::TripleSource::Llm {
+                        alias: alias.to_string(),
+                    },
+                    None => uniko_memory::consolidation::TripleSource::SrlDep,
+                };
+                match uniko_memory::consolidation::run_cycle_with(
                     &kb,
-                    &item.question,
-                    gold,
-                    &qr.predicted_answer,
-                    item.question_type,
-                    false,
-                    alias,
+                    &item.question_id,
+                    Some(10_000),
+                    &triple_source,
                 )
                 .await
                 {
-                    Ok(score) => Some(score),
+                    Ok(stats) => tracing::info!(
+                        question_id = %item.question_id,
+                        processed = stats.observations_processed,
+                        facts_created = stats.facts_created,
+                        facts_reinforced = stats.facts_reinforced,
+                        duration_ms = cycle_start.elapsed().as_millis(),
+                        "consolidation cycle complete",
+                    ),
+                    Err(e) => tracing::warn!(
+                        question_id = %item.question_id,
+                        error = %e,
+                        "consolidation cycle failed (continuing without Facts)",
+                    ),
+                }
+
+                let bench_agent_id = format!("bench-agent-{}", item.question_id);
+                let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
+                    std::collections::HashMap::new();
+                agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
+                agent_props.insert("name".into(), uni_db::Value::String("bench-agent".into()));
+                if let Err(e) = kb
+                    .merge_node(
+                        "Participant",
+                        "participant_id",
+                        &bench_agent_id,
+                        &agent_props,
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to create bench-agent Participant");
+                }
+
+                let gold = data::gold_answer(&item);
+                let qr = match query::run_lme_query(
+                    &kb,
+                    &item.question_id,
+                    &item.question,
+                    item.question_type,
+                    gold,
+                    &evidence_map,
+                    cli.token_budget,
+                    llm_alias_owned.as_deref(),
+                )
+                .await
+                {
+                    Ok(qr) => qr,
                     Err(e) => {
-                        tracing::warn!(error = %e, "LLM judge failed");
-                        None
+                        tracing::warn!(question_id = %item.question_id, error = %e, "query failed; skipping item");
+                        return;
                     }
-                }
-            }
-        } else {
-            None
-        };
+                };
 
-        tracing::info!(
-            question_id = %item.question_id,
-            contains_answer = qr.context_contains_answer,
-            recall_at_5 = format!("{:.3}", qr.recall_at_5),
-            recall_items = qr.recall_items,
-            recall_ms = qr.recall_latency_ms,
-            "query complete",
-        );
-
-        // Record query-outcome episode (best-effort).
-        let outcome = match judge_score {
-            Some(s) if s >= 0.5 => "success",
-            Some(_) => "failure",
-            None => {
-                if qr.context_contains_answer {
-                    "success"
+                let judge_score = if let Some(alias) = judge_alias_owned.as_deref() {
+                    let is_abstention = LmeQuestionType::is_abstention(&item.question_id);
+                    if is_abstention {
+                        Some(eval::abstention_score(&qr.predicted_answer))
+                    } else {
+                        match eval::lme_judge(
+                            &kb,
+                            &item.question,
+                            gold,
+                            &qr.predicted_answer,
+                            item.question_type,
+                            false,
+                            alias,
+                        )
+                        .await
+                        {
+                            Ok(score) => Some(score),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "LLM judge failed");
+                                None
+                            }
+                        }
+                    }
                 } else {
-                    "failure"
+                    None
+                };
+
+                tracing::info!(
+                    question_id = %item.question_id,
+                    contains_answer = qr.context_contains_answer,
+                    recall_at_5 = format!("{:.3}", qr.recall_at_5),
+                    recall_items = qr.recall_items,
+                    recall_ms = qr.recall_latency_ms,
+                    "query complete",
+                );
+
+                let outcome = match judge_score {
+                    Some(s) if s >= 0.5 => "success",
+                    Some(_) => "failure",
+                    None => {
+                        if qr.context_contains_answer {
+                            "success"
+                        } else {
+                            "failure"
+                        }
+                    }
+                };
+                let state = serde_json::json!({
+                    "topic": item.question.clone(),
+                    "question": item.question.clone(),
+                    "question_type": item.question_type.name(),
+                    "question_id": item.question_id.clone(),
+                });
+                let params = uniko_memory::RecordEpisodeParams {
+                    action_type: "retrieve".into(),
+                    outcome: Some(outcome.into()),
+                    state: Some(state),
+                    importance: Some(judge_score.unwrap_or(0.5).clamp(0.0, 1.0)),
+                    ..Default::default()
+                };
+                if let Err(e) =
+                    uniko_memory::record_episode(&kb, &bench_agent_id, params).await
+                {
+                    tracing::debug!(error = %e, "episode recording failed");
                 }
+
+                // Push result + checkpoint write under the lock.  The
+                // lock window is short (Vec push + JSON serialize) and
+                // serialized writes preserve a consistent on-disk
+                // snapshot after each completed item.
+                let mut results = all_results.lock().await;
+                results.push((qr, judge_score));
+                let partial = report::aggregate_lme(&results, total_items);
+                if let Err(e) = report::write_lme_json(&results, &partial, &cli.output) {
+                    tracing::warn!(error = %e, "checkpoint write failed (continuing)");
+                }
+                // KB drops at end of scope.
             }
-        };
-        let state = serde_json::json!({
-            "topic": item.question.clone(),
-            "question": item.question.clone(),
-            "question_type": item.question_type.name(),
-            "question_id": item.question_id.clone(),
-        });
-        let params = uniko_memory::RecordEpisodeParams {
-            action_type: "retrieve".into(),
-            outcome: Some(outcome.into()),
-            state: Some(state),
-            importance: Some(judge_score.unwrap_or(0.5).clamp(0.0, 1.0)),
-            ..Default::default()
-        };
-        if let Err(e) = uniko_memory::record_episode(&kb, &bench_agent_id, params).await {
-            tracing::debug!(error = %e, "episode recording failed");
-        }
+        })
+        .await;
 
-        all_results.push((qr, judge_score));
-
-        // Per-item checkpoint: write the running results so a kill
-        // mid-run preserves every item completed so far. `total_items`
-        // stays the full denominator for averages — partial runs see
-        // an honest "X of N completed" picture.
-        let partial = report::aggregate_lme(&all_results, total_items);
-        if let Err(e) = report::write_lme_json(&all_results, &partial, &cli.output) {
-            tracing::warn!(error = %e, "checkpoint write failed (continuing)");
-        }
-
-        // KB is dropped here, freeing memory.
-    }
+    let all_results = Arc::try_unwrap(all_results)
+        .map_err(|_| anyhow::anyhow!("all_results still has outstanding refs"))?
+        .into_inner();
 
     let bench_elapsed = bench_start.elapsed();
     tracing::info!(

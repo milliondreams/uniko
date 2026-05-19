@@ -37,7 +37,16 @@ pub async fn get_or_create_session(
     let mut props = HashMap::new();
     props.insert("session_id".into(), Value::String(session_id.to_string()));
     props.insert("started_at".into(), datetime_value(*timestamp));
-    kb.create_node("Session", &props).await
+    let start = std::time::Instant::now();
+    let nid = kb.create_node("Session", &props).await?;
+    tracing::info!(
+        target: "tx_perf",
+        tx_phase = "session_create",
+        total_ms = start.elapsed().as_millis() as u64,
+        commit_ms = start.elapsed().as_millis() as u64,
+        "tx phase",
+    );
+    Ok(nid)
 }
 
 /// Ensure a Participant node exists for the given ID.
@@ -57,8 +66,19 @@ pub(crate) async fn ensure_participant(
     props.insert("name".into(), Value::String(participant_id.to_string()));
     props.insert("kind".into(), Value::String("unknown".to_string()));
     props.insert("last_seen".into(), datetime_value(timestamp));
-    kb.merge_node("Participant", "participant_id", participant_id, &props)
-        .await
+    let start = std::time::Instant::now();
+    let nid = kb
+        .merge_node("Participant", "participant_id", participant_id, &props)
+        .await?;
+    let ms = start.elapsed().as_millis() as u64;
+    tracing::info!(
+        target: "tx_perf",
+        tx_phase = "participant_ensure",
+        total_ms = ms,
+        commit_ms = ms,
+        "tx phase",
+    );
+    Ok(nid)
 }
 
 /// Create a `PARTICIPATED_IN` edge from participant to session.
@@ -75,6 +95,7 @@ pub(crate) async fn link_participant_to_session(
     participant_nid: NodeId,
     session_nid: NodeId,
 ) -> uniko_store::Result<()> {
+    let start = std::time::Instant::now();
     kb.create_edge(
         edges::PARTICIPATED_IN,
         participant_nid,
@@ -82,5 +103,13 @@ pub(crate) async fn link_participant_to_session(
         &HashMap::new(),
     )
     .await?;
+    let ms = start.elapsed().as_millis() as u64;
+    tracing::info!(
+        target: "tx_perf",
+        tx_phase = "participant_link",
+        total_ms = ms,
+        commit_ms = ms,
+        "tx phase",
+    );
     Ok(())
 }

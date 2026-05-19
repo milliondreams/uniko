@@ -182,7 +182,7 @@ impl uniko_pipes::Step for ObservationExtractionStep {
 
         // 3b. Rule-based fallback (only when model unavailable).
         if !used_model {
-            let entity_refs = load_all_entity_refs(ctx, &sender_ref).await;
+            let entity_refs = load_all_entity_refs(ctx, &sender_ref);
             if !entity_refs.is_empty() {
                 let rule_obs =
                     rules::extract_observations_rule_based(&ctx.content, &entity_refs, timestamp);
@@ -199,7 +199,7 @@ impl uniko_pipes::Step for ObservationExtractionStep {
 
         // 4. Create nodes and wire edges (batched).
         let persist_start = std::time::Instant::now();
-        let entity_refs = load_all_entity_refs(ctx, &sender_ref).await;
+        let entity_refs = load_all_entity_refs(ctx, &sender_ref);
         let entity_ref_ms = persist_start.elapsed().as_millis();
 
         let nodes_start = std::time::Instant::now();
@@ -236,9 +236,20 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 props
             })
             .collect();
+        // One transaction for all three batched writes (Obs nodes,
+        // OBSERVED_IN, ABOUT). Replaces what was 3 separate commits
+        // (3 × ~12 ms tx overhead per message → 1 × ~12 ms).
+        let tx = ctx
+            .kb
+            .db()
+            .session()
+            .tx()
+            .await
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+
         let obs_node_ids = ctx
             .kb
-            .batch_create_nodes(labels::OBSERVATION, &obs_props)
+            .batch_create_nodes_in_tx(&tx, labels::OBSERVATION, &obs_props)
             .await?;
         let create_nodes_ms = nodes_start.elapsed().as_millis();
 
@@ -250,7 +261,8 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             .map(|&nid| (nid, ctx.node_id, HashMap::new()))
             .collect();
         ctx.kb
-            .batch_create_edges_fast(
+            .batch_create_edges_fast_in_tx(
+                &tx,
                 edges::OBSERVED_IN,
                 Some(labels::OBSERVATION),
                 Some(labels::MESSAGE),
@@ -293,7 +305,8 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             // branches have different property-column counts (filed as
             // a follow-up). Until that's resolved, leave dst unlabelled.
             ctx.kb
-                .batch_create_edges_fast(
+                .batch_create_edges_fast_in_tx(
+                    &tx,
                     edges::ABOUT,
                     Some(labels::OBSERVATION),
                     None,
@@ -302,7 +315,24 @@ impl uniko_pipes::Step for ObservationExtractionStep {
                 .await?;
         }
         let about_ms = about_start.elapsed().as_millis();
+
+        // Commit folds all three batched writes (Obs nodes,
+        // OBSERVED_IN, ABOUT) into one WAL fsync.
+        let commit_start = std::time::Instant::now();
+        tx.commit()
+            .await
+            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        let commit_ms = commit_start.elapsed().as_millis() as u64;
         let nodes_ms = nodes_start.elapsed().as_millis();
+        tracing::info!(commit_ms, "obs commit");
+        tracing::info!(
+            target: "tx_perf",
+            tx_phase = "obs_step",
+            total_ms = nodes_ms as u64,
+            commit_ms,
+            obs_count = obs_node_ids.len() as u64,
+            "tx phase",
+        );
 
         // 5. Populate context for downstream steps.
         ctx.extracted_observations = obs_node_ids.clone();
@@ -330,10 +360,20 @@ impl uniko_pipes::Step for ObservationExtractionStep {
     }
 }
 
-/// Load the message sender via SENT_BY edge.
+/// Load the message sender, preferring the value already plumbed into
+/// `PipelineContext` by the message-ingest step.
+///
+/// Fast path: `ctx.sender` is populated when the bench / ingest path
+/// created the SENT_BY edge in the same call — no DB round-trip. Slow
+/// path (legacy callers, idempotency re-ingest, unit tests that build
+/// a context manually): fall back to the original SENT_BY edge lookup
+/// plus a Participant `get_node` to fetch the name.
 async fn load_sender_ref(ctx: &PipelineContext) -> Option<(NodeId, String)> {
-    use uniko_store::storage::edges::Direction;
+    if let Some(ref s) = ctx.sender {
+        return Some(s.clone());
+    }
 
+    use uniko_store::storage::edges::Direction;
     let edge_list = ctx
         .kb
         .get_edges(ctx.node_id, edges::SENT_BY, Direction::Outgoing)
@@ -345,22 +385,26 @@ async fn load_sender_ref(ctx: &PipelineContext) -> Option<(NodeId, String)> {
     Some((edge.to, name))
 }
 
-/// Load sender + NER entity refs combined.
-async fn load_all_entity_refs(
+/// Combine sender ref with the entity refs already populated by NER.
+///
+/// Reads directly from `ctx.extracted_entities` — the NER step now
+/// stores `(NodeId, name)` pairs there. Previously this function did
+/// one `get_node` round-trip per entity to fetch the name; that path
+/// dominated obs-step CPU at ~12 s per 485-turn question. With the
+/// name carried through the pipeline context, this is a pure in-Rust
+/// dedup-by-name.
+fn load_all_entity_refs(
     ctx: &PipelineContext,
     sender_ref: &Option<(NodeId, String)>,
 ) -> Vec<(NodeId, String)> {
-    let mut refs = Vec::new();
+    let mut refs: Vec<(NodeId, String)> =
+        Vec::with_capacity(ctx.extracted_entities.len() + usize::from(sender_ref.is_some()));
     if let Some(sr) = sender_ref {
         refs.push(sr.clone());
     }
-    for &nid in &ctx.extracted_entities {
-        if let Ok(Some((_, props))) = ctx.kb.get_node(nid).await {
-            if let Some(name) = props.get("name").and_then(|v| v.as_str()) {
-                if !refs.iter().any(|(_, n)| n == name) {
-                    refs.push((nid, name.to_string()));
-                }
-            }
+    for (nid, name) in &ctx.extracted_entities {
+        if !refs.iter().any(|(_, n)| n == name) {
+            refs.push((*nid, name.clone()));
         }
     }
     refs

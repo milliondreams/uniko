@@ -277,8 +277,9 @@ impl KnowledgeBase {
                 }
                 std::collections::hash_map::Entry::Occupied(mut e) => {
                     let cur = e.get_mut();
-                    cur.observation_count =
-                        cur.observation_count.saturating_add(input.observation_count);
+                    cur.observation_count = cur
+                        .observation_count
+                        .saturating_add(input.observation_count);
                     if input.observed_at < cur.observed_at {
                         cur.observed_at = input.observed_at;
                     }
@@ -336,7 +337,8 @@ impl KnowledgeBase {
         let mut updates_list: Vec<Value> = Vec::new();
         let mut new_props: Vec<HashMap<String, Value>> = Vec::new();
         let mut new_fids_in_order: Vec<String> = Vec::new();
-        let mut resolved: HashMap<String, (NodeId, i64)> = HashMap::with_capacity(unique_fids.len());
+        let mut resolved: HashMap<String, (NodeId, i64)> =
+            HashMap::with_capacity(unique_fids.len());
 
         for fid in &unique_fids {
             let canon = canonical
@@ -456,10 +458,7 @@ impl KnowledgeBase {
             let (nid, post_count) = *resolved
                 .get(fid)
                 .expect("resolved populated for every fact_id");
-            let was_first_input = first_idx
-                .get(fid)
-                .map(|&first| first == i)
-                .unwrap_or(false);
+            let was_first_input = first_idx.get(fid).map(|&first| first == i).unwrap_or(false);
             let was_newly_created = !existing.contains_key(fid);
             outputs.push(FactUpsert {
                 node_id: nid,
@@ -730,6 +729,112 @@ impl KnowledgeBase {
             );
             if let Ok(btic) = Btic::new(lo_ms, POS_INF, meta) {
                 out.push((nid, btic));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Batched variant of [`KnowledgeBase::find_stale_open_facts`].
+    ///
+    /// Replaces N per-key session queries with one `UNWIND $keys ...
+    /// MATCH (f:Fact) ...` call. Also returns the prior `object`
+    /// surface form per Fact (eliminating the follow-up
+    /// `MATCH (f) WHERE id(f) = $vid RETURN f.object` that the
+    /// per-group caller would otherwise need).
+    ///
+    /// Result map: each `(subject, predicate)` key in the input maps
+    /// to the open-BTIC Facts matching it. Keys with no open Facts
+    /// are absent from the map (caller should treat absence as empty).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn find_stale_open_facts_batched(
+        &self,
+        keys: &[(String, String)],
+    ) -> Result<HashMap<(String, String), Vec<(NodeId, Btic, String)>>> {
+        use std::collections::hash_map::Entry;
+        use uni_db::common::uni_btic::btic::POS_INF;
+
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Build the UNWIND list as `[{subject, predicate}, …]`.
+        let list: Vec<Value> = keys
+            .iter()
+            .map(|(s, p)| {
+                let mut m = HashMap::with_capacity(2);
+                m.insert("subject".to_string(), Value::String(s.clone()));
+                m.insert("predicate".to_string(), Value::String(p.clone()));
+                Value::Map(m)
+            })
+            .collect();
+
+        let cypher = "UNWIND $keys AS k \
+                      MATCH (f:Fact) \
+                      WHERE f.subject = k.subject \
+                        AND f.predicate = k.predicate \
+                        AND btic_is_unbounded(f.valid_at) \
+                      RETURN k.subject AS subject, k.predicate AS predicate, \
+                             id(f) AS nid, f.object AS obj, \
+                             toString(f.valid_at) AS vat_str, \
+                             btic_lo_granularity(f.valid_at) AS lo_g, \
+                             btic_lo_certainty(f.valid_at) AS lo_c";
+
+        let session = self.db.session();
+        let result = session
+            .query_with(cypher)
+            .param("keys", Value::List(list))
+            .fetch_all()
+            .await
+            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
+
+        let mut out: HashMap<(String, String), Vec<(NodeId, Btic, String)>> = HashMap::new();
+        for row in result.rows() {
+            let Ok(subject) = row.get::<String>("subject") else {
+                continue;
+            };
+            let Ok(predicate) = row.get::<String>("predicate") else {
+                continue;
+            };
+            let Ok(nid) = row.get::<i64>("nid") else {
+                continue;
+            };
+            let obj: String = row.get::<String>("obj").unwrap_or_default();
+            let Ok(vat_str) = row.get::<String>("vat_str") else {
+                continue;
+            };
+            let Some(lo_ms) = parse_btic_lo_millis(&vat_str) else {
+                continue;
+            };
+            let lo_g = row
+                .get::<String>("lo_g")
+                .ok()
+                .and_then(|s| parse_granularity(&s))
+                .unwrap_or(uni_db::common::uni_btic::Granularity::Day);
+            let lo_c = row
+                .get::<String>("lo_c")
+                .ok()
+                .and_then(|s| parse_certainty(&s))
+                .unwrap_or(uni_db::common::uni_btic::Certainty::Approximate);
+            let meta = Btic::build_meta(
+                lo_g,
+                uni_db::common::uni_btic::Granularity::Millisecond,
+                lo_c,
+                uni_db::common::uni_btic::Certainty::Definite,
+            );
+            let Ok(btic) = Btic::new(lo_ms, POS_INF, meta) else {
+                continue;
+            };
+
+            match out.entry((subject, predicate)) {
+                Entry::Vacant(e) => {
+                    e.insert(vec![(nid, btic, obj)]);
+                }
+                Entry::Occupied(mut e) => {
+                    e.get_mut().push((nid, btic, obj));
+                }
             }
         }
         Ok(out)

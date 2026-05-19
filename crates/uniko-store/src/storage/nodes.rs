@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use uni_db::Value;
+use uni_db::{Transaction, Value};
 
 use super::{build_inline_props, build_set_clause, validate_label, validate_property_name};
 use crate::error::{Result, UnikoError};
@@ -30,16 +30,40 @@ impl KnowledgeBase {
         label: &str,
         properties: &HashMap<String, Value>,
     ) -> Result<NodeId> {
-        validate_label(label)?;
-        // Properties must be inline in CREATE to satisfy NOT NULL constraints.
-        let (inline_props, params) = build_inline_props(properties, 0)?;
-        let cypher = format!("CREATE (n:{label} {{{inline_props}}}) RETURN id(n) AS vid");
-
         let session = self.db.session();
         let tx = session
             .tx()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let vid = self.create_node_in_tx(&tx, label, properties).await?;
+        tx.commit()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        Ok(vid)
+    }
+
+    /// Create a node within an existing transaction without committing.
+    ///
+    /// Use to group several writes (Message + edges + chunks, entity
+    /// upsert sub-steps, etc.) under one commit. Mirrors
+    /// [`KnowledgeBase::create_node`]'s shape but defers the
+    /// transaction lifecycle to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Schema`] if `label` is unknown or a
+    /// property name is invalid, or [`UnikoError::Storage`] on
+    /// transaction failure.
+    pub async fn create_node_in_tx(
+        &self,
+        tx: &Transaction,
+        label: &str,
+        properties: &HashMap<String, Value>,
+    ) -> Result<NodeId> {
+        validate_label(label)?;
+        // Properties must be inline in CREATE to satisfy NOT NULL constraints.
+        let (inline_props, params) = build_inline_props(properties, 0)?;
+        let cypher = format!("CREATE (n:{label} {{{inline_props}}}) RETURN id(n) AS vid");
 
         let mut qb = tx.query_with(&cypher);
         for (k, v) in &params {
@@ -47,10 +71,6 @@ impl KnowledgeBase {
         }
         let result = qb
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-
-        tx.commit()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
 

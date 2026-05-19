@@ -1,0 +1,13 @@
+# Linker config — mirrors ../uni/.cargo/config.toml.
+#
+# `cc_no_usrlib.sh` is a shell wrapper around cc that drops `-L /usr/lib`
+# from the argv. Without it, the linker picks up the 32-bit i386 multilib
+# `libcuda.so` under /usr/lib before the real 64-bit one under /usr/lib64
+# and errors with `incompatible with elf64-x86-64`. Needed for the
+# `gpu-cuda` feature; harmless otherwise.
+#
+# `-fuse-ld=mold` swaps the link backend from GNU ld to mold. Saves
+# ~20–60s on cold link of the workspace binaries; matches uni's setup.
+[target.'cfg(target_os = "linux")']
+linker = "/tmp/cc_no_usrlib.sh"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

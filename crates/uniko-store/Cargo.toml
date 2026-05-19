@@ -14,6 +14,7 @@ gpu-metal = ["uni-db/gpu-metal"]
 
 [dependencies]
 uni-db = { workspace = true }
+uni-xervo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

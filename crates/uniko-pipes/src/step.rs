@@ -67,8 +67,21 @@ pub struct PipelineContext {
     pub kb: Arc<KnowledgeBase>,
     /// LLM circuit breaker — check before making LLM calls.
     pub llm_breaker: Arc<CircuitBreaker>,
-    /// Entity node IDs extracted so far (populated by NER step).
-    pub extracted_entities: Vec<NodeId>,
+    /// `(node_id, name)` pairs for entities extracted so far
+    /// (populated by NER step). The name is the canonical-cased label
+    /// matching `Entity.name`, so downstream steps can do substring
+    /// matching against speaker / observation subjects without a
+    /// per-message round-trip to fetch the property.
+    pub extracted_entities: Vec<(NodeId, String)>,
+    /// `(participant_node_id, participant_name)` for the message's
+    /// sender, populated by the ingest step that creates the
+    /// `SENT_BY` edge. The observation step uses this to wire ABOUT
+    /// edges from observations back to the speaker without
+    /// re-querying the SENT_BY edge and refetching the Participant
+    /// node. `None` when the ingest path didn't populate it (e.g.
+    /// unit tests that build a context manually); downstream
+    /// consumers fall back to a DB lookup in that case.
+    pub sender: Option<(NodeId, String)>,
     /// Observation node IDs extracted so far.
     pub extracted_observations: Vec<NodeId>,
     /// Arbitrary step-to-step metadata.
@@ -94,6 +107,7 @@ impl PipelineContext {
             llm_breaker,
             extracted_entities: Vec::new(),
             extracted_observations: Vec::new(),
+            sender: None,
             metadata: HashMap::new(),
         }
     }

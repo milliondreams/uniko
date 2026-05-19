@@ -116,8 +116,8 @@ async fn test_entity_dedup_existing() {
 
     // Both contexts should reference the same entity node IDs for "caroline smith".
     // Verify via frequency: the Entity should have frequency >= 2.
-    for &eid in &ctx2.extracted_entities {
-        let node = kb.get_node(eid).await.unwrap();
+    for (eid, _name) in &ctx2.extracted_entities {
+        let node = kb.get_node(*eid).await.unwrap();
         if let Some((_, props)) = node {
             let name = props.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if name == "caroline smith" {
@@ -167,8 +167,8 @@ async fn test_step_populates_context() {
     );
 
     // Each entity NodeId should point to a real Entity node.
-    for &eid in &ctx.extracted_entities {
-        let node = kb.get_node(eid).await.unwrap();
+    for (eid, _name) in &ctx.extracted_entities {
+        let node = kb.get_node(*eid).await.unwrap();
         assert!(node.is_some(), "entity node {eid} must exist");
         let (label, _) = node.unwrap();
         assert_eq!(label, "Entity");

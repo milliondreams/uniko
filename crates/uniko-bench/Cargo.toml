@@ -17,6 +17,14 @@ path = "src/longmemeval_main.rs"
 name = "uniko-cypher"
 path = "src/cypher_main.rs"
 
+[[bin]]
+name = "nlp-compare"
+path = "src/nlp_compare_main.rs"
+
+[[bin]]
+name = "profile-writes"
+path = "src/profile_writes_main.rs"
+
 [features]
 default = []
 gpu-cuda = ["uniko-store/gpu-cuda"]
@@ -33,6 +41,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+futures = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }

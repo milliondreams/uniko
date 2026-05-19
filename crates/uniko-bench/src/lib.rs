@@ -14,8 +14,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
 use uniko_memory::recall::ContextBundle;
-use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
+use uniko_store::{KnowledgeBase, ModelRuntime};
 
 // ── KB Lifecycle ────────────────────────────────────────────────
 
@@ -28,6 +28,23 @@ pub async fn open_kb(
     let kb = KnowledgeBase::open_with_xervo(ingest_dir, config, extra_catalog.to_vec())
         .await
         .context("opening KB")?;
+    Ok(Arc::new(kb))
+}
+
+/// Open an existing persistent KB using a process-shared `ModelRuntime`.
+///
+/// Same as [`open_kb`] but reuses an externally-built runtime instead
+/// of loading its own ONNX sessions — required for `q ≥ 3` on an 8 GB
+/// GPU where per-KB sessions OOM. See
+/// [`KnowledgeBase::build_shared_runtime`].
+pub async fn open_kb_with_runtime(
+    ingest_dir: &Path,
+    config: UnikoConfig,
+    runtime: Arc<ModelRuntime>,
+) -> Result<Arc<KnowledgeBase>> {
+    let kb = KnowledgeBase::open_with_runtime(ingest_dir, config, runtime)
+        .await
+        .context("opening KB with shared runtime")?;
     Ok(Arc::new(kb))
 }
 

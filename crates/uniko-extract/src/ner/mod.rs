@@ -136,8 +136,14 @@ impl uniko_pipes::Step for EntityExtractionStep {
         let matches = dedup::upsert_entities(&ctx.kb, ctx.node_id, deduped).await?;
         let upsert_ms = upsert_start.elapsed().as_millis();
 
-        // 7. Populate context for downstream steps (P3, P7).
-        ctx.extracted_entities = matches.iter().map(|m| m.node_id).collect();
+        // 7. Populate context for downstream steps (P3, P7). The
+        // canonical name is included so the observation step can do
+        // its substring matching against entity names without a
+        // per-entity `get_node` round-trip.
+        ctx.extracted_entities = matches
+            .iter()
+            .map(|m| (m.node_id, m.canonical_name.clone()))
+            .collect();
 
         let total_ms = step_start.elapsed().as_millis();
         tracing::info!(

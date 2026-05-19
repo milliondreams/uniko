@@ -76,7 +76,7 @@ async fn test_observation_from_prose() {
 
     let step = ObservationExtractionStep;
     let mut ctx = make_ctx(kb.clone(), msg_nid, text);
-    ctx.extracted_entities = vec![entity_nid];
+    ctx.extracted_entities = vec![(entity_nid, "Caroline".into())];
 
     let outcome = uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
     assert!(matches!(outcome, StepOutcome::Completed));
@@ -116,7 +116,7 @@ async fn test_observation_filtering_greetings() {
 
     let step = ObservationExtractionStep;
     let mut ctx = make_ctx(kb.clone(), msg_nid, "Hey!");
-    ctx.extracted_entities = vec![entity_nid];
+    ctx.extracted_entities = vec![(entity_nid, "Alice".into())];
 
     let outcome = uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
     assert!(
@@ -134,7 +134,7 @@ async fn test_observation_filtering_pure_question() {
 
     let step = ObservationExtractionStep;
     let mut ctx = make_ctx(kb.clone(), msg_nid, "Where is the store?");
-    ctx.extracted_entities = vec![entity_nid];
+    ctx.extracted_entities = vec![(entity_nid, "store".into())];
 
     let outcome = uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
     assert!(matches!(outcome, StepOutcome::Skipped { .. }));
@@ -163,7 +163,7 @@ async fn test_observation_step_populates_context() {
 
     let step = ObservationExtractionStep;
     let mut ctx = make_ctx(kb.clone(), msg_nid, text);
-    ctx.extracted_entities = vec![alice_nid];
+    ctx.extracted_entities = vec![(alice_nid, "Alice".into())];
 
     uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
 

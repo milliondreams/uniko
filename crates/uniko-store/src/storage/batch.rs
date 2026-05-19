@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use uni_db::Value;
+use uni_db::{Transaction, Value, Vid};
 
 use super::{KnowledgeBase, validate_edge_type, validate_label, validate_property_name};
 use crate::error::{Result, UnikoError};
@@ -32,77 +32,86 @@ impl KnowledgeBase {
         label: &str,
         items: &[HashMap<String, Value>],
     ) -> Result<Vec<NodeId>> {
-        validate_label(label)?;
         if items.is_empty() {
             return Ok(Vec::new());
         }
-
-        // Collect the union of all property keys (sorted for determinism).
-        let prop_keys = collect_property_keys_from_nodes(items)?;
-
-        // Build UNWIND list: one Map per node.
-        let list: Vec<Value> = items
-            .iter()
-            .map(|props| {
-                let mut m = HashMap::with_capacity(prop_keys.len());
-                for k in &prop_keys {
-                    m.insert(k.clone(), props.get(k).cloned().unwrap_or(Value::Null));
-                }
-                Value::Map(m)
-            })
-            .collect();
-
-        // Build inline property syntax: `{prop1: item.prop1, prop2: item.prop2}`.
-        let inline = if prop_keys.is_empty() {
-            String::new()
-        } else {
-            let pairs: Vec<String> = prop_keys.iter().map(|k| format!("{k}: item.{k}")).collect();
-            format!(" {{{}}}", pairs.join(", "))
-        };
-
-        let cypher =
-            format!("UNWIND $items AS item CREATE (n:{label}{inline}) RETURN id(n) AS vid");
-
-        let t_start = std::time::Instant::now();
         let session = self.db.session();
-        let t_session = t_start.elapsed().as_micros();
-
         let tx = session
             .tx()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let t_tx_begin = t_start.elapsed().as_micros() - t_session;
-
-        let result = tx
-            .query_with(&cypher)
-            .param("items", Value::List(list))
-            .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let t_query = t_start.elapsed().as_micros() - t_session - t_tx_begin;
-
-        let mut node_ids = Vec::with_capacity(items.len());
-        for row in result.rows() {
-            let vid: i64 = row
-                .get("vid")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
-            node_ids.push(vid);
-        }
-
+        let node_ids = self.batch_create_nodes_in_tx(&tx, label, items).await?;
         tx.commit()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let t_commit = t_start.elapsed().as_micros() - t_session - t_tx_begin - t_query;
+        Ok(node_ids)
+    }
+
+    /// Like [`KnowledgeBase::batch_create_nodes`] but executed against
+    /// an existing transaction without committing.
+    ///
+    /// Use when grouping multiple batched writes for a single message
+    /// under one commit (e.g. the per-message ingest path which folds
+    /// Message + edges + chunks into one tx).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Schema`] if `label` is unknown or a
+    /// property name is invalid, or [`UnikoError::Storage`] on
+    /// transaction failure. The caller's transaction is left in its
+    /// current state on error — invoke `tx.commit()` or drop to
+    /// rollback per the standard uni-db tx semantics.
+    pub async fn batch_create_nodes_in_tx(
+        &self,
+        tx: &Transaction,
+        label: &str,
+        items: &[HashMap<String, Value>],
+    ) -> Result<Vec<NodeId>> {
+        validate_label(label)?;
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Validate property names upfront — uni-db's bulk API does
+        // not re-check them.
+        for props in items {
+            for k in props.keys() {
+                validate_property_name(k)?;
+            }
+        }
+
+        // Route through `tx.bulk_insert_vertices` (uni-db public API).
+        // Same rationale as `batch_create_edges_inner_in_tx`'s bulk
+        // arm: skip Cypher parse + plan + per-row executor wrapping,
+        // hand the properties straight to `writer.insert_vertices_batch`
+        // which still runs `process_embeddings_for_batch` so auto-embed
+        // semantics are preserved.
+        let t_start = std::time::Instant::now();
+        let properties_list: Vec<HashMap<String, Value>> = items.to_vec();
+        let vids = tx
+            .bulk_insert_vertices(label, properties_list)
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let t_query = t_start.elapsed().as_micros() as u64;
+        let node_ids: Vec<NodeId> = vids.iter().map(|v| v.as_u64() as i64).collect();
 
         tracing::debug!(
             label,
             count = items.len(),
-            session_us = t_session as u64,
-            tx_begin_us = t_tx_begin as u64,
-            query_us = t_query as u64,
-            commit_us = t_commit as u64,
-            total_us = t_start.elapsed().as_micros() as u64,
-            "batch_create_nodes micro"
+            query_us = t_query,
+            "batch_create_nodes_in_tx micro (bulk)"
+        );
+        tracing::info!(
+            target: "query_metrics",
+            site = "batch_create_nodes_in_tx",
+            label,
+            node_count = items.len() as u64,
+            parse_us = 0u64,
+            plan_us = 0u64,
+            exec_us = t_query,
+            total_us = t_query,
+            cache_hit = false,
+            bulk = true,
+            "query metrics",
         );
         Ok(node_ids)
     }
@@ -152,8 +161,59 @@ impl KnowledgeBase {
         Ok(())
     }
 
+    /// Like [`KnowledgeBase::batch_create_edges_fast`] but executed
+    /// against an existing transaction without committing.
+    ///
+    /// Use when grouping multiple batched writes under one commit
+    /// (per-message ingest, observation step folding three edge
+    /// batches into one tx, etc.).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Schema`] if `edge_type` is unknown or a
+    /// property name is invalid, or [`UnikoError::Storage`] on
+    /// transaction failure.
+    pub async fn batch_create_edges_fast_in_tx(
+        &self,
+        tx: &Transaction,
+        edge_type: &str,
+        src_label: Option<&str>,
+        dst_label: Option<&str>,
+        edges: &[(NodeId, NodeId, HashMap<String, Value>)],
+    ) -> Result<()> {
+        self.batch_create_edges_inner_in_tx(tx, edge_type, src_label, dst_label, edges, false)
+            .await?;
+        Ok(())
+    }
+
     async fn batch_create_edges_inner(
         &self,
+        edge_type: &str,
+        src_label: Option<&str>,
+        dst_label: Option<&str>,
+        edges: &[(NodeId, NodeId, HashMap<String, Value>)],
+        return_ids: bool,
+    ) -> Result<Vec<EdgeId>> {
+        if edges.is_empty() {
+            return Ok(Vec::new());
+        }
+        let session = self.db.session();
+        let tx = session
+            .tx()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let edge_ids = self
+            .batch_create_edges_inner_in_tx(&tx, edge_type, src_label, dst_label, edges, return_ids)
+            .await?;
+        tx.commit()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        Ok(edge_ids)
+    }
+
+    async fn batch_create_edges_inner_in_tx(
+        &self,
+        tx: &Transaction,
         edge_type: &str,
         src_label: Option<&str>,
         dst_label: Option<&str>,
@@ -164,6 +224,67 @@ impl KnowledgeBase {
         if edges.is_empty() {
             return Ok(Vec::new());
         }
+
+        // ── Fast path: `tx.bulk_insert_edges` (uni-db public API).
+        //
+        // When the caller doesn't need EIDs back, skip the entire
+        // Cypher pipeline (parse + plan + per-row MATCH id-lookup +
+        // executor wrapping) and write straight to the tx's private
+        // L0 via the bulk API. uni-db's `edge_commit_contention.rs`
+        // microbenchmark shows this path holds at ~150 µs/edge at
+        // sess=24 (10 edges/tx, COLD); the Cypher path through
+        // `tx.execute_with` measures ~147 ms/edge in this workload
+        // — a ~980× gap that's purely Cypher executor overhead per
+        // row, since the VIDs are already known at the call site.
+        if !return_ids {
+            let t_start = std::time::Instant::now();
+            let bulk_edges: Vec<(Vid, Vid, HashMap<String, Value>)> = edges
+                .iter()
+                .map(|(s, d, props)| {
+                    // Property names still need validation; uni-db's
+                    // bulk_insert_edges takes them as-is.
+                    for k in props.keys() {
+                        let _ = validate_property_name(k);
+                    }
+                    (Vid::new(*s as u64), Vid::new(*d as u64), props.clone())
+                })
+                .collect();
+            tx.bulk_insert_edges(edge_type, bulk_edges)
+                .await
+                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let t_query = t_start.elapsed().as_micros();
+            tracing::debug!(
+                edge_type,
+                count = edges.len(),
+                return_ids,
+                query_us = t_query as u64,
+                "batch_create_edges_in_tx micro (bulk)"
+            );
+            // Emit synthetic query_metrics so post-hoc aggregation
+            // keeps working. The bulk path has no Cypher parse/plan;
+            // we report 0 for those and the elapsed wall as exec_us.
+            tracing::info!(
+                target: "query_metrics",
+                site = "batch_create_edges_fast_in_tx",
+                edge_type,
+                edge_count = edges.len() as u64,
+                parse_us = 0u64,
+                plan_us = 0u64,
+                exec_us = t_query as u64,
+                total_us = t_query as u64,
+                cache_hit = false,
+                bulk = true,
+                "query metrics",
+            );
+            // Edge IDs are intentionally not returned on this path —
+            // callers that need them should use the `return_ids` arm
+            // below (Cypher with RETURN id(r) AS eid).
+            return Ok(Vec::new());
+        }
+
+        // ── Cypher path: still needed when caller wants EIDs back
+        // (uni-db's `bulk_insert_edges` doesn't surface allocated
+        // EIDs at the public API today).
 
         // Collect the union of all property keys (sorted for determinism).
         let prop_keys = collect_property_keys_from_edges(edges)?;
@@ -195,90 +316,56 @@ impl KnowledgeBase {
         let src_lbl = src_label.map(|l| format!(":{l}")).unwrap_or_default();
         let dst_lbl = dst_label.map(|l| format!(":{l}")).unwrap_or_default();
 
-        let cypher = if return_ids {
-            format!(
-                "UNWIND $edges AS e \
-                 MATCH (a{src_lbl}) WHERE id(a) = e.src \
-                 MATCH (b{dst_lbl}) WHERE id(b) = e.dst \
-                 CREATE (a)-[r:{edge_type}]->(b){set_clause} \
-                 RETURN id(r) AS eid"
-            )
-        } else {
-            format!(
-                "UNWIND $edges AS e \
-                 MATCH (a{src_lbl}) WHERE id(a) = e.src \
-                 MATCH (b{dst_lbl}) WHERE id(b) = e.dst \
-                 CREATE (a)-[r:{edge_type}]->(b){set_clause}"
-            )
-        };
+        let cypher = format!(
+            "UNWIND $edges AS e \
+             MATCH (a{src_lbl}) WHERE id(a) = e.src \
+             MATCH (b{dst_lbl}) WHERE id(b) = e.dst \
+             CREATE (a)-[r:{edge_type}]->(b){set_clause} \
+             RETURN id(r) AS eid"
+        );
 
         let t_start = std::time::Instant::now();
-        let session = self.db.session();
-        let t_session = t_start.elapsed().as_micros();
-
-        let tx = session
-            .tx()
+        let result = tx
+            .query_with(&cypher)
+            .param("edges", Value::List(list))
+            .fetch_all()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let t_tx_begin = t_start.elapsed().as_micros() - t_session;
-
-        let mut edge_ids = Vec::new();
-        if return_ids {
-            let result = tx
-                .query_with(&cypher)
-                .param("edges", Value::List(list))
-                .fetch_all()
-                .await
+        let mut edge_ids = Vec::with_capacity(edges.len());
+        for row in result.rows() {
+            let eid: i64 = row
+                .get("eid")
                 .map_err(|e| UnikoError::Storage(e.to_string()))?;
-            edge_ids.reserve(edges.len());
-            for row in result.rows() {
-                let eid: i64 = row
-                    .get("eid")
-                    .map_err(|e| UnikoError::Storage(e.to_string()))?;
-                edge_ids.push(eid);
-            }
-        } else {
-            tx.execute_with(&cypher)
-                .param("edges", Value::List(list))
-                .run()
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            edge_ids.push(eid);
         }
-        let t_query = t_start.elapsed().as_micros() - t_session - t_tx_begin;
-
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let t_commit = t_start.elapsed().as_micros() - t_session - t_tx_begin - t_query;
+        let metrics = result.metrics().clone();
+        let t_query = t_start.elapsed().as_micros();
 
         tracing::debug!(
             edge_type,
             count = edges.len(),
             return_ids,
-            session_us = t_session as u64,
-            tx_begin_us = t_tx_begin as u64,
             query_us = t_query as u64,
-            commit_us = t_commit as u64,
-            total_us = t_start.elapsed().as_micros() as u64,
-            "batch_create_edges micro"
+            "batch_create_edges_in_tx micro"
+        );
+        tracing::info!(
+            target: "query_metrics",
+            site = "batch_create_edges_fast_in_tx",
+            edge_type,
+            edge_count = edges.len() as u64,
+            parse_us = metrics.parse_time.as_micros() as u64,
+            plan_us = metrics.plan_time.as_micros() as u64,
+            exec_us = metrics.exec_time.as_micros() as u64,
+            total_us = metrics.total_time.as_micros() as u64,
+            cache_hit = metrics.plan_cache_hit,
+            bulk = false,
+            "query metrics",
         );
         Ok(edge_ids)
     }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
-
-/// Collect and validate the union of property keys from node items.
-fn collect_property_keys_from_nodes(items: &[HashMap<String, Value>]) -> Result<Vec<String>> {
-    let mut keys = BTreeSet::new();
-    for props in items {
-        for k in props.keys() {
-            validate_property_name(k)?;
-            keys.insert(k.clone());
-        }
-    }
-    Ok(keys.into_iter().collect())
-}
 
 /// Collect and validate the union of property keys from edge tuples.
 fn collect_property_keys_from_edges(
