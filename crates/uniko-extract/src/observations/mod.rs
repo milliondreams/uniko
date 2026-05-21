@@ -57,188 +57,67 @@ impl uniko_pipes::Step for ObservationExtractionStep {
 
     async fn execute(&self, ctx: &mut PipelineContext) -> Result<StepOutcome, UnikoError> {
         let step_start = std::time::Instant::now();
+        let timestamp = resolve_timestamp(ctx);
 
-        // Resolve sender name early — needed for both CLS check and DEP extraction.
-        let sender_ref = load_sender_ref(ctx).await;
-        let sender_ms = step_start.elapsed().as_millis();
+        // Reconstruct ObservationInputs from the PipelineContext shape
+        // so the prep + apply helpers can be the single source of truth
+        // for both the legacy step path and the new atomic ingest path.
+        #[cfg(feature = "onnx")]
+        let nlp_results_owned: Option<Vec<crate::nlp::types::NlpResult>> = ctx
+            .metadata
+            .get("nlp_results")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let seed_sentence_ctx = ctx
+            .metadata
+            .get("session_context")
+            .and_then(|v| v.get("sentence_ctx"))
+            .and_then(|v| {
+                serde_json::from_value::<crate::ingest::context::SentenceContext>(v.clone()).ok()
+            });
 
-        #[allow(unused_variables)]
-        let sender_name = sender_ref.as_ref().map(|(_, name)| name.as_str());
+        let rules_path = ctx.kb.config().observation_rules_path.clone();
 
-        // 1. CLS gate.
-        //    When per-sentence NLP results are available (step 3a), CLS
-        //    filtering happens per-sentence inside the extraction loop.
-        //    Otherwise (no ONNX, or NLP unavailable), apply the rule-based
-        //    filter upfront to reject greetings, short filler, etc.
-        let has_nlp = cfg!(feature = "onnx") && ctx.metadata.contains_key("nlp_results");
-        if !has_nlp {
-            let content_type = ctx
+        let inputs = ObservationInputs {
+            kb: &ctx.kb,
+            message_node_id: ctx.node_id,
+            content: &ctx.content,
+            content_type: ctx
                 .metadata
                 .get("content_type")
                 .and_then(|v| v.as_str())
-                .or(Some(ctx.content_type.as_str()));
-            if !filter::is_informative(&ctx.content, content_type) {
-                return Ok(StepOutcome::Skipped {
-                    reason: "content not informative".into(),
-                });
+                .unwrap_or(ctx.content_type.as_str()),
+            sender: ctx.sender.clone(),
+            extracted_entities: &ctx.extracted_entities,
+            #[cfg(feature = "onnx")]
+            nlp_results: nlp_results_owned.as_deref(),
+            seed_sentence_ctx: seed_sentence_ctx.as_ref(),
+            timestamp,
+            observation_rules_path: rules_path.as_deref(),
+        };
+
+        let prep = match prepare_observations(inputs).await? {
+            ObservationPrepOutcome::Skip(reason) => {
+                return Ok(StepOutcome::Skipped { reason });
             }
-        }
+            ObservationPrepOutcome::Ready(p) => p,
+        };
 
-        // 2. Resolve timestamp.
-        let timestamp = resolve_timestamp(ctx);
-
-        // 3. Extract observations.
-        let extract_start = std::time::Instant::now();
-        let mut all_obs = Vec::new();
-        #[allow(unused_mut)]
-        let mut used_model = false;
-
-        // 3a. Model-driven extraction from per-sentence DEP trees.
-        //     Each sentence has its own CLS label — only informative
-        //     sentences produce observations.
-        #[cfg(feature = "onnx")]
-        if let Some(nlp_val) = ctx.metadata.get("nlp_results")
-            && let Ok(nlp_results) =
-                serde_json::from_value::<Vec<crate::nlp::types::NlpResult>>(nlp_val.clone())
+        // Mirror the prep's sentence_ctx_updated into ctx.metadata so
+        // the bench / orchestrator can persist it back into
+        // SessionContext (existing behaviour).
+        if let Some(sc) = &prep.sentence_ctx_updated
+            && let Ok(val) = serde_json::to_value(sc)
         {
-            let labels = crate::nlp::assets::label_maps();
-            let speaker = sender_name.unwrap_or("unknown");
-
-            // Load or create sentence context for pronoun resolution.
-            let mut sent_ctx = ctx
-                .metadata
-                .get("session_context")
-                .and_then(|v| v.get("sentence_ctx"))
-                .and_then(|v| {
-                    serde_json::from_value::<crate::ingest::context::SentenceContext>(v.clone())
-                        .ok()
-                })
-                .unwrap_or_else(|| {
-                    crate::ingest::context::SentenceContext::new(speaker, Vec::new())
-                });
-
-            let rules = load_observation_rules(ctx);
-
-            for nlp_result in &nlp_results {
-                // Multi-label CLS gate. Accept the sentence if any
-                // raw-CLS label whose softmax prob clears `min_prob` is
-                // in the configured informative-label set. Falls back
-                // to the legacy argmax check when the model didn't
-                // emit a probability vector (older serialised data).
-                if !cls_gate_admits(nlp_result, &labels.cls_labels, &rules.filters.cls_gate) {
-                    crate::nlp::decode::update_sentence_context(
-                        &mut sent_ctx,
-                        &nlp_result.words,
-                        &nlp_result.pos_indices,
-                        &nlp_result.dep_arcs,
-                        &labels.pos_labels,
-                    );
-                    continue;
-                }
-
-                let dep_obs = crate::observations::rules_engine::extract_with_rules(
-                    rules,
-                    &nlp_result.words,
-                    &nlp_result.pos_indices,
-                    &nlp_result.dep_arcs,
-                    &labels.pos_labels,
-                    &nlp_result.srl_frames,
-                    speaker,
-                    &mut sent_ctx,
-                );
-
-                for obs in dep_obs {
-                    // Phase A: resolve ARGM-TMP surface form to an
-                    // absolute date relative to the message timestamp.
-                    // `resolve_temporal()` returns the reference
-                    // unchanged on no-match; gate on parse success by
-                    // requiring the resolved date to differ from the
-                    // reference *or* a known temporal token to appear.
-                    let temporal_phrase = obs.temporal.clone();
-                    let temporal_anchor = temporal_phrase
-                        .as_deref()
-                        .map(|s| temporal::resolve_temporal(s, timestamp));
-                    all_obs.push(RawObservation {
-                        content: obs.content,
-                        subject: obs.subject,
-                        predicate: obs.predicate,
-                        object: obs.object,
-                        temporal_phrase,
-                        temporal_anchor,
-                        observed_at: timestamp,
-                        confidence: obs.confidence,
-                    });
-                }
-            }
-
-            // Write updated sentence context back to metadata for
-            // the caller to persist in SessionContext.
-            if let Ok(val) = serde_json::to_value(&sent_ctx) {
-                ctx.metadata.insert("sentence_ctx_updated".into(), val);
-            }
-
-            used_model = true;
+            ctx.metadata.insert("sentence_ctx_updated".into(), val);
         }
 
-        // 3b. Rule-based fallback (only when model unavailable).
-        if !used_model {
-            let entity_refs = load_all_entity_refs(ctx, &sender_ref);
-            if !entity_refs.is_empty() {
-                let rule_obs =
-                    rules::extract_observations_rule_based(&ctx.content, &entity_refs, timestamp);
-                all_obs.extend(rule_obs);
-            }
-        }
-        let extract_ms = extract_start.elapsed().as_millis();
+        let sender_ms = prep.sender_ms;
+        let extract_ms = prep.extract_ms;
+        let used_model = prep.used_model;
+        let obs_count = prep.all_obs.len();
 
-        if all_obs.is_empty() {
-            return Ok(StepOutcome::Skipped {
-                reason: "no observations extracted".into(),
-            });
-        }
-
-        // 4. Create nodes and wire edges (batched).
-        let persist_start = std::time::Instant::now();
-        let entity_refs = load_all_entity_refs(ctx, &sender_ref);
-        let entity_ref_ms = persist_start.elapsed().as_millis();
-
+        // Open the tx + apply writes + commit (legacy semantics — own tx).
         let nodes_start = std::time::Instant::now();
-
-        // 4a. Batch create all Observation nodes.
-        let obs_props: Vec<HashMap<String, Value>> = all_obs
-            .iter()
-            .map(|raw| {
-                let obs_id = uniko_store::id::new_id();
-                let mut props = HashMap::new();
-                props.insert("observation_id".into(), Value::String(obs_id));
-                props.insert("content".into(), Value::String(raw.content.clone()));
-                props.insert("subject".into(), Value::String(raw.subject.clone()));
-                if let Some(pred) = &raw.predicate {
-                    props.insert("predicate".into(), Value::String(pred.clone()));
-                }
-                if let Some(obj) = &raw.object {
-                    props.insert("object".into(), Value::String(obj.clone()));
-                }
-                if let Some(phrase) = &raw.temporal_phrase {
-                    props.insert("temporal_phrase".into(), Value::String(phrase.clone()));
-                }
-                if let Some(anchor) = raw.temporal_anchor {
-                    props.insert(
-                        "temporal_anchor".into(),
-                        uniko_store::types::datetime_value(anchor),
-                    );
-                }
-                props.insert(
-                    "observed_at".into(),
-                    uniko_store::types::datetime_value(raw.observed_at),
-                );
-                props.insert("confidence".into(), Value::Float(raw.confidence));
-                props
-            })
-            .collect();
-        // One transaction for all three batched writes (Obs nodes,
-        // OBSERVED_IN, ABOUT). Replaces what was 3 separate commits
-        // (3 × ~12 ms tx overhead per message → 1 × ~12 ms).
         let tx = ctx
             .kb
             .db()
@@ -246,78 +125,7 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             .tx()
             .await
             .map_err(|err| UnikoError::Storage(err.to_string()))?;
-
-        let obs_node_ids = ctx
-            .kb
-            .batch_create_nodes_in_tx(&tx, labels::OBSERVATION, &obs_props)
-            .await?;
-        let create_nodes_ms = nodes_start.elapsed().as_millis();
-
-        // 4b. Batch create OBSERVED_IN edges (Observation → source node).
-        // Source is always Observation; target is Message in this code path.
-        let observed_start = std::time::Instant::now();
-        let observed_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = obs_node_ids
-            .iter()
-            .map(|&nid| (nid, ctx.node_id, HashMap::new()))
-            .collect();
-        ctx.kb
-            .batch_create_edges_fast_in_tx(
-                &tx,
-                edges::OBSERVED_IN,
-                Some(labels::OBSERVATION),
-                Some(labels::MESSAGE),
-                &observed_edges,
-            )
-            .await?;
-        let observed_in_ms = observed_start.elapsed().as_millis();
-
-        // 4c. Batch create ABOUT edges.
-        let about_start = std::time::Instant::now();
-        let mut about_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
-        for (i, raw) in all_obs.iter().enumerate() {
-            let obs_nid = obs_node_ids[i];
-
-            // Wire to speaker (always).
-            if let Some((sender_nid, _)) = &sender_ref {
-                about_edges.push((obs_nid, *sender_nid, HashMap::new()));
-            }
-            // Wire to entities matching the observation subject.
-            for &(entity_nid, ref name) in &entity_refs {
-                if sender_ref
-                    .as_ref()
-                    .is_some_and(|(nid, _)| *nid == entity_nid)
-                {
-                    continue;
-                }
-                // Substring match: "dance studio" matches entity "dance studio",
-                // and "studio" matches "dance studio" (or vice versa).
-                let subj = raw.subject.to_lowercase();
-                let ename = name.to_lowercase();
-                if subj == ename || subj.contains(&ename) || ename.contains(&subj) {
-                    about_edges.push((obs_nid, entity_nid, HashMap::new()));
-                }
-            }
-        }
-        if !about_edges.is_empty() {
-            // Source is always Observation; target is Participant or Entity.
-            // uni-db#56 added label-disjunction parsing, but the resulting
-            // plan panics during DataFusion union_schema when the two
-            // branches have different property-column counts (filed as
-            // a follow-up). Until that's resolved, leave dst unlabelled.
-            ctx.kb
-                .batch_create_edges_fast_in_tx(
-                    &tx,
-                    edges::ABOUT,
-                    Some(labels::OBSERVATION),
-                    None,
-                    &about_edges,
-                )
-                .await?;
-        }
-        let about_ms = about_start.elapsed().as_millis();
-
-        // Commit folds all three batched writes (Obs nodes,
-        // OBSERVED_IN, ABOUT) into one WAL fsync.
+        let obs_node_ids = apply_observations(&ctx.kb, &tx, ctx.node_id, prep).await?;
         let commit_start = std::time::Instant::now();
         tx.commit()
             .await
@@ -334,24 +142,18 @@ impl uniko_pipes::Step for ObservationExtractionStep {
             "tx phase",
         );
 
-        // 5. Populate context for downstream steps.
         ctx.extracted_observations = obs_node_ids.clone();
-
         tracing::info!(
             count = obs_node_ids.len(),
             model = used_model,
             sender_ms,
             extract_ms,
-            entity_ref_ms,
-            create_nodes_ms,
-            observed_in_ms,
-            about_ms,
-            about_edges = about_edges.len(),
             nodes_ms,
             total_ms = step_start.elapsed().as_millis(),
             "observation step",
         );
 
+        let _ = obs_count;
         Ok(StepOutcome::Completed)
     }
 
@@ -360,55 +162,6 @@ impl uniko_pipes::Step for ObservationExtractionStep {
     }
 }
 
-/// Load the message sender, preferring the value already plumbed into
-/// `PipelineContext` by the message-ingest step.
-///
-/// Fast path: `ctx.sender` is populated when the bench / ingest path
-/// created the SENT_BY edge in the same call — no DB round-trip. Slow
-/// path (legacy callers, idempotency re-ingest, unit tests that build
-/// a context manually): fall back to the original SENT_BY edge lookup
-/// plus a Participant `get_node` to fetch the name.
-async fn load_sender_ref(ctx: &PipelineContext) -> Option<(NodeId, String)> {
-    if let Some(ref s) = ctx.sender {
-        return Some(s.clone());
-    }
-
-    use uniko_store::storage::edges::Direction;
-    let edge_list = ctx
-        .kb
-        .get_edges(ctx.node_id, edges::SENT_BY, Direction::Outgoing)
-        .await
-        .ok()?;
-    let edge = edge_list.first()?;
-    let (_, props) = ctx.kb.get_node(edge.to).await.ok()??;
-    let name = props.get("name").and_then(|v| v.as_str())?.to_string();
-    Some((edge.to, name))
-}
-
-/// Combine sender ref with the entity refs already populated by NER.
-///
-/// Reads directly from `ctx.extracted_entities` — the NER step now
-/// stores `(NodeId, name)` pairs there. Previously this function did
-/// one `get_node` round-trip per entity to fetch the name; that path
-/// dominated obs-step CPU at ~12 s per 485-turn question. With the
-/// name carried through the pipeline context, this is a pure in-Rust
-/// dedup-by-name.
-fn load_all_entity_refs(
-    ctx: &PipelineContext,
-    sender_ref: &Option<(NodeId, String)>,
-) -> Vec<(NodeId, String)> {
-    let mut refs: Vec<(NodeId, String)> =
-        Vec::with_capacity(ctx.extracted_entities.len() + usize::from(sender_ref.is_some()));
-    if let Some(sr) = sender_ref {
-        refs.push(sr.clone());
-    }
-    for (nid, name) in &ctx.extracted_entities {
-        if !refs.iter().any(|(_, n)| n == name) {
-            refs.push((*nid, name.clone()));
-        }
-    }
-    refs
-}
 
 /// Load the observation rule set, honouring `UnikoConfig.observation_rules_path`.
 ///
@@ -416,8 +169,8 @@ fn load_all_entity_refs(
 /// by canonical path. The bundled `english.yml` is also cached (parsed
 /// once) — reused across every message in a process.
 #[cfg(feature = "onnx")]
-fn load_observation_rules(
-    ctx: &PipelineContext,
+fn load_observation_rules_from_path(
+    cfg_path: Option<&std::path::Path>,
 ) -> &'static crate::observations::rules_engine::Rules {
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -427,9 +180,8 @@ fn load_observation_rules(
         Mutex<HashMap<PathBuf, &'static crate::observations::rules_engine::Rules>>,
     > = OnceLock::new();
 
-    let cfg_path = ctx.kb.config().observation_rules_path.clone();
     if let Some(path) = cfg_path {
-        let key = std::fs::canonicalize(&path).unwrap_or(path);
+        let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let map = EXTERNAL.get_or_init(|| Mutex::new(HashMap::new()));
         let mut guard = map.lock().expect("observation rules cache poisoned");
         if let Some(r) = guard.get(&key) {
@@ -494,4 +246,351 @@ fn resolve_timestamp(ctx: &PipelineContext) -> chrono::DateTime<chrono::Utc> {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now)
+}
+
+// ── prep / apply split for the atomic ingest path ─────────────────
+
+/// Inputs to [`prepare_observations`]. Bundles every read-only
+/// dependency the prep phase needs. The atomic ingest orchestrator
+/// builds one of these from typed inputs (no PipelineContext required).
+#[derive(Debug)]
+pub struct ObservationInputs<'a> {
+    pub kb: &'a uniko_store::KnowledgeBase,
+    /// VID of the Message that observations will reference.
+    pub message_node_id: NodeId,
+    pub content: &'a str,
+    pub content_type: &'a str,
+    /// Pre-resolved sender from the ingest step. When `None`, prep
+    /// falls back to a SENT_BY lookup against `message_node_id`.
+    pub sender: Option<(NodeId, String)>,
+    /// `(NodeId, name)` pairs already created by the entity step.
+    pub extracted_entities: &'a [(NodeId, String)],
+    /// Per-sentence NLP results (POS / DEP / SRL / CLS). When `None`,
+    /// the rule-based fallback runs.
+    #[cfg(feature = "onnx")]
+    pub nlp_results: Option<&'a [crate::nlp::types::NlpResult]>,
+    /// Seed sentence context for pronoun resolution carried across
+    /// messages within a session. `None` starts a fresh context.
+    pub seed_sentence_ctx: Option<&'a crate::ingest::context::SentenceContext>,
+    /// Effective message timestamp (from metadata or wall-clock).
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Optional path to a custom observation rules YAML; `None` uses
+    /// bundled rules.
+    pub observation_rules_path: Option<&'a std::path::Path>,
+}
+
+/// Output of a successful [`prepare_observations`] call.
+#[derive(Debug)]
+pub struct ObservationPrep {
+    pub all_obs: Vec<RawObservation>,
+    pub used_model: bool,
+    /// Resolved sender (either passed in or loaded via SENT_BY lookup).
+    pub sender_ref: Option<(NodeId, String)>,
+    /// Combined sender + entity refs used for ABOUT-edge construction.
+    pub entity_refs: Vec<(NodeId, String)>,
+    /// Updated sentence context for the session. `None` when the model
+    /// path was not taken (or no NLP results were available).
+    pub sentence_ctx_updated: Option<crate::ingest::context::SentenceContext>,
+    pub sender_ms: u128,
+    pub extract_ms: u128,
+}
+
+impl ObservationPrep {
+    pub fn is_empty(&self) -> bool {
+        self.all_obs.is_empty()
+    }
+}
+
+/// Whether prep produced observations to write, or short-circuited.
+#[derive(Debug)]
+pub enum ObservationPrepOutcome {
+    /// CLS gate / no-entities / empty extraction. Caller skips the write.
+    Skip(String),
+    Ready(ObservationPrep),
+}
+
+/// CPU + optional SENT_BY lookup. Does NOT open a transaction; does
+/// NOT write anything. Returns `ObservationPrepOutcome::Skip` when
+/// the CLS gate rejects the message or no observations were extracted.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Storage`] on a SENT_BY-lookup failure when
+/// `sender` is `None` and the slow path is needed.
+pub async fn prepare_observations(
+    input: ObservationInputs<'_>,
+) -> Result<ObservationPrepOutcome, UnikoError> {
+    let step_start = std::time::Instant::now();
+
+    // Slow-path sender resolution: only when caller didn't already
+    // resolve it (e.g. legacy path through ObservationExtractionStep
+    // without ctx.sender populated). The atomic orchestrator always
+    // populates `input.sender` from MessageIngestResult, so this is
+    // a no-op there.
+    let sender_ref = if let Some(s) = input.sender.clone() {
+        Some(s)
+    } else {
+        load_sender_ref_by_lookup(input.kb, input.message_node_id).await
+    };
+    let sender_ms = step_start.elapsed().as_millis();
+
+    #[allow(unused_variables)]
+    let sender_name = sender_ref.as_ref().map(|(_, name)| name.as_str());
+
+    // 1. CLS gate (only when no per-sentence NLP results — those
+    //    handle CLS per-sentence in the extraction loop below).
+    #[cfg(feature = "onnx")]
+    let has_nlp = input.nlp_results.is_some();
+    #[cfg(not(feature = "onnx"))]
+    let has_nlp = false;
+    if !has_nlp && !filter::is_informative(input.content, Some(input.content_type)) {
+        return Ok(ObservationPrepOutcome::Skip(
+            "content not informative".into(),
+        ));
+    }
+
+    // 2. Extract observations.
+    let extract_start = std::time::Instant::now();
+    let mut all_obs = Vec::new();
+    #[allow(unused_mut)]
+    let mut used_model = false;
+    #[allow(unused_mut)]
+    let mut sentence_ctx_updated: Option<crate::ingest::context::SentenceContext> = None;
+
+    // 2a. Model-driven extraction from per-sentence DEP trees.
+    #[cfg(feature = "onnx")]
+    if let Some(nlp_results) = input.nlp_results {
+        let labels = crate::nlp::assets::label_maps();
+        let speaker = sender_name.unwrap_or("unknown");
+
+        let mut sent_ctx = input
+            .seed_sentence_ctx
+            .cloned()
+            .unwrap_or_else(|| crate::ingest::context::SentenceContext::new(speaker, Vec::new()));
+
+        let rules = load_observation_rules_from_path(input.observation_rules_path);
+
+        for nlp_result in nlp_results {
+            if !cls_gate_admits(nlp_result, &labels.cls_labels, &rules.filters.cls_gate) {
+                crate::nlp::decode::update_sentence_context(
+                    &mut sent_ctx,
+                    &nlp_result.words,
+                    &nlp_result.pos_indices,
+                    &nlp_result.dep_arcs,
+                    &labels.pos_labels,
+                );
+                continue;
+            }
+
+            let dep_obs = crate::observations::rules_engine::extract_with_rules(
+                rules,
+                &nlp_result.words,
+                &nlp_result.pos_indices,
+                &nlp_result.dep_arcs,
+                &labels.pos_labels,
+                &nlp_result.srl_frames,
+                speaker,
+                &mut sent_ctx,
+            );
+
+            for obs in dep_obs {
+                let temporal_phrase = obs.temporal.clone();
+                let temporal_anchor = temporal_phrase
+                    .as_deref()
+                    .map(|s| temporal::resolve_temporal(s, input.timestamp));
+                all_obs.push(RawObservation {
+                    content: obs.content,
+                    subject: obs.subject,
+                    predicate: obs.predicate,
+                    object: obs.object,
+                    temporal_phrase,
+                    temporal_anchor,
+                    observed_at: input.timestamp,
+                    confidence: obs.confidence,
+                });
+            }
+        }
+
+        sentence_ctx_updated = Some(sent_ctx);
+        used_model = true;
+    }
+
+    // 2b. Rule-based fallback (only when model unavailable).
+    if !used_model {
+        let entity_refs = combine_entity_refs(input.extracted_entities, &sender_ref);
+        if !entity_refs.is_empty() {
+            let rule_obs = rules::extract_observations_rule_based(
+                input.content,
+                &entity_refs,
+                input.timestamp,
+            );
+            all_obs.extend(rule_obs);
+        }
+    }
+    let extract_ms = extract_start.elapsed().as_millis();
+
+    if all_obs.is_empty() {
+        return Ok(ObservationPrepOutcome::Skip(
+            "no observations extracted".into(),
+        ));
+    }
+
+    let entity_refs = combine_entity_refs(input.extracted_entities, &sender_ref);
+
+    Ok(ObservationPrepOutcome::Ready(ObservationPrep {
+        all_obs,
+        used_model,
+        sender_ref,
+        entity_refs,
+        sentence_ctx_updated,
+        sender_ms,
+        extract_ms,
+    }))
+}
+
+/// Writes-only inside the caller's tx. Creates Observation nodes,
+/// OBSERVED_IN edges (Obs → Message), and ABOUT edges (Obs → speaker
+/// + matching entities).
+///
+/// Returns the new Observation node ids in input order. Caller owns
+/// the commit.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Storage`] on any batched write failure.
+pub async fn apply_observations(
+    kb: &uniko_store::KnowledgeBase,
+    tx: &uni_db::Transaction,
+    message_node_id: NodeId,
+    prep: ObservationPrep,
+) -> Result<Vec<NodeId>, UnikoError> {
+    if prep.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ObservationPrep {
+        all_obs,
+        sender_ref,
+        entity_refs,
+        ..
+    } = prep;
+
+    // 1. Batch create Observation nodes.
+    let obs_props: Vec<HashMap<String, Value>> = all_obs
+        .iter()
+        .map(|raw| {
+            let obs_id = uniko_store::id::new_id();
+            let mut props = HashMap::new();
+            props.insert("observation_id".into(), Value::String(obs_id));
+            props.insert("content".into(), Value::String(raw.content.clone()));
+            props.insert("subject".into(), Value::String(raw.subject.clone()));
+            if let Some(pred) = &raw.predicate {
+                props.insert("predicate".into(), Value::String(pred.clone()));
+            }
+            if let Some(obj) = &raw.object {
+                props.insert("object".into(), Value::String(obj.clone()));
+            }
+            if let Some(phrase) = &raw.temporal_phrase {
+                props.insert("temporal_phrase".into(), Value::String(phrase.clone()));
+            }
+            if let Some(anchor) = raw.temporal_anchor {
+                props.insert(
+                    "temporal_anchor".into(),
+                    uniko_store::types::datetime_value(anchor),
+                );
+            }
+            props.insert(
+                "observed_at".into(),
+                uniko_store::types::datetime_value(raw.observed_at),
+            );
+            props.insert("confidence".into(), Value::Float(raw.confidence));
+            props
+        })
+        .collect();
+    let obs_node_ids = kb
+        .batch_create_nodes_in_tx(tx, labels::OBSERVATION, &obs_props)
+        .await?;
+
+    // 2. OBSERVED_IN edges (Observation → Message).
+    let observed_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = obs_node_ids
+        .iter()
+        .map(|&nid| (nid, message_node_id, HashMap::new()))
+        .collect();
+    kb.batch_create_edges_fast_in_tx(
+        tx,
+        edges::OBSERVED_IN,
+        Some(labels::OBSERVATION),
+        Some(labels::MESSAGE),
+        &observed_edges,
+    )
+    .await?;
+
+    // 3. ABOUT edges (Observation → speaker + matching entities).
+    let mut about_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
+    for (i, raw) in all_obs.iter().enumerate() {
+        let obs_nid = obs_node_ids[i];
+        if let Some((sender_nid, _)) = &sender_ref {
+            about_edges.push((obs_nid, *sender_nid, HashMap::new()));
+        }
+        for &(entity_nid, ref name) in &entity_refs {
+            if sender_ref
+                .as_ref()
+                .is_some_and(|(nid, _)| *nid == entity_nid)
+            {
+                continue;
+            }
+            let subj = raw.subject.to_lowercase();
+            let ename = name.to_lowercase();
+            if subj == ename || subj.contains(&ename) || ename.contains(&subj) {
+                about_edges.push((obs_nid, entity_nid, HashMap::new()));
+            }
+        }
+    }
+    if !about_edges.is_empty() {
+        kb.batch_create_edges_fast_in_tx(
+            tx,
+            edges::ABOUT,
+            Some(labels::OBSERVATION),
+            None,
+            &about_edges,
+        )
+        .await?;
+    }
+
+    Ok(obs_node_ids)
+}
+
+/// Slow-path SENT_BY → Participant lookup. Only used when the caller
+/// did not pre-resolve the sender (e.g. legacy ObservationExtractionStep
+/// without ctx.sender).
+async fn load_sender_ref_by_lookup(
+    kb: &uniko_store::KnowledgeBase,
+    message_node_id: NodeId,
+) -> Option<(NodeId, String)> {
+    use uniko_store::storage::edges::Direction;
+    let edge_list = kb
+        .get_edges(message_node_id, edges::SENT_BY, Direction::Outgoing)
+        .await
+        .ok()?;
+    let edge = edge_list.first()?;
+    let (_, props) = kb.get_node(edge.to).await.ok()??;
+    let name = props.get("name").and_then(|v| v.as_str())?.to_string();
+    Some((edge.to, name))
+}
+
+/// Combine sender ref (if any) with extracted entity refs, dedup by name.
+fn combine_entity_refs(
+    extracted_entities: &[(NodeId, String)],
+    sender_ref: &Option<(NodeId, String)>,
+) -> Vec<(NodeId, String)> {
+    let mut refs: Vec<(NodeId, String)> =
+        Vec::with_capacity(extracted_entities.len() + usize::from(sender_ref.is_some()));
+    if let Some(sr) = sender_ref {
+        refs.push(sr.clone());
+    }
+    for (nid, name) in extracted_entities {
+        if !refs.iter().any(|(_, n)| n == name) {
+            refs.push((*nid, name.clone()));
+        }
+    }
+    refs
 }

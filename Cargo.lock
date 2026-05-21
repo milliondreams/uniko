@@ -10624,6 +10624,7 @@ dependencies = [
  "uni-cypher",
  "uni-locy",
  "uni-query",
+ "uni-query-functions",
  "uni-store",
  "uni-xervo",
  "url",
@@ -10683,8 +10684,39 @@ dependencies = [
  "uni-crdt",
  "uni-cypher",
  "uni-locy",
+ "uni-query-functions",
  "uni-store",
  "uni-xervo",
+]
+
+[[package]]
+name = "uni-query-functions"
+version = "1.3.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "arrow-array",
+ "arrow-row",
+ "arrow-schema",
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "chrono-tz",
+ "datafusion",
+ "futures",
+ "fxhash",
+ "log",
+ "parking_lot",
+ "rand 0.9.4",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+ "uni-btic",
+ "uni-common",
+ "uni-cypher",
+ "uni-store",
 ]
 
 [[package]]
@@ -10819,6 +10851,7 @@ dependencies = [
  "rust-stemmers",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

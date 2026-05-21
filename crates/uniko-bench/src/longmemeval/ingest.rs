@@ -14,13 +14,9 @@ use chrono::{DateTime, Duration, Utc};
 use futures::stream::{self, StreamExt};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use uniko_pipes::Step;
 
-use uniko_extract::ingest::message::ingest_message;
-use uniko_extract::ner::EntityExtractionStep;
-use uniko_extract::observations::ObservationExtractionStep;
+use uniko_extract::ingest::atomic::ingest_message_atomic;
 use uniko_pipes::circuit_breaker::CircuitBreaker;
-use uniko_pipes::step::PipelineContext;
 use uniko_pipes::types::IngestMessage;
 use uniko_store::config::UnikoConfig;
 use uniko_store::{KnowledgeBase, ModelRuntime};
@@ -68,8 +64,13 @@ pub async fn ingest_item(
         .context("creating KB")?;
     let kb = Arc::new(kb);
 
-    let breaker = Arc::new(CircuitBreaker::new(5, 60_000));
-    let cancel = CancellationToken::new();
+    // CircuitBreaker + CancellationToken were used by the legacy
+    // step-based ingest path; the atomic path doesn't currently take
+    // either. Kept here unused so the wrapping types stay imported for
+    // when we plumb cancellation/breaker through the atomic
+    // orchestrator.
+    let _breaker = Arc::new(CircuitBreaker::new(5, 60_000));
+    let _cancel = CancellationToken::new();
 
     // Shared mutable state.  evidence_map lives behind a Mutex because
     // sessions complete out of order; the merged map is consistent at
@@ -95,6 +96,11 @@ pub async fn ingest_item(
     let t_obs_chunk_ms = Arc::new(AtomicU64::new(0));
     let t_ctx_setup_ms = Arc::new(AtomicU64::new(0));
 
+    // Sub-counters for legacy log-line compatibility. The atomic
+    // path doesn't surface ner-rules / ner-onnx / obs-sender /
+    // obs-entity-ref splits, so those stay at zero; ner-nlp,
+    // ner-upsert, obs-dep-extract, obs-graph-nodes get populated
+    // from AtomicTimings inside the worker loop.
     let t_ner_rules_ms = Arc::new(AtomicU64::new(0));
     let t_ner_nlp_ms = Arc::new(AtomicU64::new(0));
     let t_ner_onnx_total_ms = Arc::new(AtomicU64::new(0));
@@ -123,8 +129,6 @@ pub async fn ingest_item(
         .map(|(session_idx, session_turns, session_id, date_str)| {
             // Clone Arcs for this worker.
             let kb = kb.clone();
-            let breaker = breaker.clone();
-            let cancel = cancel.clone();
             let evidence_map = evidence_map.clone();
             let total_turns = total_turns.clone();
             let total_entities = total_entities.clone();
@@ -136,19 +140,13 @@ pub async fn ingest_item(
             let t_session_chunk_ms = t_session_chunk_ms.clone();
             let t_obs_chunk_ms = t_obs_chunk_ms.clone();
             let t_ctx_setup_ms = t_ctx_setup_ms.clone();
-            let t_ner_rules_ms = t_ner_rules_ms.clone();
             let t_ner_nlp_ms = t_ner_nlp_ms.clone();
-            let t_ner_onnx_total_ms = t_ner_onnx_total_ms.clone();
             let t_ner_upsert_ms = t_ner_upsert_ms.clone();
-            let t_obs_sender_ms = t_obs_sender_ms.clone();
             let t_obs_extract_ms = t_obs_extract_ms.clone();
-            let t_obs_entity_ref_ms = t_obs_entity_ref_ms.clone();
             let t_obs_nodes_ms = t_obs_nodes_ms.clone();
             let question_id = question_id.clone();
 
             async move {
-                let entity_step = EntityExtractionStep;
-                let obs_step = ObservationExtractionStep;
                 let base_ts = parse_lme_datetime(&date_str);
 
                 // Per-session state — pronoun resolution stays causal
@@ -186,78 +184,42 @@ pub async fn ingest_item(
                         metadata: HashMap::new(),
                     };
 
-                    let t0 = std::time::Instant::now();
-                    let result = ingest_message(&kb, &msg, &mut session_ctx)
+                    // Atomic per-message ingest: one tx for Message +
+                    // edges + chunks + Entities + MENTIONS + Observations
+                    // + OBSERVED_IN + ABOUT. Replaces the legacy
+                    // three-call sequence (ingest_message + entity_step
+                    // + obs_step) with three independent commits.
+                    let result = ingest_message_atomic(&kb, &msg, &mut session_ctx)
                         .await
                         .with_context(|| format!("ingesting {message_id}"))?;
-                    t_ingest_msg_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-
-                    let t0 = std::time::Instant::now();
-                    let mut ctx = PipelineContext::new(
-                        result.message_node_id,
-                        turn.content.clone(),
-                        "text".to_string(),
-                        cancel.clone(),
-                        kb.clone(),
-                        breaker.clone(),
-                    );
-                    ctx.metadata.insert(
-                        "timestamp".into(),
-                        serde_json::Value::String(timestamp.to_rfc3339()),
-                    );
-                    if let Ok(val) = serde_json::to_value(&session_ctx) {
-                        ctx.metadata.insert("session_context".into(), val);
-                    }
-                    // Plumb the just-created sender Participant ref so
-                    // the observation step doesn't refetch it via a
-                    // SENT_BY edge lookup + get_node round-trip.
-                    ctx.sender = result.sender.clone();
-                    t_ctx_setup_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-
-                    let t0 = std::time::Instant::now();
-                    let _ = entity_step.execute(&mut ctx).await;
-                    t_entity_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-                    total_entities.fetch_add(ctx.extracted_entities.len(), Ordering::Relaxed);
-
-                    if let Some(et) = ctx.metadata.get("entity_timings") {
-                        t_ner_rules_ms
-                            .fetch_add(et["rules_ms"].as_u64().unwrap_or(0), Ordering::Relaxed);
-                        t_ner_nlp_ms
-                            .fetch_add(et["nlp_ms"].as_u64().unwrap_or(0), Ordering::Relaxed);
-                        t_ner_onnx_total_ms.fetch_add(
-                            et["onnx_total_ms"].as_u64().unwrap_or(0),
-                            Ordering::Relaxed,
-                        );
-                        t_ner_upsert_ms
-                            .fetch_add(et["upsert_ms"].as_u64().unwrap_or(0), Ordering::Relaxed);
-                    }
-
-                    let t0 = std::time::Instant::now();
-                    let _ = obs_step.execute(&mut ctx).await;
-                    t_obs_ms.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+                    total_entities.fetch_add(result.extracted_entities.len(), Ordering::Relaxed);
                     total_observations
-                        .fetch_add(ctx.extracted_observations.len(), Ordering::Relaxed);
+                        .fetch_add(result.extracted_observations.len(), Ordering::Relaxed);
 
-                    if let Some(ot) = ctx.metadata.get("obs_timings") {
-                        t_obs_sender_ms
-                            .fetch_add(ot["sender_ms"].as_u64().unwrap_or(0), Ordering::Relaxed);
-                        t_obs_extract_ms
-                            .fetch_add(ot["extract_ms"].as_u64().unwrap_or(0), Ordering::Relaxed);
-                        t_obs_entity_ref_ms.fetch_add(
-                            ot["entity_ref_ms"].as_u64().unwrap_or(0),
-                            Ordering::Relaxed,
-                        );
-                        t_obs_nodes_ms
-                            .fetch_add(ot["nodes_ms"].as_u64().unwrap_or(0), Ordering::Relaxed);
-                    }
-
-                    if let Some(updated) = ctx.metadata.get("sentence_ctx_updated")
-                        && let Ok(sent_ctx) = serde_json::from_value::<
-                            uniko_extract::ingest::context::SentenceContext,
-                        >(updated.clone())
-                    {
-                        session_ctx.sentence_ctx = sent_ctx;
-                    }
+                    // Map atomic timings → bench counters. The legacy
+                    // counters are preserved so post-hoc log analysis
+                    // tools keep working; sub-counters that don't map
+                    // 1:1 to atomic phases (ner_rules_ms,
+                    // ner_onnx_total_ms, obs_sender_ms, obs_entity_ref_ms)
+                    // stay at zero.
+                    let t = &result.timings;
+                    let ingest_msg_chunk =
+                        (t.setup_ms + t.create_ms + t.edges_ms + t.chunk_ms + t.commit_ms) as u64;
+                    t_ingest_msg_ms.fetch_add(ingest_msg_chunk, Ordering::Relaxed);
+                    t_entity_ms.fetch_add(
+                        (t.prep_read_ms + t.apply_entity_ms) as u64,
+                        Ordering::Relaxed,
+                    );
+                    t_obs_ms.fetch_add(t.apply_obs_ms as u64, Ordering::Relaxed);
+                    // extract_ms covers all CPU NLP/NER/SRL work (incl.
+                    // nlp_ms which is the per-sentence cascade). Surface
+                    // it under the legacy nlp / extract counters so
+                    // dashboards still see something non-zero.
+                    t_ner_nlp_ms.fetch_add(t.nlp_ms as u64, Ordering::Relaxed);
+                    t_ner_upsert_ms.fetch_add(t.apply_entity_ms as u64, Ordering::Relaxed);
+                    t_obs_extract_ms.fetch_add(t.extract_ms as u64, Ordering::Relaxed);
+                    t_obs_nodes_ms.fetch_add(t.apply_obs_ms as u64, Ordering::Relaxed);
+                    t_ctx_setup_ms.fetch_add(0, Ordering::Relaxed);
 
                     if turn.has_answer {
                         local_evidence_msg_ids.push(message_id.clone());
@@ -272,7 +234,6 @@ pub async fn ingest_item(
                             ingest_msg_ms = t_ingest_msg_ms.load(Ordering::Relaxed),
                             entity_ms = t_entity_ms.load(Ordering::Relaxed),
                             obs_ms = t_obs_ms.load(Ordering::Relaxed),
-                            ctx_setup_ms = t_ctx_setup_ms.load(Ordering::Relaxed),
                             "turn processed (cumulative timings)",
                         );
                     }

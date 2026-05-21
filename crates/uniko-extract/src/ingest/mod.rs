@@ -8,6 +8,7 @@
 // Rust guideline compliant
 
 pub mod artifact;
+pub mod atomic;
 pub mod chunking;
 pub mod context;
 pub mod message;
@@ -16,6 +17,7 @@ pub mod session;
 pub mod session_chunk;
 
 pub use artifact::ArtifactIngestResult;
+pub use atomic::{AtomicIngestResult, AtomicTimings, ingest_message_atomic};
 pub use chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, select_chunker};
 pub use message::MessageIngestResult;
 

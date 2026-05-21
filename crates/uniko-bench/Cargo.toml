@@ -25,6 +25,10 @@ path = "src/nlp_compare_main.rs"
 name = "profile-writes"
 path = "src/profile_writes_main.rs"
 
+[[bin]]
+name = "insert-microbench"
+path = "src/insert_microbench_main.rs"
+
 [features]
 default = []
 gpu-cuda = ["uniko-store/gpu-cuda"]
@@ -48,3 +52,4 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 rust-stemmers = { workspace = true }
 regex = { workspace = true }
+tempfile = "3"
