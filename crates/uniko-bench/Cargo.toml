@@ -29,6 +29,14 @@ path = "src/profile_writes_main.rs"
 name = "insert-microbench"
 path = "src/insert_microbench_main.rs"
 
+[[bin]]
+name = "update-microbench"
+path = "src/update_microbench_main.rs"
+
+[[bin]]
+name = "mutation-set-microbench"
+path = "src/mutation_set_microbench_main.rs"
+
 [features]
 default = []
 gpu-cuda = ["uniko-store/gpu-cuda"]
