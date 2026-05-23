@@ -506,11 +506,15 @@ pub async fn apply_observations(
             props
         })
         .collect();
+    let obs_create_start = std::time::Instant::now();
+    let obs_count = obs_props.len();
     let obs_node_ids = kb
         .batch_create_nodes_in_tx(tx, labels::OBSERVATION, &obs_props)
         .await?;
+    let obs_create_ms = obs_create_start.elapsed().as_millis();
 
     // 2. OBSERVED_IN edges (Observation → Message).
+    let observed_start = std::time::Instant::now();
     let observed_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = obs_node_ids
         .iter()
         .map(|&nid| (nid, message_node_id, HashMap::new()))
@@ -523,8 +527,10 @@ pub async fn apply_observations(
         &observed_edges,
     )
     .await?;
+    let observed_ms = observed_start.elapsed().as_millis();
 
     // 3. ABOUT edges (Observation → speaker + matching entities).
+    let about_build_start = std::time::Instant::now();
     let mut about_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
     for (i, raw) in all_obs.iter().enumerate() {
         let obs_nid = obs_node_ids[i];
@@ -545,6 +551,9 @@ pub async fn apply_observations(
             }
         }
     }
+    let about_build_ms = about_build_start.elapsed().as_millis();
+    let about_count = about_edges.len();
+    let about_write_start = std::time::Instant::now();
     if !about_edges.is_empty() {
         kb.batch_create_edges_fast_in_tx(
             tx,
@@ -555,6 +564,18 @@ pub async fn apply_observations(
         )
         .await?;
     }
+    let about_write_ms = about_write_start.elapsed().as_millis();
+
+    tracing::info!(
+        target: "apply_obs_breakdown",
+        obs_create_ms = obs_create_ms as u64,
+        observed_ms = observed_ms as u64,
+        about_build_ms = about_build_ms as u64,
+        about_write_ms = about_write_ms as u64,
+        obs_count = obs_count as u64,
+        about_count = about_count as u64,
+        "apply_obs breakdown",
+    );
 
     Ok(obs_node_ids)
 }

@@ -80,6 +80,25 @@ struct Cli {
     /// using `similar_to(...)` and want a hot embedder ready.
     #[arg(long)]
     prefetch: bool,
+
+    /// Run the query under PROFILE — prints the logical plan + per-operator
+    /// runtime stats instead of result rows. Useful for confirming index
+    /// usage on hot reads (e.g. ext-id lookups).
+    #[arg(long)]
+    profile: bool,
+
+    /// Treat the query as a write — open a Transaction, run the query
+    /// inside it, and DROP the tx without committing. Combine with
+    /// --profile to inspect SET/CREATE/DELETE plans without mutating
+    /// the KB.
+    #[arg(long)]
+    write: bool,
+
+    /// JSON object of parameters to bind, e.g.
+    /// `'{"updates": [{"nid": 64, "freq": 5}], "now": "2026-01-01T00:00:00Z"}'`.
+    /// Values are converted via `serde_json::Value → uni_common::Value`.
+    #[arg(long)]
+    params_json: Option<String>,
 }
 
 #[tokio::main]
@@ -133,7 +152,16 @@ async fn main() -> Result<()> {
         if query.trim().is_empty() {
             anyhow::bail!("no query provided (pass --query, --file, or pipe via stdin)");
         }
-        run_one(&kb, &query, &cli.format, cli.quiet).await?;
+        let params = parse_params_json(cli.params_json.as_deref())?;
+        if cli.profile {
+            if cli.write {
+                run_profile_write(&kb, &query, &params).await?;
+            } else {
+                run_profile(&kb, &query, &params).await?;
+            }
+        } else {
+            run_one(&kb, &query, &cli.format, cli.quiet).await?;
+        }
     }
 
     Ok(())
@@ -192,6 +220,107 @@ async fn run_repl(kb: &KnowledgeBase, format: &str, quiet: bool) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn parse_params_json(s: Option<&str>) -> Result<Vec<(String, uni_db::Value)>> {
+    let Some(s) = s else { return Ok(Vec::new()); };
+    let v: serde_json::Value = serde_json::from_str(s).context("parsing --params-json")?;
+    let obj = v
+        .as_object()
+        .context("--params-json must be a JSON object at the top level")?;
+    let mut out = Vec::with_capacity(obj.len());
+    for (k, val) in obj {
+        out.push((k.clone(), uni_db::Value::from(val.clone())));
+    }
+    Ok(out)
+}
+
+async fn run_profile_write(
+    kb: &KnowledgeBase,
+    query: &str,
+    params: &[(String, uni_db::Value)],
+) -> Result<()> {
+    let session = kb.db().session();
+    let tx = session
+        .tx()
+        .await
+        .map_err(|e| anyhow::anyhow!("tx open: {e}"))?;
+    let start = std::time::Instant::now();
+    let mut builder = tx.execute_with(query);
+    for (k, v) in params {
+        builder = builder.param(k.as_str(), v.clone());
+    }
+    let (result, profile) = builder
+        .profile()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let elapsed = start.elapsed();
+    // Drop tx without commit — no mutation lands.
+    drop(tx);
+
+    println!("=== PLAN ===");
+    println!("{:#?}", profile.explain);
+    println!("\n=== RUNTIME (per operator) ===");
+    for op in &profile.runtime_stats {
+        println!(
+            "  {:<30} rows={:<8} time_ms={:<10.3} mem={:<10} idx_hits={:?} idx_misses={:?}",
+            op.operator,
+            op.actual_rows,
+            op.time_ms,
+            op.memory_bytes,
+            op.index_hits,
+            op.index_misses,
+        );
+    }
+    println!(
+        "\n=== TOTALS === total_ms={} peak_mem={} write_result={:?} wall_elapsed_ms={:.2}",
+        profile.total_time_ms,
+        profile.peak_memory_bytes,
+        result,
+        elapsed.as_secs_f64() * 1000.0
+    );
+    Ok(())
+}
+
+async fn run_profile(
+    kb: &KnowledgeBase,
+    query: &str,
+    params: &[(String, uni_db::Value)],
+) -> Result<()> {
+    let session = kb.db().session();
+    let start = std::time::Instant::now();
+    let mut builder = session.query_with(query);
+    for (k, v) in params {
+        builder = builder.param(k.as_str(), v.clone());
+    }
+    let (result, profile) = builder
+        .profile()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let elapsed = start.elapsed();
+
+    println!("=== PLAN ===");
+    println!("{:#?}", profile.explain);
+    println!("\n=== RUNTIME (per operator) ===");
+    for op in &profile.runtime_stats {
+        println!(
+            "  {:<30} rows={:<8} time_ms={:<10.3} mem={:<10} idx_hits={:?} idx_misses={:?}",
+            op.operator,
+            op.actual_rows,
+            op.time_ms,
+            op.memory_bytes,
+            op.index_hits,
+            op.index_misses,
+        );
+    }
+    println!(
+        "\n=== TOTALS === total_ms={} peak_mem={} returned_rows={} wall_elapsed_ms={:.2}",
+        profile.total_time_ms,
+        profile.peak_memory_bytes,
+        result.rows().len(),
+        elapsed.as_secs_f64() * 1000.0
+    );
     Ok(())
 }
 

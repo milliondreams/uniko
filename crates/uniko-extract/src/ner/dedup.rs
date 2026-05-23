@@ -272,6 +272,8 @@ pub async fn apply_entity_upsert(
     }
 
     // ── Phase 2: batched CREATE for not-found entities.
+    let phase2_start = std::time::Instant::now();
+    let new_count = new_props.len();
     if !new_props.is_empty() {
         let new_nids = kb
             .batch_create_nodes_in_tx(tx, labels::ENTITY, &new_props)
@@ -287,11 +289,14 @@ pub async fn apply_entity_upsert(
             matches[i].node_id = nid;
         }
     }
+    let phase2_create_ms = phase2_start.elapsed().as_millis();
 
     // ── Phase 3: batched UPDATE for found entities.
     // The :Entity label hint is load-bearing: without it the planner
     // falls back to a multi-label scan per row, costing ~18 ms/row even
     // on a small KB. Investigated 2026-05-20.
+    let phase3_start = std::time::Instant::now();
+    let update_count = updates_list.len();
     if !updates_list.is_empty() {
         let update_cypher = "\
             UNWIND $updates AS u \
@@ -306,6 +311,7 @@ pub async fn apply_entity_upsert(
             .await
             .map_err(|err| UnikoError::Storage(err.to_string()))?;
     }
+    let phase3_update_ms = phase3_start.elapsed().as_millis();
 
     // ── Phase 4: batched MENTIONS edges. Source is always the
     // freshly-created Message node, so no MENTIONS edges from it can
@@ -318,6 +324,8 @@ pub async fn apply_entity_upsert(
             (source_node_id, m.node_id, props)
         })
         .collect();
+    let phase4_start = std::time::Instant::now();
+    let mentions_count = mentions_edges.len();
     kb.batch_create_edges_fast_in_tx(
         tx,
         edges::MENTIONS,
@@ -326,6 +334,18 @@ pub async fn apply_entity_upsert(
         &mentions_edges,
     )
     .await?;
+    let phase4_mentions_ms = phase4_start.elapsed().as_millis();
+
+    tracing::info!(
+        target: "apply_entity_breakdown",
+        phase2_create_ms = phase2_create_ms as u64,
+        phase3_update_ms = phase3_update_ms as u64,
+        phase4_mentions_ms = phase4_mentions_ms as u64,
+        new_count = new_count as u64,
+        update_count = update_count as u64,
+        mentions_count = mentions_count as u64,
+        "apply_entity breakdown",
+    );
 
     // Touch the labels constant so import stays load-bearing; the
     // hardcoded "Entity" string in Phase 1 Cypher must match it.
