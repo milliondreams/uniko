@@ -14,7 +14,37 @@ pub mod nodes;
 use std::path::Path;
 use std::sync::Arc;
 
-use uni_db::{ModelAliasSpec, ModelTask, Uni, WarmupPolicy};
+use uni_db::{ModelAliasSpec, ModelTask, Uni, UniConfig, WarmupPolicy};
+
+/// Diagnostic perf-knob override read from env vars. Set
+/// `UNIKO_WAL_DISABLED=1` to disable WAL, or
+/// `UNIKO_AUTOFLUSH_THRESHOLD=N` to override the L0 auto-flush
+/// threshold. Returns Some(cfg) only if at least one knob is set, so
+/// the default UniConfig isn't perturbed in normal use.
+fn apply_perf_knobs_from_env() -> Option<UniConfig> {
+    let wal = std::env::var("UNIKO_WAL_DISABLED").ok();
+    let flush = std::env::var("UNIKO_AUTOFLUSH_THRESHOLD").ok();
+    let flush_interval_off = std::env::var("UNIKO_AUTOFLUSH_INTERVAL_OFF").ok();
+    if wal.is_none() && flush.is_none() && flush_interval_off.is_none() {
+        return None;
+    }
+    let mut cfg = UniConfig::default();
+    if matches!(wal.as_deref(), Some("1") | Some("true")) {
+        cfg.wal_enabled = false;
+        tracing::warn!("UNIKO_WAL_DISABLED=1 — running with WAL OFF (diagnostic only)");
+    }
+    if let Some(s) = flush
+        && let Ok(n) = s.parse::<usize>()
+    {
+        cfg.auto_flush_threshold = n;
+        tracing::warn!(threshold = n, "UNIKO_AUTOFLUSH_THRESHOLD set");
+    }
+    if matches!(flush_interval_off.as_deref(), Some("1") | Some("true")) {
+        cfg.auto_flush_interval = None;
+        tracing::warn!("UNIKO_AUTOFLUSH_INTERVAL_OFF=1 — disabling time-based flush");
+    }
+    Some(cfg)
+}
 
 use crate::config::UnikoConfig;
 use crate::error::{Result, UnikoError};
@@ -117,8 +147,11 @@ impl KnowledgeBase {
     pub async fn open(path: impl AsRef<Path>, config: UnikoConfig) -> Result<Self> {
         config.validate()?;
         let catalog = load_catalog(&config, &[])?;
-        let db = Uni::open(path.as_ref().to_string_lossy())
-            .xervo_catalog(catalog)
+        let mut builder = Uni::open(path.as_ref().to_string_lossy()).xervo_catalog(catalog);
+        if let Some(uni_cfg) = apply_perf_knobs_from_env() {
+            builder = builder.config(uni_cfg);
+        }
+        let db = builder
             .build()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
