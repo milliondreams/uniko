@@ -17,7 +17,7 @@ uniko's spec reserves five embedding fields on `Artifact` (text / image / audio 
 
 This document specifies the work to make it real:
 
-1. **A new `:ArtifactContent` label** in the graph for content-addressed blob storage, deduplicated by SHA-256. Artifacts reference content via a `HAS_CONTENT` edge. Many Artifacts → one Content node.
+1. **A new `:ArtifactContent` label** in the graph as the content-addressed metadata/index node for every unique blob, deduplicated by SHA-256. Artifacts reference content via a `HAS_CONTENT` edge. Many Artifacts → one Content node. **The actual bytes live in a per-KB-configurable backend** — Lance inline (default), local filesystem CAS, or S3-compatible object store — selected once at KB init via `KbConfig::blob_storage`. `:ArtifactContent` always carries `content_id`, `mime`, `size`, and perceptual signals regardless of backend; only the bytes location changes.
 2. **`Artifact` extended with typed nullable modality metadata columns** (`width`, `height`, `duration_ms`, `sample_rate`, `channels`, `fps`, `frame_count`, `page_count`, + `modality_meta: Map` for the tail).
 3. **`Chunk` extended with modality-positioning fields** (`modality`, `bbox`, `time_start_ms`, `time_end_ms`, `page_number`, `reading_order`) and a `source_model_version` field for derivation tracking. `Chunk.text` becomes the lingua franca surface form for cross-modal search.
 4. **Per-modality ingest entry points**: `ingest_image`, `ingest_audio`, `ingest_video`, `ingest_pdf`, plus the existing text/code paths. Each follows a uniform shape: hash + dedupe → store content → create artifact → run modality-native embedding via xervo → extract captions/transcripts/OCR → fan out the existing NER + observation pipeline over derived text.
@@ -111,9 +111,9 @@ Without PR 1 there's nothing to wire the new ingest paths to.
 
 **N2. Backwards compatibility for text ingest.** Existing `IngestMessage` and `IngestArtifact` paths for text and source code continue to work without changes. New modality entry points are additive.
 
-**N3. Single transaction per artifact.** Hash compute → MERGE content node → create Artifact + HAS_CONTENT edge → fire embedding/captioning/chunking. The graph-write portion is one Cypher transaction; the model calls are async-out-of-band where possible.
+**N3. Single transaction per artifact (graph side).** Hash compute → backend PUT (for non-Lance backends) → MERGE content node → create Artifact + HAS_CONTENT edge → fire embedding/captioning/chunking. The graph-write portion is one Cypher transaction; the model calls are async-out-of-band where possible. For non-Lance backends the backend PUT precedes the Cypher tx (§4.2); failure recovery is via the orphan-bytes sweep in §4.3.
 
-**N4. Storage efficiency.** Lance per-label storage means `:ArtifactContent` blobs do not page in when HNSW vector recall scans `:Artifact` rows.
+**N4. Storage efficiency.** Lance per-label storage means `:ArtifactContent` blobs do not page in when HNSW vector recall scans `:Artifact` rows — and for `Fs` / `S3` backends, `:ArtifactContent.bytes` is NULL so the recall-scan cost is even lower (only `content_id` + `mime` + `size` + `uri` columns).
 
 **N5. Streaming-tolerant.** Soft cap of 2 GB per `ArtifactContent.bytes` row; larger blobs require upstream chunking (video segmentation by scene, audiobook chapter splits) before they reach the storage layer.
 
@@ -124,7 +124,7 @@ Without PR 1 there's nothing to wire the new ingest paths to.
 This proposal does NOT cover:
 
 - **Streaming ingest of very large blobs** (cinema-scale video > 2 GB). Stream-hash + chunked-write is v2.
-- **Server-side blob storage** (S3, object stores). v1 stores blobs in-process in Lance. The `:ArtifactContent` label is the abstraction boundary; v2 can back it with a remote object store transparently.
+- **Mixed-mode blob storage within a single KB.** Backend is selected once per KB at init; switching backends on a populated KB requires an out-of-band migration sweep (not specified here).
 - **Multi-vector (ColBERT / ColPali) document retrieval.** Requires multi-vector indexing in uni-db, which is a separate uni-db enhancement. v1 uses single-vector embeddings via MinerU's caption + the standard SigLIP-2 channel.
 - **Editing / version history on `:ArtifactContent`.** Content is immutable; new bytes always produce a new content node with a new hash. Artifact-level edits (re-captioning, swapping the canonical Content) produce a new `:DERIVED_FROM` chain rather than mutating content nodes.
 - **Streaming embeddings or streaming ASR results.** Batch-mode only.
@@ -140,7 +140,10 @@ This proposal does NOT cover:
 ```
 :ArtifactContent
   - content_id: String          // SHA-256 hex, primary key, Hash index
-  - bytes: Bytes                // the actual blob
+  - bytes: Optional Bytes       // the actual blob, ONLY when KB's blob_storage = Lance; NULL otherwise
+  - uri: Optional String        // backend-resolvable locator when bytes live externally
+                                //   (e.g., "fs:///var/uniko/blobs/ab/cd/<hash>",
+                                //    "s3://bucket/<prefix>/<hash>"). NULL when bytes inline.
   - mime: String                // canonical mime type (e.g., "image/jpeg")
   - size: Int64                 // byte length
   - perceptual_hash: Optional Int64    // pHash (DCT 8x8), 64-bit. NULL for non-image.
@@ -148,7 +151,9 @@ This proposal does NOT cover:
   - created_at: DateTime
 ```
 
-**No embeddings on this label.** Embeddings live on `:Artifact`. The content node is bytes-only.
+**No embeddings on this label.** Embeddings live on `:Artifact`. The content node carries metadata + bytes-or-pointer only.
+
+**Exactly one of `bytes` / `uri` is populated per row**, determined by the KB's `blob_storage` config (§4). The graph-side dedup invariants (MERGE on `content_id`, N:1 fan-in from `:Artifact` via `HAS_CONTENT`, orphan GC traversal) are identical across backends — only the path to the actual bytes differs.
 
 **Indexes:**
 - `content_id` — Hash (primary lookup for dedup-on-MERGE)
@@ -272,19 +277,17 @@ Used when one Artifact is produced from another by non-Action machinery (PDF pag
 
 ---
 
-## 4. Storage model — `:ArtifactContent` as graph-native CAS
+## 4. Storage model — `:ArtifactContent` as graph-native index over a pluggable blob backend
 
-The content-addressed-store pattern is implemented as a label rather than a sibling Lance dataset. Six properties of this design:
+`:ArtifactContent` is the graph-side metadata/index node for every unique blob. The actual bytes live in a backend selected once per KB at init via `KbConfig::blob_storage`. Six properties of this design hold across all backends:
 
-1. **Graph-native dedup via MERGE.** Ingest computes the hash, runs `MERGE (c:ArtifactContent {content_id: $hash})` in Cypher. Existing content node is reused atomically; new content creates a new node. No separate blob-store API.
+1. **Graph-native dedup via MERGE.** Ingest computes the hash, runs `MERGE (c:ArtifactContent {content_id: $hash})` in Cypher. Existing content node is reused atomically; new content creates a new node. The backend write (PUT bytes) is a separate step ordered around this MERGE — see §4.2.
 
-2. **N:1 fan-in.** Multiple Artifacts referencing the same bytes (same image uploaded twice with different provenance, same PDF analyzed by two different agents) share one `:ArtifactContent` node. Disk usage is bounded by unique bytes.
+2. **N:1 fan-in.** Multiple Artifacts referencing the same bytes (same image uploaded twice with different provenance, same PDF analyzed by two different agents) share one `:ArtifactContent` node. Disk/object usage is bounded by unique bytes regardless of backend.
 
-3. **Transactional with metadata.** One Cypher write creates Artifact + ArtifactContent + HAS_CONTENT in a single transaction. Rollback semantics inherit.
+3. **HNSW recall is bytes-free.** Lance per-label storage means vector queries on `:Artifact` scan only the Artifact label's columnar store. Even with the Lance-inline backend, blob bytes live on `:ArtifactContent` and are never paged in during recall.
 
-4. **HNSW recall is bytes-free.** Lance per-label storage means vector queries on `:Artifact` scan only the Artifact label's columnar store. Blob bytes live on `:ArtifactContent`, never paged in during recall.
-
-5. **GC is graph-traversal.** Orphan removal sweep:
+4. **GC is graph-traversal + a backend sweep.** Orphan `:ArtifactContent` removal:
 
    ```cypher
    MATCH (c:ArtifactContent)
@@ -292,15 +295,110 @@ The content-addressed-store pattern is implemented as a label rather than a sibl
    DETACH DELETE c
    ```
 
-   Runs as a background sweep (post-consolidation cadence, alongside P5/P6). For v1, defer GC — orphans accumulate slowly and disk is cheap.
+   For non-Lance backends, deletion triggers a backend `delete(content_id)` call. A second background sweep handles the opposite direction — external bytes whose graph commit never landed (§4.3). For v1, both sweeps default off; orphans accumulate slowly and disk is cheap.
 
-6. **Storage backend portability.** The `:ArtifactContent` abstraction lets v2 transparently swap Lance-local storage for a remote object store (S3, GCS) without touching ingest or recall code. The label becomes a façade.
+5. **Backend is per-KB, not per-blob.** No row-level discriminator. Reading a content node + dispatching the bytes fetch goes through the KB's configured `BlobStore` implementation; the graph never carries that decision.
 
-### 4.1 Size limits
+6. **Backend is opaque to recall and ingest.** Cypher writes for `:ArtifactContent` / `HAS_CONTENT` / `:DERIVED_FROM` are identical across backends. Ingest pipelines (§5) call a single `kb.put_blob(hash, bytes)` helper; recall touches `:Artifact` rows and only resolves bytes on explicit `fetch_blob(content_id)`.
 
-v1 soft cap: **2 GB per `ArtifactContent.bytes` row.** Larger blobs MUST be chunked upstream (video by scene, audiobooks by chapter, multi-gigabyte logs by line range). Enforcement: warn at 500 MB, error at 2 GB. Hard cap derives from Arrow LargeBinary practical limits in Lance batch fragments.
+### 4.1 Backend configuration
 
-### 4.2 The denormalized `Artifact.hash` field
+```rust
+pub enum BlobStorage {
+    /// Default. Bytes stored in :ArtifactContent.bytes column. Single-transaction
+    /// with metadata write. Zero new deps.
+    Lance,
+
+    /// Local filesystem CAS at <root>/<aa>/<bb>/<content_id>.
+    /// Two-level fanout from the first 4 hex chars to keep dir sizes bounded.
+    Fs { root: PathBuf },
+
+    /// S3-compatible object store. Bytes at s3://<bucket>/<prefix>/<content_id>.
+    /// Backend: `object_store` crate (works for S3, R2, GCS, MinIO).
+    S3 {
+        bucket: String,
+        prefix: Option<String>,
+        endpoint: Option<String>,     // for R2 / MinIO
+        region: Option<String>,
+    },
+}
+
+pub struct KbConfig {
+    pub blob_storage: BlobStorage,
+    // ... other KB-level config
+}
+```
+
+Default if unspecified: `BlobStorage::Lance`. Backend choice is persisted in the KB's metadata (the singleton `:KnowledgeBaseStats` node, §6.1) so it survives reopens; mismatched configs at reopen are a hard error (no implicit migration).
+
+Internal abstraction:
+
+```rust
+pub trait BlobStore: Send + Sync {
+    async fn put(&self, content_id: &str, bytes: &[u8]) -> Result<String>;  // returns uri
+    async fn get(&self, content_id: &str, uri: Option<&str>) -> Result<Vec<u8>>;
+    async fn delete(&self, content_id: &str, uri: Option<&str>) -> Result<()>;
+    async fn exists(&self, content_id: &str, uri: Option<&str>) -> Result<bool>;
+}
+```
+
+The `Lance` backend is implemented as a thin wrapper that writes the `bytes` column directly within the same Cypher transaction (no separate PUT). The `Fs` and `S3` backends write before the graph commit (§4.3) and leave `bytes = NULL` / `uri = <locator>` on the content node.
+
+### 4.2 Write ordering
+
+**Lance backend (default, single-transaction):**
+
+```
+1. Compute hash.
+2. Begin Cypher tx.
+3. MERGE (:ArtifactContent {content_id}) ON CREATE SET bytes=$blob, uri=NULL, ...
+4. Create :Artifact + HAS_CONTENT.
+5. Commit tx.
+```
+
+All-or-nothing. No orphan-bytes possible.
+
+**Fs / S3 backends (write-then-commit):**
+
+```
+1. Compute hash.
+2. Backend exists(hash)? If yes, skip PUT (CAS dedup at the backend layer too).
+3. Backend put(hash, bytes) -> uri.   // bytes land first
+4. Begin Cypher tx.
+5. MERGE (:ArtifactContent {content_id}) ON CREATE SET bytes=NULL, uri=$uri, ...
+6. Create :Artifact + HAS_CONTENT.
+7. Commit tx.
+```
+
+Failure modes:
+- PUT succeeds, commit fails → external bytes exist with no graph referent → swept by §4.3.
+- PUT succeeds, commit succeeds, later artifact-delete → graph row removed → backend `delete(content_id)` called → if that fails, swept by §4.3.
+- PUT fails → no graph state created; surface the error.
+
+The MERGE in step 5 is still the dedup point: if two concurrent ingests race the same hash, both PUT (idempotent — same bytes, same key), but only one MERGE creates the content node; the other gets the existing row.
+
+### 4.3 Orphan bytes GC (non-Lance backends only)
+
+Background sweep complementary to the orphan-node sweep in §4 point 4:
+
+```
+1. List backend keys (paged).
+2. For each key, query: MATCH (:ArtifactContent {content_id: $key}) RETURN count(*).
+3. If 0, backend.delete(key).
+```
+
+Runs at the same cadence as the orphan-node sweep. For S3, leverage lifecycle policies as a backstop (object older than 30d with no tag → expire). Default off in v1; opt-in flag on `KbConfig`.
+
+### 4.4 Size limits
+
+v1 soft cap: **2 GB per blob.** Larger blobs MUST be chunked upstream (video by scene, audiobooks by chapter, multi-gigabyte logs by line range). Enforcement: warn at 500 MB, error at 2 GB.
+
+Backend-specific notes:
+- **Lance:** hard cap derives from Arrow LargeBinary practical limits in Lance batch fragments. 2 GB is well within.
+- **Fs:** no practical limit short of filesystem maximums; 2 GB cap is policy not technical.
+- **S3:** single-PUT cap is 5 GB; we stay under via the 2 GB policy. Multipart upload is a v2 affordance.
+
+### 4.5 The denormalized `Artifact.hash` field
 
 Existing field preserved as a write-through cache of the HAS_CONTENT target's `content_id`. Allows "does this artifact already exist?" checks to hit a single label index instead of traversing the edge. Cost: one redundant String column on Artifact. Benefit: removes one hop from the hot ingest path (dedup check fires on every ingest).
 
@@ -338,10 +436,17 @@ pub async fn ingest_<modality>(
         return Ok(<Modality>IngestResult::AliasedToExisting(near_dups[0]));
     }
 
-    // 4. Content node — MERGE handles atomic dedup
+    // 4. Backend PUT (no-op return for Lance backend; precedes graph tx for Fs/S3)
+    //    `kb.put_blob` dispatches on the KB's configured `BlobStore`. For Lance it
+    //    threads bytes into the same Cypher tx as step 5; for Fs/S3 it writes bytes
+    //    to the backend first and returns a uri (NULL for Lance). See §4.2.
+    let put = kb.put_blob(&hash, input.bytes()).await?;  // { bytes_inline: Option<Vec<u8>>, uri: Option<String> }
+
+    // 5. Content node — MERGE handles atomic dedup
     let content_id = kb.merge_artifact_content(MergeContent {
         content_id: hash.clone(),
-        bytes: input.bytes(),
+        bytes: put.bytes_inline,    // Some(_) for Lance, None for Fs/S3
+        uri:   put.uri,             // None for Lance, Some(_) for Fs/S3
         mime: input.mime(),
         size: input.size(),
         perceptual_hash: phash,
@@ -352,15 +457,15 @@ pub async fn ingest_<modality>(
     let artifact_id = kb.create_node("Artifact", &props_for(&input)).await?;
     kb.create_edge("HAS_CONTENT", artifact_id, content_id, &edge_props("primary")).await?;
 
-    // 6. Modality-native embedding via xervo
+    // 7. Modality-native embedding via xervo
     let modal_embedding = kb.db().xervo()
         .embed_<modality>(<alias>, &[input.into_xervo_input()]).await?[0];
     kb.update_node(artifact_id, &[("<modality>_embedding", modal_embedding)]).await?;
 
-    // 7. Modality-specific derivation pipeline (caption / transcribe / OCR / VLM-extract)
+    // 8. Modality-specific derivation pipeline (caption / transcribe / OCR / VLM-extract)
     let chunks = derive_chunks(kb, &input, artifact_id, &options).await?;
 
-    // 8. Mean-pool chunk embeddings into Artifact.text_embedding
+    // 9. Mean-pool chunk embeddings into Artifact.text_embedding
     if !chunks.is_empty() {
         let pooled = mean_pool_chunk_embeddings(kb, &chunks).await?;
         kb.update_node(artifact_id, &[("text_embedding", pooled)]).await?;
@@ -550,22 +655,23 @@ Null when the artifact is agent-produced (use `CREATED_BY` edge instead).
 
 ### 8.1 Existing `Artifact.content: String` → `:ArtifactContent`
 
-One-shot, idempotent migration:
+One-shot, idempotent migration. Driven by a host-side script (not pure Cypher) because for non-Lance backends each row requires a backend PUT before the MERGE. Shape per row:
 
-```cypher
-MATCH (a:Artifact)
-WHERE a.content IS NOT NULL
-WITH a, a.content AS text, coalesce(a.hash, sha256(a.content)) AS h
-MERGE (c:ArtifactContent {content_id: h})
-  ON CREATE SET c.bytes = text,
-                c.mime = coalesce(a.mime_type, 'text/plain'),
-                c.size = size(text),
-                c.perceptual_hash = NULL,
-                c.audio_fingerprint = NULL,
-                c.created_at = coalesce(a.created_at, datetime())
-MERGE (a)-[:HAS_CONTENT {role: 'primary'}]->(c)
-REMOVE a.content
 ```
+1. Read (a:Artifact) with a.content NOT NULL.
+2. h := coalesce(a.hash, sha256(a.content)).
+3. If kb.blob_storage = Lance:
+     MERGE (c:ArtifactContent {content_id: h})
+       ON CREATE SET c.bytes = a.content, c.uri = NULL, c.mime = ..., c.size = ...
+   Else (Fs / S3):
+     uri := kb.blob_store.put(h, a.content.as_bytes()).
+     MERGE (c:ArtifactContent {content_id: h})
+       ON CREATE SET c.bytes = NULL, c.uri = uri, c.mime = ..., c.size = ...
+4. MERGE (a)-[:HAS_CONTENT {role: 'primary'}]->(c).
+5. REMOVE a.content.
+```
+
+Idempotence: MERGE on `content_id` is naturally idempotent; backend PUT is idempotent on the hash key (CAS dedup). Re-running the script is a no-op on already-migrated rows.
 
 After migration:
 - `Artifact.content` field is dropped from the schema in a follow-up cleanup.
@@ -747,11 +853,14 @@ This ordering means:
 - New `HAS_CONTENT` and `DERIVED_FROM` edges.
 - New `:Artifact` columns (typed modality metadata + `origin`).
 - New `:Chunk` columns (modality positioning + `source_model_version`).
-- Migration script for `Artifact.content` → `:ArtifactContent`.
-- `:KnowledgeBaseStats` singleton scaffolding (cache reads/writes; flags all default false).
+- `BlobStore` trait (§4.1) plus all three impls: `Lance` (default), `Fs`, `S3` (via `object_store`). `kb.put_blob` / `kb.fetch_blob` host helpers wired.
+- `KbConfig::blob_storage` parsed at KB open and persisted to `:KnowledgeBaseStats.blob_storage`; reopen with a mismatched config is a hard error (no implicit migration).
+- Shared ingest skeleton (§5.1 steps 1–5) wired into the existing text ingest path, so any new text Artifact written after Phase 1 creates `:ArtifactContent` + `HAS_CONTENT` via MERGE. (Embedding-population step is filled in by Phase 2; the skeleton itself lands here so the schema never has a window where new artifacts miss `:ArtifactContent`.)
+- Migration script for `Artifact.content` → `:ArtifactContent` (§8.1), branching on the persisted `blob_storage` config.
+- `:KnowledgeBaseStats` singleton scaffolding (cache reads/writes; modality flags default false; `blob_storage` written at open per above).
 - Backfill `Chunk.modality='text'` for existing rows.
 
-Verification: `cargo nextest run -p uniko-store --test schema_completeness` passes with new label/edge expectations; migration script is idempotent (run twice → no diff); validation queries in §8.3 return zeros.
+Verification: `cargo nextest run -p uniko-store --test schema_completeness` passes with new label/edge expectations; migration script is idempotent (run twice → no diff) under each of the three backend configs; validation queries in §8.3 return zeros; round-trip `put_blob` → `fetch_blob` succeeds for each backend; reopening a KB with a config that disagrees with the persisted singleton errors loudly.
 
 #### 10.2 Phase 2 — text-modality quality (no xervo, immediate recall wins)
 
@@ -759,7 +868,7 @@ Verification: `cargo nextest run -p uniko-store --test schema_completeness` pass
 - Replace `StructuredChunker` stub with Arrow/Polars-driven schema-aware row grouping.
 - Implement mean-pool helper for `Artifact.text_embedding`.
 - Backfill `Artifact.text_embedding` for all existing text/code artifacts that have child Chunks.
-- Populate `Artifact.text_embedding` on every new text-path ingest going forward.
+- Populate `Artifact.text_embedding` on every new text-path ingest going forward (the §5.1 skeleton already routes text through `:ArtifactContent` from Phase 1; this phase just fills in the embedding step).
 
 Verification: ingest known HTML pages and CSVs end-to-end, assert non-text-fallback chunk types land; LoCoMo / LME re-run shows non-regression (and ideally a small bump from better chunking + populated artifact-level vectors).
 
@@ -897,6 +1006,10 @@ Each gets a `crates/uniko-extract/tests/ingest_<modality>_e2e.rs` file with:
 | Perceptual-hash false positives alias semantically different but visually similar images | Low | Medium | `dedupe_near_visual=false` by default (log only, don't alias) |
 | Cohere v4 / Gemini Embed 2 API changes break `multimodal_embedding` population | Medium | Low | Multimodal embedding is opt-in per artifact; absence doesn't break recall |
 | `image-hasher` / `chromaprint-rs` maintenance regression | Low | Low | Both are leaf deps; vendor or replace if needed |
+| Non-Lance backend PUT succeeds, graph commit fails → orphan bytes | Medium | Low | Documented in §4.2; orphan-bytes GC sweep in §4.3; bytes are content-addressed so re-ingest is idempotent |
+| Backend config mismatch on KB reopen (KB created with S3, reopened with Lance) | Low | High | Persist `blob_storage` in `:KnowledgeBaseStats` at init; hard error on reopen mismatch — no implicit migration |
+| S3 latency on the recall hot path when callers fetch bytes | Medium | Medium | Recall returns `:Artifact` rows without bytes; callers opt in to `fetch_blob` per artifact. Bytes fetch is never on the inner recall loop |
+| Backend credential / endpoint changes break existing KBs | Low | Medium | Backend config is config, not data — credentials resolved per-process at KB open; rotating creds doesn't touch the graph |
 
 ---
 
@@ -907,7 +1020,8 @@ Each gets a `crates/uniko-extract/tests/ingest_<modality>_e2e.rs` file with:
 ```
 :ArtifactContent
   content_id: String (Hash index)
-  bytes: Bytes
+  bytes: Optional Bytes              // populated iff KB.blob_storage = Lance
+  uri:   Optional String             // populated iff KB.blob_storage = Fs | S3
   mime: String (Hash index)
   size: Int64 (BTree)
   perceptual_hash: Optional Int64 (BTree)
@@ -956,6 +1070,7 @@ Each gets a `crates/uniko-extract/tests/ingest_<modality>_e2e.rs` file with:
 ```
 :KnowledgeBaseStats (singleton)
   modality_presence: Map<String, Bool>   // "image" -> true, "audio" -> false, …
+  blob_storage: Map<String, CypherValue> // { kind: "lance"|"fs"|"s3", root?, bucket?, prefix?, endpoint?, region? }
   updated_at: DateTime
 ```
 

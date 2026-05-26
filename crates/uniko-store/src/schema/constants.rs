@@ -6,7 +6,7 @@
 //! Embedding dimensions and vector index parameters are now configurable
 //! via [`UnikoConfig`](crate::config::UnikoConfig) rather than hardcoded here.
 
-/// All 20 node labels, ordered by schema layer.
+/// All node labels, ordered by schema layer.
 pub mod labels {
     // Layer 0 — Participants
     pub const PARTICIPANT: &str = "Participant";
@@ -23,6 +23,7 @@ pub mod labels {
 
     // Layer 3 — Artifacts & Chunks
     pub const ARTIFACT: &str = "Artifact";
+    pub const ARTIFACT_CONTENT: &str = "ArtifactContent";
     pub const CHUNK: &str = "Chunk";
 
     // Layer 4 — Semantic Memory
@@ -44,6 +45,9 @@ pub mod labels {
     pub const ORGANIZATION: &str = "Organization";
     pub const TEAM: &str = "Team";
 
+    // Layer 8 — KB-level singleton metadata
+    pub const KNOWLEDGE_BASE_STATS: &str = "KnowledgeBaseStats";
+
     /// Every node label in layer order.
     pub const ALL: &[&str] = &[
         PARTICIPANT,
@@ -54,6 +58,7 @@ pub mod labels {
         ACTION,
         EPISODE,
         ARTIFACT,
+        ARTIFACT_CONTENT,
         CHUNK,
         ENTITY,
         OBSERVATION,
@@ -66,6 +71,7 @@ pub mod labels {
         DEAD_LETTER,
         ORGANIZATION,
         TEAM,
+        KNOWLEDGE_BASE_STATS,
     ];
 }
 
@@ -98,6 +104,7 @@ pub mod edges {
 
     // Layer 3 edges
     pub const HAS_CHUNK: &str = "HAS_CHUNK";
+    pub const HAS_CONTENT: &str = "HAS_CONTENT";
     pub const CREATED_BY: &str = "CREATED_BY";
     pub const MODIFIED_BY: &str = "MODIFIED_BY";
 
@@ -156,6 +163,7 @@ pub mod edges {
         MENTIONS,
         FOLLOWED_BY,
         HAS_CHUNK,
+        HAS_CONTENT,
         CREATED_BY,
         MODIFIED_BY,
         OBSERVED_IN,

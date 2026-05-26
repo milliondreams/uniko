@@ -6,6 +6,7 @@
 //! This is the lowest layer. It depends only on uni-db and external utility crates.
 //! All other uniko crates access storage through this layer.
 
+pub mod blob_store;
 pub mod config;
 pub mod error;
 pub mod id;

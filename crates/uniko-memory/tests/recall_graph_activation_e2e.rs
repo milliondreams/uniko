@@ -54,6 +54,7 @@ async fn empty_entity_refs_yields_no_seeds() {
         facet_count: 1,
         expected_answer_type: None,
         temporal_window: None,
+        query_modalities: Default::default(),
     };
     let seeds = intent.resolve_seeds(&kb).await;
     assert!(seeds.is_empty());
@@ -76,6 +77,7 @@ async fn entity_name_resolves_to_seed_nodeid() {
         facet_count: 1,
         expected_answer_type: None,
         temporal_window: None,
+        query_modalities: Default::default(),
     };
     let seeds = intent.resolve_seeds(&kb).await;
     assert_eq!(seeds, vec![nid]);
@@ -161,6 +163,7 @@ async fn ppr_propagates_along_about_supported_by_chain() {
         facet_count: 1,
         expected_answer_type: None,
         temporal_window: None,
+        query_modalities: Default::default(),
     };
     let _ = intent; // not used; document intent
     let weights = default_phase2_graph_edge_weights();

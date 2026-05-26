@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use uni_db::Value;
 
 use uniko_pipes::types::IngestArtifact;
+use uniko_store::storage::blob::MergeContent;
 use uniko_store::{KnowledgeBase, NodeId};
 
 use super::chunking::{ChunkConfig, select_chunker};
@@ -65,7 +66,29 @@ pub async fn ingest_artifact(
     // 3. Detect language from file extension.
     let language = detect_language(artifact.path.as_deref());
 
-    // 4. Create Artifact node.
+    // 4. Backend PUT + MERGE :ArtifactContent. Per §5.1 step 4-5 of
+    // multimodal-knowledge-store-design.md. For Lance backend the
+    // bytes flow back through `PutOutcome::bytes_inline` so the
+    // MERGE writes them inline; for Fs/S3 the bytes are already
+    // persisted by `put_blob` and the MERGE only stores the `uri`.
+    let bytes = artifact.content.as_bytes();
+    let size = bytes.len() as i64;
+    let put = kb.put_blob(&hash, bytes).await?;
+    let content_nid = kb
+        .merge_artifact_content(MergeContent {
+            content_id: hash.clone(),
+            bytes: put.bytes_inline,
+            uri: put.uri,
+            mime: mime_for_kind(&artifact.kind, language.as_deref()),
+            size,
+            perceptual_hash: None,
+            audio_fingerprint: None,
+        })
+        .await?;
+
+    // 5. Create :Artifact metadata node (no `content` — that's on
+    // :ArtifactContent now). The `hash` field stays as a denorm cache
+    // of `HAS_CONTENT.target.content_id` (§4.5).
     let mut props = HashMap::new();
     props.insert(
         "artifact_id".into(),
@@ -75,13 +98,18 @@ pub async fn ingest_artifact(
     if let Some(ref path) = artifact.path {
         props.insert("path".into(), Value::String(path.clone()));
     }
-    props.insert("content".into(), Value::String(artifact.content.clone()));
     props.insert("hash".into(), Value::String(hash));
-    props.insert("size".into(), Value::Int(artifact.content.len() as i64));
+    props.insert("size".into(), Value::Int(size));
     if let Some(ref lang) = language {
         props.insert("language".into(), Value::String(lang.clone()));
     }
     let artifact_nid = kb.create_node("Artifact", &props).await?;
+
+    // 6. HAS_CONTENT edge: Artifact → ArtifactContent, role="primary".
+    let mut edge_props = HashMap::new();
+    edge_props.insert("role".into(), Value::String("primary".into()));
+    kb.create_edge("HAS_CONTENT", artifact_nid, content_nid, &edge_props)
+        .await?;
 
     // 5. Select chunker and create chunks.
     let content_type = if language.is_some() { "code" } else { "text" };
@@ -92,11 +120,50 @@ pub async fn ingest_artifact(
     let chunk_nids =
         create_chunks(kb, &artifact.artifact_id, artifact_nid, &chunks, "Artifact").await?;
 
+    // Populate Artifact.text_embedding by mean-pooling child Chunk
+    // embeddings. No-op when chunks haven't auto-embedded yet (e.g.,
+    // in unit tests that don't configure an embedder); the backfill
+    // migration fills these in post-hoc.
+    if !chunk_nids.is_empty()
+        && let Err(e) = kb.mean_pool_artifact_text_embedding(artifact_nid).await
+    {
+        tracing::warn!(
+            target: "uniko_extract::ingest",
+            error = %e,
+            "mean_pool_artifact_text_embedding failed; leaving NULL for backfill"
+        );
+    }
+
     Ok(ArtifactIngestResult {
         artifact_node_id: artifact_nid,
         chunk_node_ids: chunk_nids,
         was_deduplicated: false,
     })
+}
+
+/// Best-effort MIME from kind + detected language.
+///
+/// Text ingest only — caller passes the same `kind` the upstream API
+/// used (`"text"`, `"code"`, `"html"`, `"markdown"`, …). Modality-
+/// specific ingest paths (image / audio / pdf / video) supply the
+/// MIME directly and never call this.
+fn mime_for_kind(kind: &str, language: Option<&str>) -> String {
+    match (kind, language) {
+        (_, Some("python")) => "text/x-python".into(),
+        (_, Some("rust")) => "text/x-rust".into(),
+        (_, Some("javascript")) => "application/javascript".into(),
+        (_, Some("typescript")) => "application/typescript".into(),
+        (_, Some("tsx")) => "application/typescript".into(),
+        (_, Some("html")) => "text/html".into(),
+        (_, Some("css")) => "text/css".into(),
+        (_, Some("json")) => "application/json".into(),
+        (_, Some("csv")) => "text/csv".into(),
+        (_, Some("markdown")) => "text/markdown".into(),
+        ("markdown", _) => "text/markdown".into(),
+        ("html", _) => "text/html".into(),
+        ("code", _) => "text/plain".into(),
+        _ => "text/plain".into(),
+    }
 }
 
 /// Detect programming language from a file path extension.

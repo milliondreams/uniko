@@ -7,8 +7,11 @@
 // Rust guideline compliant
 
 pub mod batch;
+pub mod blob;
 pub mod edges;
 pub mod filter;
+pub mod kb_stats;
+pub mod migrations;
 pub mod nodes;
 
 use std::path::Path;
@@ -100,10 +103,12 @@ impl KnowledgeBase {
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
         apply_schema(&db, &config).await?;
         prefetch_models(&db).await;
-        Ok(Self {
+        Self {
             db: Arc::new(db),
             config,
-        })
+        }
+        .finalize_init()
+        .await
     }
 
     /// Create an in-memory knowledge base with extra xervo model aliases.
@@ -129,10 +134,12 @@ impl KnowledgeBase {
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
         apply_schema(&db, &config).await?;
         prefetch_models(&db).await;
-        Ok(Self {
+        Self {
             db: Arc::new(db),
             config,
-        })
+        }
+        .finalize_init()
+        .await
     }
 
     /// Open or create a persistent knowledge base at `path`.
@@ -157,10 +164,12 @@ impl KnowledgeBase {
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
         apply_schema(&db, &config).await?;
         prefetch_models(&db).await;
-        Ok(Self {
+        Self {
             db: Arc::new(db),
             config,
-        })
+        }
+        .finalize_init()
+        .await
     }
 
     /// Open a persistent knowledge base with extra xervo model aliases.
@@ -210,10 +219,12 @@ impl KnowledgeBase {
         if prefetch {
             prefetch_models(&db).await;
         }
-        Ok(Self {
+        Self {
             db: Arc::new(db),
             config,
-        })
+        }
+        .finalize_init()
+        .await
     }
 
     /// Build a single ONNX/Xervo runtime that multiple KBs can share.
@@ -294,10 +305,26 @@ impl KnowledgeBase {
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
         apply_schema(&db, &config).await?;
-        Ok(Self {
+        Self {
             db: Arc::new(db),
             config,
-        })
+        }
+        .finalize_init()
+        .await
+    }
+
+    /// Run post-construction init steps. Currently:
+    ///
+    /// - [`init_kb_stats`](Self::init_kb_stats): writes the
+    ///   `:KnowledgeBaseStats` singleton on first open, or verifies
+    ///   `blob_storage` matches on reopen.
+    ///
+    /// All five public constructors funnel through this so the
+    /// singleton row is always present after a successful `open` /
+    /// `in_memory`.
+    async fn finalize_init(self) -> Result<Self> {
+        self.init_kb_stats().await?;
+        Ok(self)
     }
 
     /// Direct access to the underlying uni-db instance.

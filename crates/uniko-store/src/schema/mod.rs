@@ -9,6 +9,7 @@ pub mod btic;
 pub mod constants;
 
 mod actions;
+mod artifact_content;
 mod artifacts;
 mod chunks;
 mod consolidation;
@@ -16,6 +17,7 @@ mod entities;
 mod episodes;
 mod facts;
 mod goals;
+mod kb_stats;
 mod messages;
 mod observations;
 mod organization;
@@ -97,6 +99,7 @@ pub async fn register_schema(db: &Uni, config: &UnikoConfig) -> crate::Result<()
     let builder = actions::register_labels(builder, config);
     let builder = episodes::register_labels(builder, config);
     let builder = artifacts::register_labels(builder, config);
+    let builder = artifact_content::register_labels(builder);
     let builder = chunks::register_labels(builder, config);
     let builder = entities::register_labels(builder, config);
     let builder = observations::register_labels(builder, config);
@@ -107,6 +110,7 @@ pub async fn register_schema(db: &Uni, config: &UnikoConfig) -> crate::Result<()
     let builder = rules::register_labels(builder);
     let builder = consolidation::register_labels(builder);
     let builder = organization::register_labels(builder);
+    let builder = kb_stats::register_labels(builder);
 
     // ── Phase 2: edge types ──
     let builder = goals::register_edges(builder);
@@ -115,6 +119,7 @@ pub async fn register_schema(db: &Uni, config: &UnikoConfig) -> crate::Result<()
     let builder = actions::register_edges(builder);
     let builder = episodes::register_edges(builder);
     let builder = artifacts::register_edges(builder);
+    let builder = artifact_content::register_edges(builder);
     let builder = chunks::register_edges(builder);
     let builder = entities::register_edges(builder);
     let builder = observations::register_edges(builder);

@@ -43,12 +43,16 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
         // DERIVED_BY: Fact → Rule
         .edge_type(edges::DERIVED_BY, &[labels::FACT], &[labels::RULE])
         .done()
-        // DERIVED_FROM: multi-source (Fact, Procedure → Episode, Action)
+        // DERIVED_FROM: multi-source (Fact, Procedure → Episode, Action;
+        // Artifact → Artifact for non-Action derivation chains like
+        // pdf_page_render, video_keyframe, audio_segment, transcoded).
         .edge_type(
             edges::DERIVED_FROM,
-            &[labels::FACT, labels::PROCEDURE],
-            &[labels::EPISODE, labels::ACTION],
+            &[labels::FACT, labels::PROCEDURE, labels::ARTIFACT],
+            &[labels::EPISODE, labels::ACTION, labels::ARTIFACT],
         )
+        .property_nullable("derivation_kind", DataType::String)
+        .property_nullable("derived_at", DataType::DateTime)
         .done()
         .edge_type(edges::INVALIDATES, &[labels::FACT], &[labels::FACT])
         .property_nullable("reason", DataType::String)

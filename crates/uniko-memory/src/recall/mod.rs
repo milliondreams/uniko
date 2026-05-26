@@ -10,6 +10,7 @@
 
 pub mod intent;
 pub mod mmr;
+pub mod modality;
 
 pub use intent::{IntentProfile, build_intent, build_intent_at};
 
@@ -205,6 +206,19 @@ pub struct RecallConfig {
     /// (Hindsight's `μ(ℓ)`).  Unmapped edge types default to 1.0.  See
     /// [`default_phase2_graph_edge_weights`].
     pub phase2_graph_edge_weights: std::collections::HashMap<String, f64>,
+    /// Enable the cross-modal image channel in Phase 2 / Phase 3
+    /// recall. Lazy-gated by `:KnowledgeBaseStats.modality_presence` —
+    /// even when this is `true`, the channel stays dormant in a
+    /// text-only corpus. Default `false`; Track B flips this on once
+    /// per-modality embeddings populate. See [`crate::recall::modality`].
+    pub enable_image_channel: bool,
+    /// Mirror of [`Self::enable_image_channel`] for audio.
+    pub enable_audio_channel: bool,
+    /// Mirror of [`Self::enable_image_channel`] for video.
+    pub enable_video_channel: bool,
+    /// Mirror of [`Self::enable_image_channel`] for the multimodal
+    /// joint-space column (Cohere v4 / Gemini Embed 2).
+    pub enable_multimodal_channel: bool,
 }
 
 impl Default for RecallConfig {
@@ -240,6 +254,13 @@ impl Default for RecallConfig {
             phase2_graph_damping: 0.85,
             phase2_graph_max_iter: 30,
             phase2_graph_edge_weights: default_phase2_graph_edge_weights(),
+            // Cross-modal channels stay off in Phase 3. Track B (xervo
+            // PR 1) is what flips these on, since image/audio/video
+            // embeddings only exist once those ingest paths land.
+            enable_image_channel: false,
+            enable_audio_channel: false,
+            enable_video_channel: false,
+            enable_multimodal_channel: false,
         }
     }
 }
@@ -304,6 +325,14 @@ impl RecallConfig {
             } else {
                 cfg.phase2_graph_edge_weights.clone()
             },
+            // Cross-modal channel toggles default off here too; they
+            // need both this flag and the per-KB modality_presence to
+            // fire. UnikoConfig has no corresponding fields yet —
+            // Track B will add them when image/audio ingest lands.
+            enable_image_channel: false,
+            enable_audio_channel: false,
+            enable_video_channel: false,
+            enable_multimodal_channel: false,
         }
     }
 }

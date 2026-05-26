@@ -21,6 +21,25 @@ pub(crate) fn register_labels<'a>(
         .property_nullable("language", DataType::String)
         .property_nullable("created_at", DataType::DateTime)
         .property_nullable("updated_at", DataType::DateTime)
+        // Typed nullable modality metadata. Indexed columns where common
+        // queries deserve them (`duration_ms` for "audio > 5 min",
+        // `page_count` for "PDFs > N pages"); long-tail fields land in
+        // `modality_meta`.
+        .property_nullable("width", DataType::Int32)
+        .property_nullable("height", DataType::Int32)
+        .property_nullable("duration_ms", DataType::Int64)
+        .property_nullable("sample_rate", DataType::Int32)
+        // `channels` is Int32 (not Int16) — uni-db's `DataType` does not
+        // expose Int16; the extra bytes are immaterial.
+        .property_nullable("channels", DataType::Int32)
+        .property_nullable("fps", DataType::Float32)
+        .property_nullable("frame_count", DataType::Int32)
+        .property_nullable("page_count", DataType::Int32)
+        .property_nullable("modality_meta", DataType::CypherValue)
+        // Provenance for non-Action ingest (URL / filesystem / upload /
+        // import). When NULL, the canonical provenance path is the
+        // `CREATED_BY` edge to `Action`.
+        .property_nullable("origin", DataType::CypherValue)
         // 5 multimodal embedding fields — all nullable
         .property_nullable(
             "text_embedding",
@@ -58,6 +77,8 @@ pub(crate) fn register_labels<'a>(
         .index("content", IndexType::FullText)
         .index("language", IndexType::Scalar(ScalarType::Hash))
         .index("mime_type", IndexType::Scalar(ScalarType::Hash))
+        .index("duration_ms", IndexType::Scalar(ScalarType::BTree))
+        .index("page_count", IndexType::Scalar(ScalarType::BTree))
         .index(
             "text_embedding",
             IndexType::Vector(super::vector_index(config)),

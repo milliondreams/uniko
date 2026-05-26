@@ -23,12 +23,12 @@ async fn test_db() -> Uni {
 
 #[test]
 fn test_label_count() {
-    assert_eq!(labels::ALL.len(), 20, "expected 20 node labels");
+    assert_eq!(labels::ALL.len(), 22, "expected 22 node labels");
 }
 
 #[test]
 fn test_edge_count() {
-    assert_eq!(edges::ALL.len(), 47, "expected 47 edge types");
+    assert_eq!(edges::ALL.len(), 48, "expected 48 edge types");
 }
 
 #[test]
@@ -140,6 +140,7 @@ fn test_spec_required_labels() {
         "Action",
         "Episode",
         "Artifact",
+        "ArtifactContent",
         "Chunk",
         "Entity",
         "Observation",
@@ -152,6 +153,7 @@ fn test_spec_required_labels() {
         "DeadLetter",
         "Organization",
         "Team",
+        "KnowledgeBaseStats",
     ];
     for label in &required {
         assert!(
@@ -186,6 +188,7 @@ fn test_spec_required_edges() {
         "MENTIONS",
         "FOLLOWED_BY",
         "HAS_CHUNK",
+        "HAS_CONTENT",
         "CREATED_BY",
         "MODIFIED_BY",
         "OBSERVED_IN",

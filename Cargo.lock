@@ -10986,10 +10986,12 @@ dependencies = [
 name = "uniko-store"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

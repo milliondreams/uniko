@@ -57,6 +57,30 @@ pub struct IntentProfile {
     /// temporal phrase fires.  Drives the temporal-interval channel in
     /// Phase 2 recall.
     pub temporal_window: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Modality of the *query* input (not the corpus). Always
+    /// `QueryModalities::default()` for text-only callers; Track B's
+    /// image/audio query entry points populate `image_vec` / `audio_vec`.
+    /// Phase 3 lands the field plumbing so Track B drops in without
+    /// touching IntentProfile call sites.
+    pub query_modalities: QueryModalities,
+}
+
+/// Modality of a query input, as opposed to the corpus's
+/// [`crate::recall::modality::ModalityPresence`] which describes the KB.
+///
+/// All fields default to "text-only" (no image/audio attached to the
+/// query); a text-to-image search would flip `has_image_input` and
+/// populate `image_vec`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QueryModalities {
+    /// User supplied an image alongside the text query.
+    pub has_image_input: bool,
+    /// User supplied audio alongside the text query.
+    pub has_audio_input: bool,
+    /// SigLIP-2 vision embedding of the query image, when present.
+    pub image_vec: Option<Vec<f32>>,
+    /// Joint-space audio embedding of the query audio, when present.
+    pub audio_vec: Option<Vec<f32>>,
 }
 
 impl IntentProfile {
@@ -266,6 +290,7 @@ pub async fn build_intent_at(
         facet_count,
         expected_answer_type,
         temporal_window,
+        query_modalities: QueryModalities::default(),
     })
 }
 

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::blob_store::BlobStorage;
 use crate::error::{Result, UnikoError};
 
 // ── Embedding + Vector index config types ─────────────────────────
@@ -558,6 +559,13 @@ pub struct UnikoConfig {
     /// Distance metric for similarity search.
     pub vector_metric: VectorMetricChoice,
 
+    /// Blob backend for `:ArtifactContent` bytes. Persisted in
+    /// `:KnowledgeBaseStats.blob_storage` on first open; reopening
+    /// with a different variant is a hard error (no implicit
+    /// migration). Default [`BlobStorage::Lance`].
+    #[serde(default)]
+    pub blob_storage: BlobStorage,
+
     // Pipeline capacities
     /// Bounded channel capacity for the ingest worker.
     pub ingest_queue_capacity: usize,
@@ -723,6 +731,7 @@ impl Default for UnikoConfig {
                 ef_construction: 100,
             },
             vector_metric: VectorMetricChoice::Cosine,
+            blob_storage: BlobStorage::default(),
             ingest_queue_capacity: 200,
             consolidation_queue_capacity: 32,
             consolidation_threshold: 20,
