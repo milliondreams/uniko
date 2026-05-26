@@ -434,7 +434,7 @@ pub async fn recall(
     // Message, apply MMR deduplication, and check the 0.65 coverage
     // gate.  When met, we return the Phase 2 bundle (merged with
     // Phase 1 hits) without paying for Phase 3.
-    let phase2_items_raw = phase2_expand(kb, &intent, config).await;
+    let phase2_items_raw = phase2_expand(kb, &intent, config, None).await;
     let phase2_items = mmr::mmr_dedup(
         phase2_items_raw,
         config.phase2_mmr_lambda,
@@ -859,10 +859,11 @@ async fn phase1_compact(
 /// ranges (cosine, BM25) compare like-for-like.  Tier weight is
 /// applied (Episodic = 0.7).  Returns an empty `Vec` on any internal
 /// error — Phase 2 is opportunistic.
-async fn phase2_expand(
+pub async fn phase2_expand(
     kb: &KnowledgeBase,
     intent: &IntentProfile,
     config: &RecallConfig,
+    counters: Option<crate::recall::modality::RecallCounters>,
 ) -> Vec<RecallItem> {
     let qvec = intent.intent_vec();
     let qtxt = intent
@@ -876,7 +877,31 @@ async fn phase2_expand(
     let has_txt = !qtxt.is_empty();
     let has_temporal = intent.temporal_window.is_some() && config.phase2_temporal_enabled;
     let has_graph = !intent.entity_refs.is_empty() && config.phase2_graph_enabled;
-    if !has_vec && !has_txt && !has_temporal && !has_graph {
+    // Cross-modal channels: each gated on (presence flag ∧ toggle ∧
+    // query has a per-modality vec). All three preconditions hold only
+    // in non-text-only corpora running with an explicit opt-in.
+    let presence = kb.read_modality_presence().await.unwrap_or_default();
+    let qm = &intent.query_modalities;
+    let fire_image = crate::recall::modality::image_channel_active(
+        &presence,
+        config.enable_image_channel,
+    ) && qm.image_vec.is_some();
+    let fire_audio = crate::recall::modality::audio_channel_active(
+        &presence,
+        config.enable_audio_channel,
+    ) && qm.audio_vec.is_some();
+    let fire_multimodal = crate::recall::modality::multimodal_channel_active(
+        &presence,
+        config.enable_multimodal_channel,
+    ) && (qm.image_vec.is_some() || qm.audio_vec.is_some());
+    if !has_vec
+        && !has_txt
+        && !has_temporal
+        && !has_graph
+        && !fire_image
+        && !fire_audio
+        && !fire_multimodal
+    {
         return Vec::new();
     }
 
@@ -893,7 +918,7 @@ async fn phase2_expand(
     // internal failure (consistent with the previous per-source
     // `continue` semantics), so no source can fail the phase.
     let mut futs: Vec<futures::future::BoxFuture<'_, Vec<RankedHit>>> =
-        Vec::with_capacity(sources.len() + 2);
+        Vec::with_capacity(sources.len() + 5);
     for &(label, mode, content_field, top_k) in sources {
         let skip = match mode {
             "vector" => !has_vec,
@@ -913,7 +938,69 @@ async fn phase2_expand(
             top_k,
             qvec_ref,
             qtxt_owned,
+            "embedding",
         )));
+    }
+    // Cross-modal channels query :Artifact.{image,audio,multimodal}_embedding
+    // via the same `run_phase2_source` helper. `content_field = "kind"`
+    // surfaces the artifact kind into the RecallItem.content slot (so
+    // an image artifact reads as e.g. `"image"`); downstream consumers
+    // can resolve URI via the parent edge if needed.
+    if fire_image
+        && let Some(v) = qm.image_vec.as_deref()
+    {
+        if let Some(c) = counters.as_ref() {
+            c.bump_image();
+        }
+        futs.push(Box::pin(run_phase2_source(
+            kb,
+            "Artifact",
+            "vector",
+            "kind",
+            20,
+            v,
+            String::new(),
+            "image_embedding",
+        )));
+    }
+    if fire_audio
+        && let Some(v) = qm.audio_vec.as_deref()
+    {
+        if let Some(c) = counters.as_ref() {
+            c.bump_audio();
+        }
+        futs.push(Box::pin(run_phase2_source(
+            kb,
+            "Artifact",
+            "vector",
+            "kind",
+            20,
+            v,
+            String::new(),
+            "audio_embedding",
+        )));
+    }
+    if fire_multimodal {
+        // Multimodal joint space: prefer image vec, fall back to audio.
+        let v = qm
+            .image_vec
+            .as_deref()
+            .or(qm.audio_vec.as_deref());
+        if let Some(v) = v {
+            if let Some(c) = counters.as_ref() {
+                c.bump_multimodal();
+            }
+            futs.push(Box::pin(run_phase2_source(
+                kb,
+                "Artifact",
+                "vector",
+                "kind",
+                20,
+                v,
+                String::new(),
+                "multimodal_embedding",
+            )));
+        }
     }
     if has_temporal {
         futs.push(Box::pin(phase2_temporal(kb, intent, config)));
@@ -972,6 +1059,7 @@ async fn run_phase2_source(
     top_k: i64,
     qvec: &[f32],
     qtxt: String,
+    vector_field: &str,
 ) -> Vec<RankedHit> {
     let start = std::time::Instant::now();
     let session = kb.db().session();
@@ -980,10 +1068,10 @@ async fn run_phase2_source(
         "vector" => {
             let cypher = format!(
                 "MATCH (m:{label}) \
-                 WHERE m.embedding IS NOT NULL \
+                 WHERE m.{vector_field} IS NOT NULL \
                  RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                         coalesce(m.{content_field}, '') AS content, \
-                        similar_to(m.embedding, $qvec) AS score \
+                        similar_to(m.{vector_field}, $qvec) AS score \
                  ORDER BY score DESC LIMIT $lim"
             );
             session
