@@ -16,6 +16,13 @@ data/locomo*.json
 data/longmemeval*.json
 data/cls_*.tsv
 data/nlp_obs_test_diagnostics.txt
+# Per-run event streams and logs (regeneratable from bench-configs +
+# the source data file).  Same policy as the *.json result files.
+data/*.log
+data/*_events.jsonl
+data/lme_*.json
+data/abl_*.json
+data/conv30_*.json
 
 # Agent runtime state (claude-code, codex)
 .claude/
