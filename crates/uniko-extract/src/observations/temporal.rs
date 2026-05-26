@@ -362,14 +362,34 @@ fn parse_weekend(text: &str) -> Option<Duration> {
 fn parse_relative_weekday(text: &str, reference: DateTime<Utc>) -> Option<DateTime<Utc>> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
+        // Left `\b` on the weekday group is load-bearing: without it,
+        // the alternation matches as a *substring* anywhere in the
+        // input.  `"next Whitsun"` would match `"sun"` (trailing 3
+        // chars of `Whitsun`), `"frisat"` would match `"fri"`, etc.
+        // The left word boundary blocks all such embedded matches.
         Regex::new(
-            r"(?P<prefix>last|this|next)?\s*(?P<wd>monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b",
+            r"(?P<prefix>last|this|next)?\s*\b(?P<wd>monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b",
         )
         .unwrap()
     });
 
     let caps = re.captures(text)?;
-    let weekday = parse_weekday(caps.name("wd")?.as_str())?;
+    let wd_match = caps.name("wd")?;
+    // Reject hyphen-attached matches like "Monday-morning-quarterback".
+    // Regex `\b` treats `-` as a word boundary, so the alternation
+    // happily matches inside compound nouns.  A weekday that is part of
+    // a hyphenated compound is not a temporal anchor.
+    let bytes = text.as_bytes();
+    let lhs_hyphen = wd_match
+        .start()
+        .checked_sub(1)
+        .and_then(|i| bytes.get(i))
+        == Some(&b'-');
+    let rhs_hyphen = bytes.get(wd_match.end()) == Some(&b'-');
+    if lhs_hyphen || rhs_hyphen {
+        return None;
+    }
+    let weekday = parse_weekday(wd_match.as_str())?;
     let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("last");
 
     let ref_weekday = reference.weekday();
@@ -710,6 +730,77 @@ mod tests {
         let (lo, hi) = r.to_range();
         assert_eq!(lo.to_rfc3339(), "2025-12-01T00:00:00+00:00");
         assert_eq!(hi.to_rfc3339(), "2026-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    // ── Regression tests for substring weekday false-positives ──────
+
+    /// `"next Whitsun"` once matched as `"next … sun"` (trailing 3 chars
+    /// of `"Whitsun"`) because the weekday alternation lacked a left
+    /// word boundary.  The regex now anchors with `\b` on the left, so
+    /// this phrase produces no temporal match.
+    #[test]
+    fn test_next_whitsun_does_not_match_weekday_substring() {
+        let reference = chrono::DateTime::parse_from_rfc3339("2023-05-08T14:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(
+            resolve_temporal_with_granularity("next Whitsun", reference).is_none(),
+            "embedded 'sun' inside 'Whitsun' must not match the weekday alternation",
+        );
+    }
+
+    /// Concatenated weekday abbreviations without spaces or word
+    /// boundaries between them must not be picked up as a date either.
+    #[test]
+    fn test_concatenated_weekday_abbrevs_do_not_match() {
+        let reference = chrono::DateTime::parse_from_rfc3339("2023-05-08T14:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(
+            resolve_temporal_with_granularity("frisat", reference).is_none(),
+            "'fri' embedded in 'frisat' must not match — both sides are word chars",
+        );
+    }
+
+    /// Hyphen-attached compounds like "Monday-morning-quarterback"
+    /// contain a weekday token that satisfies regex `\b` (hyphen is a
+    /// word boundary), but they are not temporal expressions.  The
+    /// post-match hyphen check rejects these.
+    #[test]
+    fn test_hyphen_attached_weekday_compounds_do_not_match() {
+        let reference = chrono::DateTime::parse_from_rfc3339("2023-05-08T14:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(
+            resolve_temporal_with_granularity("monday-morning-quarterback", reference).is_none(),
+            "Monday inside a hyphenated compound noun is not a date",
+        );
+        assert!(
+            resolve_temporal_with_granularity("the-friday-special", reference).is_none(),
+            "Friday inside a hyphenated compound is not a date",
+        );
+        assert!(
+            resolve_temporal_with_granularity("nine-to-five-mon", reference).is_none(),
+            "weekday at end of hyphenated compound is not a date",
+        );
+    }
+
+    /// Regression-safety: the intended `"last Friday"` path still works
+    /// after the left-`\b` tightening.
+    #[test]
+    fn test_last_friday_still_resolves_after_word_boundary_fix() {
+        // 2023-05-08 is Monday; "last Friday" → 2023-05-05.
+        let reference = chrono::DateTime::parse_from_rfc3339("2023-05-08T14:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let resolved =
+            resolve_temporal_with_granularity("last Friday", reference).expect("must resolve");
+        assert_eq!(
+            resolved.point.format("%Y-%m-%d").to_string(),
+            "2023-05-05",
+            "last Friday from a Monday must resolve to the prior Friday",
+        );
     }
 
     #[test]

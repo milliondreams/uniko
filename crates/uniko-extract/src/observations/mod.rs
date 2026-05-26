@@ -248,6 +248,45 @@ fn resolve_timestamp(ctx: &PipelineContext) -> chrono::DateTime<chrono::Utc> {
         .unwrap_or_else(chrono::Utc::now)
 }
 
+/// Substitute a resolved absolute date for a relative temporal phrase
+/// in the observation `content` string, and return the resolved date
+/// for the structured `temporal_anchor` slot.
+///
+/// The SRL rule engine renders observations with the surface form of a
+/// temporal expression — `"Caroline went to the LGBTQ support group
+/// yesterday"`.  Downstream consumers (LLM responders that don't share
+/// the conversation date anchor, fact consolidation, downstream
+/// embedders) shouldn't have to redo the relative-date math.  We
+/// rewrite the content to embed the absolute date directly:
+/// `"Caroline went to the LGBTQ support group on 2023-05-07"`.  The raw
+/// surface phrase is preserved separately on
+/// `RawObservation.temporal_phrase` for analytics.
+///
+/// Uses [`temporal::resolve_temporal_with_granularity`] (which returns
+/// `None` on unparseable input) rather than [`temporal::resolve_temporal`]
+/// (which silently falls back to `reference` on no-match) so that an
+/// unrecognised phrase like `"next Whitsun"` doesn't get rewritten to
+/// the message timestamp.
+///
+/// Returns the (possibly rewritten) content and the resolved anchor.
+#[cfg_attr(not(feature = "onnx"), allow(dead_code))]
+fn resolve_temporal_in_content(
+    content: String,
+    temporal_phrase: Option<&str>,
+    reference: chrono::DateTime<chrono::Utc>,
+) -> (String, Option<chrono::DateTime<chrono::Utc>>) {
+    let resolved =
+        temporal_phrase.and_then(|s| temporal::resolve_temporal_with_granularity(s, reference));
+    let content = match (temporal_phrase, &resolved) {
+        (Some(phrase), Some(r)) => {
+            let date_str = r.point.format("%Y-%m-%d").to_string();
+            content.replace(phrase, &date_str)
+        }
+        _ => content,
+    };
+    (content, resolved.map(|r| r.point))
+}
+
 // ── prep / apply split for the atomic ingest path ─────────────────
 
 /// Inputs to [`prepare_observations`]. Bundles every read-only
@@ -395,11 +434,13 @@ pub async fn prepare_observations(
 
             for obs in dep_obs {
                 let temporal_phrase = obs.temporal.clone();
-                let temporal_anchor = temporal_phrase
-                    .as_deref()
-                    .map(|s| temporal::resolve_temporal(s, input.timestamp));
+                let (content, temporal_anchor) = resolve_temporal_in_content(
+                    obs.content,
+                    temporal_phrase.as_deref(),
+                    input.timestamp,
+                );
                 all_obs.push(RawObservation {
-                    content: obs.content,
+                    content,
                     subject: obs.subject,
                     predicate: obs.predicate,
                     object: obs.object,
@@ -614,4 +655,127 @@ fn combine_entity_refs(
         }
     }
     refs
+}
+
+#[cfg(test)]
+mod resolve_temporal_in_content_tests {
+    use super::resolve_temporal_in_content;
+    use chrono::{TimeZone, Utc};
+
+    /// Conversation date 2023-05-08 (a Monday).  Used as the reference
+    /// timestamp so "yesterday" resolves to 2023-05-07 and "last
+    /// Friday" resolves to 2023-05-05.
+    fn ref_date() -> chrono::DateTime<chrono::Utc> {
+        Utc.with_ymd_and_hms(2023, 5, 8, 14, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn yesterday_substituted_with_iso_date() {
+        let (content, anchor) = resolve_temporal_in_content(
+            "Caroline went to the LGBTQ support group yesterday".into(),
+            Some("yesterday"),
+            ref_date(),
+        );
+        assert_eq!(
+            content,
+            "Caroline went to the LGBTQ support group 2023-05-07"
+        );
+        assert_eq!(
+            anchor.expect("expected resolved anchor for 'yesterday'")
+                .format("%Y-%m-%d")
+                .to_string(),
+            "2023-05-07"
+        );
+    }
+
+    #[test]
+    fn last_friday_substituted_with_iso_date() {
+        // 2023-05-08 is Monday; "last Friday" → 2023-05-05.
+        let (content, anchor) = resolve_temporal_in_content(
+            "Melanie ran a charity race last Friday".into(),
+            Some("last Friday"),
+            ref_date(),
+        );
+        assert_eq!(content, "Melanie ran a charity race 2023-05-05");
+        assert_eq!(
+            anchor.unwrap().format("%Y-%m-%d").to_string(),
+            "2023-05-05"
+        );
+    }
+
+    #[test]
+    fn last_week_substituted_with_iso_date() {
+        let (content, anchor) = resolve_temporal_in_content(
+            "I went camping last week".into(),
+            Some("last week"),
+            ref_date(),
+        );
+        // resolve_temporal_with_granularity returns the start of "last
+        // week" — the exact day depends on the implementation, but it
+        // must NOT be the literal string "last week" and MUST be a
+        // 10-character ISO date.
+        assert!(
+            !content.contains("last week"),
+            "expected 'last week' to be substituted, got: {content:?}",
+        );
+        assert!(
+            content.contains("I went camping "),
+            "expected leading text preserved, got: {content:?}",
+        );
+        let date_str = anchor
+            .expect("expected resolved anchor for 'last week'")
+            .format("%Y-%m-%d")
+            .to_string();
+        assert!(
+            content.ends_with(&date_str),
+            "expected content to end with ISO date {date_str}, got: {content:?}",
+        );
+    }
+
+    #[test]
+    fn no_temporal_phrase_passes_content_through() {
+        let (content, anchor) = resolve_temporal_in_content(
+            "Caroline bought a yellow dress".into(),
+            None,
+            ref_date(),
+        );
+        assert_eq!(content, "Caroline bought a yellow dress");
+        assert!(anchor.is_none());
+    }
+
+    #[test]
+    fn unparseable_phrase_leaves_content_untouched() {
+        // "next Whitsun" — contains "sun" as a substring; pre-fix the
+        // weekday regex matched it as a Sunday relative date.  After
+        // the left-`\b` + hyphen-check tightening in
+        // `parse_relative_weekday`, this phrase no longer resolves and
+        // the content stays untouched.  Guards against the regex
+        // regression returning.
+        let (content, anchor) = resolve_temporal_in_content(
+            "We celebrated next Whitsun".into(),
+            Some("next Whitsun"),
+            ref_date(),
+        );
+        assert_eq!(content, "We celebrated next Whitsun");
+        assert!(
+            anchor.is_none(),
+            "unparseable phrase must not yield a resolved anchor"
+        );
+    }
+
+    #[test]
+    fn phrase_appearing_twice_both_substituted() {
+        // Generous string replace — semantically what we want: any
+        // occurrence of the temporal surface form refers to the same
+        // resolved moment within a single observation.
+        let (content, _) = resolve_temporal_in_content(
+            "I went yesterday and yesterday it was sunny".into(),
+            Some("yesterday"),
+            ref_date(),
+        );
+        assert_eq!(
+            content,
+            "I went 2023-05-07 and 2023-05-07 it was sunny"
+        );
+    }
 }

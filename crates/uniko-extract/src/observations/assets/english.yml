@@ -182,25 +182,53 @@ srl_patterns:
   # The renderer skips alternatives whose referenced captures are
   # empty, so missing roles silently degrade to the next-best shape.
   - name: srl_action
-    description: "ARG0 + V + ARG1 (+ optional ARGM-TMP / ARGM-LOC)"
+    description: >
+      ARG0 + V + ARG1 (+ optional ARG2 recipient / ARG3 source /
+      ARG4 destination / ARGM-TMP / ARGM-LOC).  PropBank assigns the
+      non-core arg numbers per-verb: motion verbs use ARG4 for
+      destination and ARG3 for source; transfer verbs use ARG2 for
+      recipient.  Capturing all three lets ditransitives like "Caroline
+      gave Melanie a necklace" survive without inventing one rule per
+      verb class.
     captures:
       - role: ARG0
         as: agent
         required: true
       - role: ARG1
         as: theme
+        required: true
+      - role: ARG2
+        as: recipient
+      - role: ARG3
+        as: source
+      - role: ARG4
+        as: destination
       - role: ARGM-TMP
         as: time
       - role: ARGM-LOC
         as: location
     template: "{agent} {predicate} {theme}"
     template_alternatives:
+      # Theme + one non-core argument.
+      - "{agent} {predicate} {theme} {recipient}"
+      - "{agent} {predicate} {theme} {destination}"
+      - "{agent} {predicate} {theme} {source}"
+      # Theme + time / location.
       - "{agent} {predicate} {theme} {time}"
       - "{agent} {predicate} {theme} {location}"
       - "{agent} {predicate} {theme} {time} {location}"
+      # Theme + non-core + time.
+      - "{agent} {predicate} {theme} {recipient} {time}"
+      - "{agent} {predicate} {theme} {destination} {time}"
+      - "{agent} {predicate} {theme} {source} {time}"
+      # Theme + non-core + location.
+      - "{agent} {predicate} {theme} {recipient} {location}"
+      - "{agent} {predicate} {theme} {destination} {location}"
+      # Theme + destination + time + location (longest reasonable shape).
+      - "{agent} {predicate} {theme} {destination} {time} {location}"
 
   # Frames whose ARG1/theme is implicit (intransitive verb) but with a
-  # bound time — e.g. *"I went yesterday"*. Lower-precision than
+  # bound time — e.g. *"I left yesterday"*. Lower-precision than
   # `srl_action` but useful for temporal-anchored events.
   - name: srl_action_temporal_only
     description: "ARG0 + V + ARGM-TMP, no ARG1"
@@ -225,3 +253,61 @@ srl_patterns:
         as: location
         required: true
     template: "{agent} {predicate} {location}"
+
+  # Motion verbs with an ARG4 destination but no ARG1 theme — e.g.
+  # *"I went to the LGBTQ support group yesterday"*.  PropBank tags
+  # the destination of go/come/travel/move/etc. as ARG4 rather than
+  # ARG1; without this pattern the destination is silently lost.
+  - name: srl_action_directional
+    description: "ARG0 + V + ARG4 destination (+ optional ARGM-TMP / ARGM-LOC)"
+    captures:
+      - role: ARG0
+        as: agent
+        required: true
+      - role: ARG4
+        as: destination
+        required: true
+      - role: ARGM-TMP
+        as: time
+      - role: ARGM-LOC
+        as: location
+    template: "{agent} {predicate} {destination}"
+    template_alternatives:
+      - "{agent} {predicate} {destination} {time}"
+      - "{agent} {predicate} {destination} {location}"
+      - "{agent} {predicate} {destination} {time} {location}"
+
+  # Speech / transfer verbs whose primary complement is an addressee
+  # rather than a theme — e.g. *"Caroline spoke to Melanie"*. PropBank
+  # tags the addressee as ARG2 for these verbs.
+  - name: srl_action_recipient_only
+    description: "ARG0 + V + ARG2 recipient, no ARG1"
+    captures:
+      - role: ARG0
+        as: agent
+        required: true
+      - role: ARG2
+        as: recipient
+        required: true
+      - role: ARGM-TMP
+        as: time
+    template: "{agent} {predicate} {recipient}"
+    template_alternatives:
+      - "{agent} {predicate} {recipient} {time}"
+
+  # Motion verbs with a start point (ARG3) but no destination/theme —
+  # e.g. *"Caroline came from the kitchen"*.
+  - name: srl_action_source_only
+    description: "ARG0 + V + ARG3 source, no ARG1"
+    captures:
+      - role: ARG0
+        as: agent
+        required: true
+      - role: ARG3
+        as: source
+        required: true
+      - role: ARGM-TMP
+        as: time
+    template: "{agent} {predicate} {source}"
+    template_alternatives:
+      - "{agent} {predicate} {source} {time}"

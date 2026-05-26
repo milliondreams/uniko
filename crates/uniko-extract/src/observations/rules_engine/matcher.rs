@@ -15,7 +15,7 @@ use super::resolver::{
     ResolvedSubject, collect_subtree, collect_with_relations, resolve_subject,
     strip_trailing_punct, update_sentence_context,
 };
-use super::rules::{ChildSpec, Pattern, PhraseCollector, Rules, SrlPattern};
+use super::rules::{ChildSpec, Pattern, PhraseCollector, Rules, SrlPattern, SubjectResolution};
 use super::template::render;
 
 const SUBJECT_CAPTURE: &str = "subject";
@@ -74,8 +74,14 @@ pub fn extract_with_rules(
     // {predicate} variable).
     for frame in srl_frames {
         for pattern in &rules.srl_patterns {
-            if let Some(obs) = try_match_srl(pattern, frame, speaker, &rules.filters)
-                && seen_text.insert(obs.content.clone())
+            if let Some(obs) = try_match_srl(
+                pattern,
+                frame,
+                speaker,
+                ctx,
+                &rules.subject_resolution,
+                &rules.filters,
+            ) && seen_text.insert(obs.content.clone())
             {
                 out.push(obs);
             }
@@ -106,6 +112,8 @@ fn try_match_srl(
     pattern: &SrlPattern,
     frame: &SrlFrame,
     speaker: &str,
+    ctx: &SentenceContext,
+    subject_resolution: &SubjectResolution,
     filters: &super::rules::Filters,
 ) -> Option<DepObservation> {
     let mut captures: HashMap<String, String> = HashMap::new();
@@ -120,7 +128,28 @@ fn try_match_srl(
             .map(|a| a.text.clone());
         match arg_text {
             Some(text) => {
-                captures.insert(cap.as_name.clone(), text);
+                // The `agent` slot is the SRL analogue of the DEP path's
+                // subject. Apply pronoun resolution so "I"/"you"/"we"
+                // get rewritten to the speaker / addressee, matching
+                // `try_match`'s behaviour at line 335 below. Mirrors the
+                // `drop_when_subject_unresolvable` filter on third-person
+                // demonstratives without an antecedent.
+                if cap.as_name == "agent" {
+                    let pos = srl_pos_heuristic(&text, subject_resolution);
+                    match resolve_subject(&text, pos, ctx, speaker, subject_resolution) {
+                        ResolvedSubject::Resolved(name) => {
+                            captures.insert(cap.as_name.clone(), name);
+                        }
+                        ResolvedSubject::Unresolvable => {
+                            if filters.drop_when_subject_unresolvable {
+                                return None;
+                            }
+                            captures.insert(cap.as_name.clone(), text);
+                        }
+                    }
+                } else {
+                    captures.insert(cap.as_name.clone(), text);
+                }
             }
             None => {
                 if cap.required {
@@ -209,12 +238,37 @@ fn try_match_srl(
             .find(|a| a.role == "ARGM-LOC")
             .map(|a| a.text.clone())
     });
+    // Note — destination (ARG4), recipient (ARG2), and source (ARG3)
+    // captures are intentionally *not* passed through
+    // `clean_object_phrase`.  That function strips leading prepositions
+    // (`to`, `from`, `of`, `in`, ...) and rejects single-token residues
+    // against `REJECT_OBJECT_PHRASES`, which is the right behaviour for
+    // the theme/ARG1 slot but would destroy these roles:
+    //
+    //   "to Melanie"           -> "Melanie"        (loses role marker)
+    //   "from the kitchen"     -> "kitchen"        (loses role marker)
+    //   "to the LGBTQ support  -> "LGBTQ support
+    //    group"                   group"           (role marker dropped)
+    //
+    // The leading preposition IS the role marker — `to X` vs `from X`
+    // distinguishes destination from source.  Surface them raw via the
+    // template alternatives (`{destination}` / `{recipient}` /
+    // `{source}` in `assets/english.yml`), and let downstream consumers
+    // see the prepositional phrase intact.  See [[no_value_calls]] /
+    // commit history for the role-semantics decision.
     // Phase B: reject light-verb-only triples (`(Jon | do | what)`),
     // but only when no specifying complement is present.  The intransitive
-    // patterns srl_action_temporal_only / srl_action_locative_only
-    // exist precisely to capture (I, go, yesterday) — the time or
-    // location IS the specifying complement, so don't kill them.
-    let has_complement = temporal.is_some() || location.is_some();
+    // patterns srl_action_temporal_only / srl_action_locative_only /
+    // srl_action_directional / srl_action_recipient_only /
+    // srl_action_source_only exist precisely to capture (I, go,
+    // yesterday) / (I, went, to the park) / (I, spoke, to her) — the
+    // time, location, destination, recipient, or source IS the
+    // specifying complement, so don't kill them.
+    let has_complement = temporal.is_some()
+        || location.is_some()
+        || captures.get("destination").is_some_and(|s| !s.is_empty())
+        || captures.get("recipient").is_some_and(|s| !s.is_empty())
+        || captures.get("source").is_some_and(|s| !s.is_empty());
     if !has_complement
         && crate::observations::cleanup::is_light_verb_only(&predicate, object.as_deref())
     {
@@ -228,6 +282,27 @@ fn try_match_srl(
         temporal,
         confidence: 0.85,
     })
+}
+
+/// Heuristic POS for an SRL `ARG0` surface phrase.
+///
+/// SRL frames carry token spans but not POS tags on the argument text,
+/// so [`resolve_subject`]'s third-person-demonstrative branch (which
+/// gates on `pos == "PRON"`) needs a guess. Return `"PRON"` when the
+/// lowercase text matches any pronoun vocabulary the resolver knows
+/// about, else `"NOUN"`. Noun phrases fall through resolution
+/// unchanged.
+fn srl_pos_heuristic(text: &str, cfg: &SubjectResolution) -> &'static str {
+    let lower = text.to_lowercase();
+    if cfg.first_person.matches(&lower)
+        || cfg.second_person.matches(&lower)
+        || cfg.third_person_demonstrative.matches(&lower)
+        || cfg.unresolvable.matches(&lower)
+    {
+        "PRON"
+    } else {
+        "NOUN"
+    }
 }
 
 /// Returns `true` if `tmpl` contains a `{var}` whose value in

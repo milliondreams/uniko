@@ -371,6 +371,10 @@ fn format_embed_text(name: &str, entity_type: &str) -> String {
 /// similarity threshold is found for a compatible type.  Returns
 /// `None` if no match, Xervo is unavailable, or the graph has no
 /// Entity embeddings yet.
+#[expect(
+    dead_code,
+    reason = "Phase-2 embedding-based entity dedup; not yet wired into the canonical-name dedup path"
+)]
 async fn find_similar_entity(
     kb: &KnowledgeBase,
     name: &str,
