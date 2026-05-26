@@ -14,14 +14,28 @@
 // limit. 256 is enough; uni-db's own crates set the same.
 #![recursion_limit = "256"]
 
+pub mod action;
 pub mod consolidation;
 pub mod episode;
 pub mod llm_triples;
+pub mod nl_to_cypher;
 pub mod pipeline;
+pub mod policy;
+pub mod query;
 pub mod recall;
 pub mod rules;
+pub mod working_memory;
 
+#[doc(inline)]
+pub use action::{RecordActionParams, RecordActionResult, record_action};
 #[doc(inline)]
 pub use episode::{RecordEpisodeParams, record_episode};
 #[doc(inline)]
 pub use pipeline::PipelineSystem;
+#[doc(inline)]
+pub use query::{
+    GeneratedAnswer, QueryOutcome, QueryRecordOptions, RecordQueryEpisodeParams, answer_query,
+    record_query_episode,
+};
+#[doc(inline)]
+pub use working_memory::{WorkingMemoryParams, working_memory};

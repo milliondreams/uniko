@@ -45,7 +45,7 @@ impl RecallTier {
     /// Procedural 0.8) was reverted when Phase 1 (Compact) shipped:
     /// suppressing the top tiers had been a workaround for the
     /// missing Fact retrieval surface.
-    fn weight(self) -> f64 {
+    pub fn weight(self) -> f64 {
         match self {
             Self::Semantic => 1.0,
             Self::Procedural => 0.9,

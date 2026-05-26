@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+uniko-cortex = { workspace = true }
 uniko-extract = { workspace = true }
 uniko-pipes = { workspace = true }
 uniko-store = { workspace = true }
