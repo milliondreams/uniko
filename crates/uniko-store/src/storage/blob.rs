@@ -91,33 +91,41 @@ impl KnowledgeBase {
         &self,
         spec: MergeContent,
     ) -> Result<crate::types::NodeId> {
-        // Use ext_id-keyed MERGE on content_id so concurrent ingests
-        // of the same hash collapse to one row. uni-db's MERGE keys on
-        // the property pattern in the node clause, so passing
-        // `content_id: $cid` is sufficient — but only when there's a
-        // unique-ish index on it (Hash). We've registered one in §3.6.
-        let cypher = "
-            MERGE (c:ArtifactContent {content_id: $cid})
-            ON CREATE SET
-                c.bytes = $bytes,
-                c.uri = $uri,
-                c.mime = $mime,
-                c.size = $size,
-                c.perceptual_hash = $phash,
-                c.audio_fingerprint = $afp,
-                c.created_at = $created_at
-            RETURN id(c) AS vid
-        ";
-
+        // We can't use `MERGE (c:ArtifactContent {content_id: $cid}) ON
+        // CREATE SET ...` here: uni-db evaluates NOT NULL constraints
+        // on the initial MERGE create (before ON CREATE SET runs), so
+        // required columns (mime, created_at) blow up. Instead do a
+        // host-side MATCH-or-CREATE: cheap because content_id is Hash-
+        // indexed, and idempotent because the second leg short-circuits
+        // on an existing row.
         let session = self.db.session();
+        let existing = session
+            .query_with("MATCH (c:ArtifactContent {content_id: $cid}) RETURN id(c) AS vid LIMIT 1")
+            .param("cid", Value::String(spec.content_id.clone()))
+            .fetch_all()
+            .await
+            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        if let Some(row) = existing.rows().first() {
+            let vid: i64 = row
+                .get("vid")
+                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            return Ok(vid);
+        }
+
         let tx = session
             .tx()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
 
         let now = Utc::now();
-        let mut qb = tx
-            .query_with(cypher)
+        let result = tx
+            .query_with(
+                "CREATE (c:ArtifactContent {
+                    content_id: $cid, bytes: $bytes, uri: $uri,
+                    mime: $mime, size: $size, perceptual_hash: $phash,
+                    audio_fingerprint: $afp, created_at: $created_at
+                }) RETURN id(c) AS vid",
+            )
             .param("cid", Value::String(spec.content_id.clone()))
             .param(
                 "bytes",
@@ -125,27 +133,25 @@ impl KnowledgeBase {
             )
             .param("uri", spec.uri.map(Value::String).unwrap_or(Value::Null))
             .param("mime", Value::String(spec.mime.clone()))
-            .param("size", Value::Int(spec.size));
-        qb = qb.param(
-            "phash",
-            spec.perceptual_hash.map(Value::Int).unwrap_or(Value::Null),
-        );
-        qb = qb.param(
-            "afp",
-            spec.audio_fingerprint
-                .map(Value::Bytes)
-                .unwrap_or(Value::Null),
-        );
-        qb = qb.param("created_at", datetime_value(now));
-
-        let result = qb
+            .param("size", Value::Int(spec.size))
+            .param(
+                "phash",
+                spec.perceptual_hash.map(Value::Int).unwrap_or(Value::Null),
+            )
+            .param(
+                "afp",
+                spec.audio_fingerprint
+                    .map(Value::Bytes)
+                    .unwrap_or(Value::Null),
+            )
+            .param("created_at", datetime_value(now))
             .fetch_all()
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
         let row = result
             .rows()
             .first()
-            .ok_or_else(|| UnikoError::Storage("MERGE returned no rows".into()))?;
+            .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
         let vid: i64 = row
             .get("vid")
             .map_err(|e| UnikoError::Storage(e.to_string()))?;

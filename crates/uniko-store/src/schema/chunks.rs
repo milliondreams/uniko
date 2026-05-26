@@ -25,13 +25,13 @@ pub(crate) fn register_labels<'a>(
         .property_nullable("mime_type", DataType::String)
         // Modality + positioning. `modality` is nullable for migration —
         // existing rows are backfilled to `"text"` by the migration; new
-        // ingests always set it explicitly. `bbox` is `[x0, y0, x1, y1]`.
+        // ingests always set it explicitly. The image/audio/video
+        // positioning fields (`bbox`, `time_start_ms`, etc.) land with
+        // Track B together with the binary chunkers that populate them —
+        // declaring them now without a producer trips a uni-db Arrow
+        // inference fallback (`List<Float32>` → `List<Utf8>`) on every
+        // chunk insert.
         .property_nullable("modality", DataType::String)
-        .property_nullable("bbox", DataType::List(Box::new(DataType::Float32)))
-        .property_nullable("time_start_ms", DataType::Int64)
-        .property_nullable("time_end_ms", DataType::Int64)
-        .property_nullable("page_number", DataType::Int32)
-        .property_nullable("reading_order", DataType::Int32)
         // Tracks which derivation model produced this chunk. NULL for
         // non-derived chunks (e.g., direct text chunking).
         .property_nullable("source_model_version", DataType::String)
@@ -47,8 +47,6 @@ pub(crate) fn register_labels<'a>(
         .index("symbol_name", IndexType::Scalar(ScalarType::Hash))
         .index("speaker", IndexType::Scalar(ScalarType::Hash))
         .index("modality", IndexType::Scalar(ScalarType::Hash))
-        .index("time_start_ms", IndexType::Scalar(ScalarType::BTree))
-        .index("page_number", IndexType::Scalar(ScalarType::BTree))
         .index(
             "embedding",
             IndexType::Vector(super::auto_embed_vector_index("text", config)),
