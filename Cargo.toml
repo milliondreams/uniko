@@ -102,6 +102,9 @@ regex = "1"
 sha2 = "0.10"
 hex = "0.4"
 
+# Object storage (S3 / R2 / GCS / MinIO / in-memory for tests)
+object_store = { version = "0.11", features = ["aws"] }
+
 # Dev dependencies
 proptest = "1"
 

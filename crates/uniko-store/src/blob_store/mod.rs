@@ -23,10 +23,11 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, UnikoError};
+use crate::error::Result;
 
 pub mod fs;
 pub mod lance;
+pub mod s3;
 
 /// Per-KB blob-storage backend selection.
 ///
@@ -137,11 +138,17 @@ pub fn build_backend(cfg: &BlobStorage) -> Result<Box<dyn BlobStore>> {
         BlobStorage::Fs { root } => {
             Ok(Box::new(fs::FsBlobStore::new(root.clone())?) as Box<dyn BlobStore>)
         }
-        BlobStorage::S3 { .. } => Err(UnikoError::Config(
-            "BlobStorage::S3 is not yet wired (object_store dep pending). \
-             Use BlobStorage::Lance (default) or BlobStorage::Fs."
-                .into(),
-        )),
+        BlobStorage::S3 {
+            bucket,
+            prefix,
+            endpoint,
+            region,
+        } => Ok(Box::new(s3::S3BlobStore::from_config(
+            bucket,
+            prefix.as_deref(),
+            endpoint.as_deref(),
+            region.as_deref(),
+        )?) as Box<dyn BlobStore>),
     }
 }
 
