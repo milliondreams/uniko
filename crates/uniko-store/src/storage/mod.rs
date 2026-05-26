@@ -398,16 +398,20 @@ async fn apply_schema(db: &Uni, config: &UnikoConfig) -> Result<()> {
 pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
     let embed_eps = resolve_eps(config.embedding.execution_providers.as_deref());
     let rerank_eps = resolve_eps(config.reranker.execution_providers.as_deref());
-    // The NLP cascade has no per-task config knob today; mirror the
-    // embedder's setting so all three local/onnx aliases end up on the
-    // same device by default.
-    let nlp_eps = embed_eps.clone();
+    // NLP defaults to the embedder's device list when the operator
+    // hasn't explicitly overridden it — keeps all three local/onnx
+    // aliases on the same device by default while still letting a
+    // bench profile pin NLP to CPU when the embedder is on GPU.
+    let nlp_eps = match config.nlp.execution_providers.as_deref() {
+        Some(eps) => eps.to_vec(),
+        None => embed_eps.clone(),
+    };
 
     let mut catalog = vec![
         ModelAliasSpec {
             alias: EMBED_ALIAS.to_string(),
             task: ModelTask::Embed,
-            provider_id: "local/onnx".to_string(),
+            provider_id: config.embedding.provider.clone(),
             model_id: config.embedding.model_id.clone(),
             revision: None,
             warmup: WarmupPolicy::Lazy,
@@ -415,15 +419,13 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
             timeout: None,
             load_timeout: None,
             retry: None,
-            options: serde_json::json!({
-                "execution_providers": embed_eps,
-            }),
+            options: build_embed_options(&config.embedding, &embed_eps),
         },
         ModelAliasSpec {
             alias: NLP_ALIAS.to_string(),
             task: ModelTask::Raw,
             provider_id: "local/onnx".to_string(),
-            model_id: "dragonscale-ai/kniv-deberta-nlp-base-en-xsmall".to_string(),
+            model_id: config.nlp.model_id.clone(),
             revision: None,
             warmup: WarmupPolicy::Lazy,
             required: false,
@@ -431,8 +433,8 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
             load_timeout: None,
             retry: None,
             options: serde_json::json!({
-                "artifact": "onnx/cascade-int8.onnx",
-                "max_batch_size": 16,
+                "artifact": config.nlp.artifact,
+                "max_batch_size": config.nlp.max_batch_size,
                 "execution_providers": nlp_eps,
             }),
         },
@@ -488,6 +490,41 @@ fn default_eps() -> Vec<String> {
 #[cfg(not(any(feature = "gpu-cuda", feature = "gpu-metal")))]
 fn default_eps() -> Vec<String> {
     vec!["cpu".to_string()]
+}
+
+/// Compose the `options` JSON for the embed alias based on the
+/// selected provider.
+///
+/// `local/onnx` accepts `execution_providers`; remote providers
+/// (`remote/openai`, `remote/voyageai`, ...) take any
+/// `provider_options` the user supplied verbatim and additionally
+/// receive `embedding_dimensions` so xervo's OpenAI provider can
+/// thread it into the `/embeddings` request.
+fn build_embed_options(
+    cfg: &crate::config::EmbeddingConfig,
+    embed_eps: &[String],
+) -> serde_json::Value {
+    let mut opts = match cfg.provider_options.clone() {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    if cfg.provider == "local/onnx" {
+        // Caller-supplied provider_options pass through for models that
+        // resolve via uni-xervo's HF-Hub fallback path (no preset).
+        // Those models need `artifact`, `pooling`, `dimensions`,
+        // `token_type_ids`, etc. on the alias options.  Plus the
+        // execution-provider list xervo always wants for local/onnx.
+        opts.insert(
+            "execution_providers".to_string(),
+            serde_json::json!(embed_eps),
+        );
+        return serde_json::Value::Object(opts);
+    }
+    opts.insert(
+        "embedding_dimensions".to_string(),
+        serde_json::json!(cfg.dimensions),
+    );
+    serde_json::Value::Object(opts)
 }
 
 /// Convert a uni-db `Vid` to our `NodeId` (`i64`).

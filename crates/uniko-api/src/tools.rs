@@ -7,4 +7,13 @@
 
 // Rust guideline compliant
 
-pub use uniko_memory::{RecordEpisodeParams, record_episode};
+pub use uniko_memory::{
+    RecordActionParams, RecordActionResult, RecordEpisodeParams, WorkingMemoryParams,
+    record_action, record_episode, working_memory,
+};
+pub use uniko_memory::rules::{
+    AddRuleParams, DecayReport, RuleLifecycleConfig, add_rule, apply_decay_cycle,
+    record_rule_match,
+};
+pub use uniko_memory::nl_to_cypher::{is_safe_read_only, translate as translate_nl_to_cypher};
+pub use uniko_memory::policy::{Viewer, filter_bundle, visibility_admits};

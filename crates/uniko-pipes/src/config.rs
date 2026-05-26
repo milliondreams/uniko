@@ -29,6 +29,17 @@ pub struct PipelineConfig {
     /// Caps work per cycle so a long-running ingest doesn't starve
     /// other agents.  Spillover is picked up on the next sweep.
     pub consolidation_batch_size: u32,
+    /// Run P5 (procedure promotion) + P6 (topic detection) every N
+    /// successful consolidation cycles for an agent.
+    ///
+    /// `0` disables the cortex sweep entirely.
+    pub cortex_cycle_every_n_consolidations: u32,
+    /// Minimum wall-clock gap (seconds) between cortex sweeps.
+    ///
+    /// Acts as an upper bound on cortex frequency even when many
+    /// consolidation cycles fire rapidly.  Applied independently per
+    /// agent for procedures and globally for topics.
+    pub cortex_min_interval_secs: u64,
     /// Use the LLM (when available) to extract `(subject, predicate,
     /// object)` triples from observation content.
     ///
@@ -60,6 +71,8 @@ impl Default for PipelineConfig {
             consolidation_threshold: 20,
             consolidation_interval_secs: 900,
             consolidation_batch_size: 500,
+            cortex_cycle_every_n_consolidations: 4,
+            cortex_min_interval_secs: 600,
             extract_triples_via_llm: false,
             retry: RetryPolicy::default(),
             circuit_failure_threshold: 5,

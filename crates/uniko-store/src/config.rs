@@ -42,8 +42,30 @@ pub struct EmbeddingConfig {
     /// `None`, [`embed_catalog`](crate::storage::embed_catalog) picks
     /// a feature-aware default (CUDA → CPU on `gpu-cuda`, CoreML → CPU
     /// on `gpu-metal`, CPU otherwise).
+    ///
+    /// Ignored when `provider != "local/onnx"`.
     #[serde(default)]
     pub execution_providers: Option<Vec<String>>,
+    /// Xervo provider id used for the embed alias.  Defaults to
+    /// `"local/onnx"` (the bundled ONNX provider).  Set to
+    /// `"remote/openai"` to route embeddings through an
+    /// OpenAI-compatible endpoint (production OpenAI, or a litellm
+    /// proxy serving `/v1/embeddings`).  Other xervo embedding
+    /// providers (`remote/voyageai`, `remote/cohere`,
+    /// `remote/azure-openai`) work the same way; the catalog passes
+    /// `provider_options` through verbatim.
+    #[serde(default = "default_embed_provider")]
+    pub provider: String,
+    /// Provider-specific options merged into the alias's `options`
+    /// JSON at catalog-build time.  For `remote/openai` this is where
+    /// `base_url` lands so xervo points at the right endpoint
+    /// (e.g. `{"base_url": "http://litellm-cloud:4000/v1"}`).
+    #[serde(default)]
+    pub provider_options: Option<serde_json::Value>,
+}
+
+fn default_embed_provider() -> String {
+    "local/onnx".into()
 }
 
 impl EmbeddingConfig {
@@ -56,6 +78,8 @@ impl EmbeddingConfig {
             document_prefix: Some("search_document: ".into()),
             query_prefix: Some("search_query: ".into()),
             execution_providers: None,
+            provider: default_embed_provider(),
+            provider_options: None,
         }
     }
 
@@ -68,6 +92,8 @@ impl EmbeddingConfig {
             document_prefix: Some("search_document: ".into()),
             query_prefix: Some("search_query: ".into()),
             execution_providers: None,
+            provider: default_embed_provider(),
+            provider_options: None,
         }
     }
 
@@ -80,6 +106,8 @@ impl EmbeddingConfig {
             document_prefix: None,
             query_prefix: None,
             execution_providers: None,
+            provider: default_embed_provider(),
+            provider_options: None,
         }
     }
 
@@ -93,6 +121,8 @@ impl EmbeddingConfig {
             document_prefix: None,
             query_prefix: Some("Represent this sentence for searching relevant passages: ".into()),
             execution_providers: None,
+            provider: default_embed_provider(),
+            provider_options: None,
         }
     }
 
@@ -108,8 +138,134 @@ impl EmbeddingConfig {
             document_prefix: None,
             query_prefix: Some("Represent this sentence for searching relevant passages: ".into()),
             execution_providers: None,
+            provider: default_embed_provider(),
+            provider_options: None,
         }
     }
+
+    /// `onnx-community/embeddinggemma-300m-ONNX` — 300M params, 768d,
+    /// Google's Gemma-3-based retrieval embedder (Sentence-Transformers
+    /// export by the ONNX community).
+    ///
+    /// Resolves through uni-xervo's `local/onnx` HF-Hub fallback path
+    /// because the embedder isn't in the bundled preset table.  We
+    /// therefore supply every ONNX option the resolver needs via
+    /// `provider_options`:
+    ///
+    /// - `artifact: "onnx/model.onnx"` — standard onnx-community export path.
+    /// - `pooling: "mean"` — Sentence-Transformers convention for the
+    ///   official EmbeddingGemma checkpoint (the SBERT modules config
+    ///   ships a mean-pool head).
+    /// - `dimensions: 768` — full Matryoshka head; truncate via
+    ///   per-call dimensions arg if you need 512/256/128.
+    /// - `token_type_ids: false` — Gemma's tokenizer doesn't produce
+    ///   them.
+    /// - `max_seq_len: 2048` — Gemma supports 8K but most retrieval
+    ///   chunks land under 2K; raise via override if needed.
+    ///
+    /// Document / query prefixes follow EmbeddingGemma's task-prompt
+    /// template (the model was trained on these literal strings).
+    pub fn embedding_gemma_300m() -> Self {
+        Self {
+            model_id: "onnx-community/embeddinggemma-300m-ONNX".into(),
+            dimensions: 768,
+            batch_size: 16,
+            document_prefix: Some("title: none | text: ".into()),
+            query_prefix: Some("task: search result | query: ".into()),
+            execution_providers: None,
+            provider: default_embed_provider(),
+            provider_options: Some(serde_json::json!({
+                "artifact": "onnx/model.onnx",
+                "pooling": "mean",
+                "dimensions": 768,
+                "token_type_ids": false,
+                "max_seq_len": 2048,
+                "normalize": true,
+            })),
+        }
+    }
+
+    /// `google/embeddinggemma-300m` served via uni-xervo's
+    /// `local/mistralrs` provider on GPU.
+    ///
+    /// Same model weights as [`Self::embedding_gemma_300m`], but
+    /// loaded through mistralrs (candle-cuda) instead of ORT.
+    /// mistralrs's `EmbeddingModelBuilder` handles pooling internally
+    /// and probes the embedding dimension at load time, so we only
+    /// need to pass dtype here.  The Sentence-Transformers task
+    /// prompts (`document_prefix` / `query_prefix`) are applied at
+    /// xervo's embed call site, so they work identically across
+    /// runtimes.
+    ///
+    /// `dtype: "f32"` because mistralrs's candle backend on this stack
+    /// dispatches embeddings on CPU under some build configurations
+    /// (no candle-cuda compiled in, or no CUDA device visible) and
+    /// F16 CPU inference produces NaN outputs.  F32 always works.
+    /// Override `provider_options.dtype` if your build has working
+    /// candle-cuda dispatch.
+    pub fn embedding_gemma_300m_mistralrs() -> Self {
+        Self {
+            model_id: "google/embeddinggemma-300m".into(),
+            dimensions: 768,
+            batch_size: 16,
+            document_prefix: Some("title: none | text: ".into()),
+            query_prefix: Some("task: search result | query: ".into()),
+            execution_providers: None,
+            provider: "local/mistralrs".into(),
+            provider_options: Some(serde_json::json!({
+                "dtype": "f32",
+            })),
+        }
+    }
+}
+
+/// NLP cascade model selection.
+///
+/// The bench's NER + observation extraction steps invoke a Raw-task
+/// xervo alias backed by uni-db's `local/onnx` provider.  Defaults
+/// match the legacy hardcoded values that lived in
+/// `storage/mod.rs::embed_catalog`; surfacing them here lets a bench
+/// profile swap the cascade (e.g. `*-small` vs `*-xsmall`, FP32 vs
+/// INT8) without a code change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NlpConfig {
+    /// HuggingFace model id for the NLP cascade.
+    #[serde(default = "default_nlp_model_id")]
+    pub model_id: String,
+    /// Which ONNX artifact under `model_id/` to load.
+    #[serde(default = "default_nlp_artifact")]
+    pub artifact: String,
+    /// Maximum batch size for the ONNX session.
+    #[serde(default = "default_nlp_max_batch_size")]
+    pub max_batch_size: usize,
+    /// Optional execution-provider override.  `None` → feature-aware
+    /// default (cuda+cpu on `gpu-cuda`, coreml+cpu on `gpu-metal`,
+    /// cpu otherwise).
+    #[serde(default)]
+    pub execution_providers: Option<Vec<String>>,
+}
+
+impl Default for NlpConfig {
+    fn default() -> Self {
+        Self {
+            model_id: default_nlp_model_id(),
+            artifact: default_nlp_artifact(),
+            max_batch_size: default_nlp_max_batch_size(),
+            execution_providers: None,
+        }
+    }
+}
+
+fn default_nlp_model_id() -> String {
+    "dragonscale-ai/kniv-deberta-nlp-base-en-xsmall".to_string()
+}
+
+fn default_nlp_artifact() -> String {
+    "onnx/cascade-int8.onnx".to_string()
+}
+
+fn default_nlp_max_batch_size() -> usize {
+    16
 }
 
 /// Cross-encoder reranker selection.
@@ -394,6 +550,9 @@ pub struct UnikoConfig {
     /// Cross-encoder reranker selection (disabled by default).
     #[serde(default)]
     pub reranker: RerankerConfig,
+    /// NLP cascade selection (model id + ONNX artifact).
+    #[serde(default)]
+    pub nlp: NlpConfig,
     /// Vector index algorithm and quantization strategy.
     pub vector_algorithm: VectorAlgorithm,
     /// Distance metric for similarity search.
@@ -558,6 +717,7 @@ impl Default for UnikoConfig {
             observation_rules_path: None,
             embedding: EmbeddingConfig::nomic_v15(),
             reranker: RerankerConfig::default(),
+            nlp: NlpConfig::default(),
             vector_algorithm: VectorAlgorithm::HnswSq {
                 m: 16,
                 ef_construction: 100,

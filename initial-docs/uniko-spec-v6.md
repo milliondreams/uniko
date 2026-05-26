@@ -171,13 +171,13 @@ Six systems define the current agent memory landscape. Each solves a subset of t
 | F37 | MVP | Track fact confidence with Laplace smoothing based on observation count |
 | F38 | MVP | Detect contradictions: when contradicting observations exceed 40% of total, invalidate the fact by closing its BTIC interval |
 | F39 | MVP | Detect entity drift: when an entity accumulates > 4 invalidations in 30 days, flag as unstable |
-| F40 | DIF | Cluster entities into Topics via community detection on co-occurrence graph |
+| F40 | MVP | Cluster entities into Topics via community detection on co-occurrence graph (weighted Label Propagation; Topic.name defaults to deterministic member-name join, optional LLM naming under cortex `llm` feature) |
 
 #### Procedural (F41-F52)
 | ID | Tier | Requirement |
 |---|---|---|
-| F41 | DIF | Promote recurring action sequences into Procedure nodes (candidate → active → deprecated) |
-| F42 | DIF | Track procedure effectiveness (success/failure counts, use_count) |
+| F41 | MVP | Promote recurring action sequences into Procedure nodes (candidate → active → deprecated) |
+| F42 | MVP | Track procedure effectiveness (success/failure counts, use_count) |
 | F43 | DIF | Support procedure precondition matching via Locy WHERE fragments — procedures only execute when preconditions match the current state |
 | F44 | MVP | Store Locy rules as first-class Rule nodes with full lifecycle: Created → Active → Demoted → Pruned/Superseded. Stdlib rules exempt from demotion. |
 | F45 | MVP | Ship stdlib rules with full Locy source: `episode_pattern_detector`, `sequence_detector`, `contradiction_detector`, `relevance_decay` |
@@ -221,7 +221,7 @@ Six systems define the current agent memory landscape. Each solves a subset of t
 | F71 | DIF | Python binding via PyO3 exposing all layers |
 | F72 | MVP | Operate without LLM — degraded but functional: storage, retrieval, Locy reasoning, local NER |
 
-**Summary:** MVP: 47 requirements. DIF: 19 requirements. RES: 6 requirements. Total: 72.
+**Summary:** MVP: 50 requirements. DIF: 16 requirements. RES: 6 requirements. Total: 72.
 
 
 ### 6. Non-Functional Requirements
@@ -417,8 +417,8 @@ Eight pipelines process data from ingestion to knowledge:
 | **P2: NER** | Sync/near-sync, < 100ms | Extract entities using local NER (spaCy, rules, tree-sitter). LLM optional. | Production |
 | **P3: Observations** | Async, < 5s | Extract factual statements from messages. Flag contradictions. | Production |
 | **P4: Consolidation** | Background, periodic | Derive facts from observations, reinforce/invalidate, detect drift, apply Locy rules | Production |
-| **P5: Procedure Promotion** | Background, periodic | Detect recurring action sequences → promote to Procedures | Differentiator |
-| **P6: Topic Detection** | Background, low frequency | Community detection on entity co-occurrence → create Topics | Differentiator |
+| **P5: Procedure Promotion** | Background, post-consolidation | Detect recurring action sequences → promote to Procedures | Production |
+| **P6: Topic Detection** | Background, post-consolidation | Community detection on entity co-occurrence (weighted LPA) → create Topics with mean-pooled embedding | Production |
 | **P7: Embedding & Summary** | Async, continuous | 4 sub-pipelines: auto-embed, computed embed, artifact pooling/multimodal, summarization | Production |
 | **P8: Rule Induction** | Background, low frequency | MINE → GENERATE → VALIDATE → PERSIST → MONITOR | **Research** |
 
@@ -431,7 +431,7 @@ The pipeline management system provides:
 - **Retry with backoff**: 3 attempts, exponential backoff (500ms → 30s) for LLM-dependent operations
 - **Circuit breaker**: LLM provider protection (5 failures → open 60s → probe → recovery). When open, all LLM-dependent steps fall back to local alternatives (rule-based NER, rule-based observation extraction)
 - **Backpressure**: bounded channels (200 ingest, 32 consolidation). Interactive queries preempt background via `biased` select
-- **Coordination**: P3 completion notifies consolidation worker. Consolidation triggers on 20 observations OR 15 min timer
+- **Coordination**: P3 completion notifies consolidation worker. Consolidation triggers on 20 observations OR 15 min timer. After every successful consolidation cycle the worker also drives the **cortex sweep** (P5 procedure promotion + P6 topic detection), gated by two independent throttles: a per-agent cycle counter (`cortex_cycle_every_n_consolidations`, default 4) AND a per-sweep wall-clock minimum (`cortex_min_interval_secs`, default 600s). P5 is keyed per agent; P6 is global. Cortex failures are logged and dropped — they never destabilise consolidation
 - **Cancellation**: CancellationToken hierarchy for graceful shutdown (stop ingest 5s → stop consolidation 10s → force 30s)
 - **Observability**: 14 metrics (via `metrics` crate), structured tracing (via `tracing`), health endpoint with per-worker status and circuit breaker state
 - **Dead-letter queue**: failed items stored as DeadLetter nodes with automatic retry every 5 minutes
@@ -859,8 +859,8 @@ All benchmarks run at **fixed token budgets** (8K, 16K, 32K) to force memory arc
 | Phase | Tier | What Ships | Key Milestone |
 |---|---|---|---|
 | **1** | MVP | Schema (all node types, all indexes) + P1 (ingest) + P2 (NER) + P3 (observations) + basic recall + stdlib rules + offline mode | Messages → Entities → Observations searchable |
-| **2** | MVP | P4 (consolidation) + Facts with BTIC + P7a/7b (embedding) + P7d (summaries) + memory decay + contradiction/drift detection | Facts derived; phase1_only_pct > 0 |
-| **3** | DIF | Episodes + Actions + Procedures + P5 + P6 + authored rules (via `add_rule`) + basic access control + working memory traversal + NL-to-Cypher | Procedural memory; access control; benchmark validation |
+| **2** | MVP | P4 (consolidation) + Facts with BTIC + P7a/7b (embedding) + P7d (summaries) + memory decay + contradiction/drift detection + P5 (procedure promotion) + P6 (topic detection, weighted LPA with optional LLM naming) wired into the consolidation worker on a cadence | Facts derived; Topics + Procedures populated; phase1_only_pct > 0 |
+| **3** | DIF | Episodes + Actions + authored rules (via `add_rule`) + basic access control + working memory traversal + NL-to-Cypher | Access control; benchmark validation |
 | **4** | DIF | Benchmark harness + full LoCoMo/LongMemEval run + ASSUME/ABDUCE builders + contrastive retrieval + MCP + Python binding | Published benchmark numbers; prove LoCoMo uplift |
 | **5** | RES | FS/Shell/Git integration + cross-agent sharing + organization/team support | Layer 4 integration surfaces |
 | **6** | RES | P8 (rule induction) + MCTS planning + multimodal embedding + audio/video chunking | Research extensions |

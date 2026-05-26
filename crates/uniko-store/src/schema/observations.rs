@@ -38,6 +38,10 @@ pub(crate) fn register_labels<'a>(
         .property_nullable("temporal_anchor", DataType::DateTime)
         .property_nullable("observed_at", DataType::DateTime)
         .property_nullable("confidence", DataType::Float64)
+        // F66 access control: optional visibility scope.  `null` and
+        // `"public"` mean visible to anyone; `"private:<pid>"` /
+        // `"team:<tid>"` / `"org:<oid>"` restrict the audience.
+        .property_nullable("visibility", DataType::String)
         .property_nullable(
             "embedding",
             DataType::Vector {

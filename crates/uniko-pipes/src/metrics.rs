@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::circuit_breaker::CircuitState;
 
-/// Register all 14 pipeline metrics with the global recorder.
+/// Register all pipeline metrics with the global recorder.
 ///
 /// Safe to call multiple times — descriptions are idempotent.
 pub fn register_pipeline_metrics() {
@@ -64,6 +64,31 @@ pub fn register_pipeline_metrics() {
     describe_gauge!(
         "uniko.deadletter.pending",
         "Current dead-letter queue depth"
+    );
+
+    describe_counter!(
+        "uniko.cortex.topic_cycles_total",
+        "Total topic-detection sweeps (P6)"
+    );
+    describe_histogram!(
+        "uniko.cortex.topic_cycle_ms",
+        "Topic-detection sweep duration"
+    );
+    describe_counter!(
+        "uniko.cortex.topics_created_total",
+        "Topic nodes created by P6"
+    );
+    describe_counter!(
+        "uniko.cortex.procedure_cycles_total",
+        "Total procedure-promotion sweeps (P5)"
+    );
+    describe_histogram!(
+        "uniko.cortex.procedure_cycle_ms",
+        "Procedure-promotion sweep duration"
+    );
+    describe_counter!(
+        "uniko.cortex.procedures_promoted_total",
+        "Procedures promoted by P5"
     );
 }
 
@@ -122,6 +147,37 @@ pub fn emit_circuit_state(state: CircuitState) {
 /// Update the dead-letter pending gauge.
 pub fn emit_deadletter_pending(count: usize) {
     gauge!("uniko.deadletter.pending").set(count as f64);
+}
+
+/// Increment the topic-detection (P6) cycle counter.
+pub fn emit_topic_cycle(agent_id: &str) {
+    counter!("uniko.cortex.topic_cycles_total", "agent_id" => agent_id.to_string()).increment(1);
+}
+
+/// Record topic-detection sweep duration in milliseconds.
+pub fn emit_topic_cycle_duration(ms: f64) {
+    histogram!("uniko.cortex.topic_cycle_ms").record(ms);
+}
+
+/// Increment the topics-created counter.
+pub fn emit_topics_created(n: usize) {
+    counter!("uniko.cortex.topics_created_total").increment(n as u64);
+}
+
+/// Increment the procedure-promotion (P5) cycle counter.
+pub fn emit_procedure_cycle(agent_id: &str) {
+    counter!("uniko.cortex.procedure_cycles_total", "agent_id" => agent_id.to_string())
+        .increment(1);
+}
+
+/// Record procedure-promotion sweep duration in milliseconds.
+pub fn emit_procedure_cycle_duration(ms: f64) {
+    histogram!("uniko.cortex.procedure_cycle_ms").record(ms);
+}
+
+/// Increment the procedures-promoted counter.
+pub fn emit_procedures_promoted(n: usize) {
+    counter!("uniko.cortex.procedures_promoted_total").increment(n as u64);
 }
 
 /// Point-in-time snapshot of key pipeline metrics.
