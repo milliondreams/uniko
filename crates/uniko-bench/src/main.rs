@@ -6,19 +6,23 @@
 //! # Usage
 //!
 //! ```bash
-//! # Retrieval-only (no LLM needed)
-//! cargo run -p uniko-bench -- --data locomo10.json --retrieval-only
-//!
-//! # With local LLM
-//! cargo run -p uniko-bench -- --data locomo10.json \
-//!     --llm-alias llm/gemma4 --llm-model-id google/gemma-3-4b-it
+//! # Run with a bench-config profile
+//! ./crates/uniko-bench/run.sh \
+//!     --bench-config crates/uniko-bench/bench-configs/locomo-bge-openai.json \
+//!     --data data/locomo10.json \
+//!     --conversations conv-26 \
+//!     --output data/results.json
 //! ```
+//!
+//! Every model / device / recall / cost knob lives in the bench-config
+//! JSON; CLI carries only what changes per invocation.
 
-mod data;
-mod eval;
-mod ingest;
-mod query;
-mod report;
+// Rust guideline compliant
+
+use uniko_bench::{
+    IngestObserver, bench_config::BenchConfig, data, eval, events, ingest, pricing as pricing_mod,
+    query, report,
+};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,51 +35,28 @@ use data::{QuestionCategory, build_evidence_lookup, parse_sessions, resolve_evid
 use query::QueryResult;
 
 /// LoCoMo benchmark for uniko cognitive memory.
+///
+/// Most knobs (models, embedder, reranker, NLP cascade, recall
+/// pipeline, pricing) now live in the bench-config JSON.  The CLI
+/// carries only what varies per invocation.
 #[derive(Parser)]
 #[command(name = "uniko-bench", about = "Run LoCoMo benchmark against uniko")]
 struct Cli {
-    /// Path to locomo10.json data file.
+    /// Path to the bench-config JSON profile.
+    ///
+    /// See [`uniko_bench::bench_config::BenchConfig`] doc comment for
+    /// the schema, and `crates/uniko-bench/bench-configs/` for
+    /// ready-to-use starter profiles.
+    #[arg(long)]
+    bench_config: PathBuf,
+
+    /// Path to the LoCoMo dataset JSON (e.g. `data/locomo10.json`).
     #[arg(long)]
     data: PathBuf,
 
-    /// LLM model alias for answer generation.
-    #[arg(long)]
-    llm_alias: Option<String>,
-
-    /// HuggingFace model ID for the LLM (e.g., "google/gemma-3-4b-it").
-    #[arg(long)]
-    llm_model_id: Option<String>,
-
-    /// Separate LLM alias for judge (defaults to llm-alias).
-    #[arg(long)]
-    judge_alias: Option<String>,
-
-    /// HuggingFace model ID (or provider model name) for the judge LLM.
-    /// Defaults to llm-model-id.
-    #[arg(long)]
-    judge_model_id: Option<String>,
-
-    /// Provider for the judge LLM (e.g. "remote/openai" for GPT-5).
-    /// Defaults to "local/mistralrs".
-    #[arg(long)]
-    judge_provider: Option<String>,
-
-    /// Provider for the generation LLM. Defaults to "local/mistralrs".
-    #[arg(long)]
-    llm_provider: Option<String>,
-
-    /// Base URL of an OpenAI-compatible HTTP server for the generation
-    /// LLM (e.g. "http://127.0.0.1:1234/v1"). When set, the gen alias
-    /// is registered against `remote/openai` with this base URL —
-    /// useful for LM Studio / vLLM / llama.cpp servers exposing
-    /// `/v1/chat/completions`. Implies `--llm-provider remote/openai`.
-    #[arg(long)]
-    llm_base_url: Option<String>,
-
-    /// Base URL of an OpenAI-compatible server for the judge LLM.
-    /// Defaults to OpenAI's public API.
-    #[arg(long)]
-    judge_base_url: Option<String>,
+    /// Output JSON report file path.
+    #[arg(long, default_value = "locomo_results.json")]
+    output: PathBuf,
 
     /// Run only specific conversation IDs (comma-separated).
     #[arg(long)]
@@ -85,18 +66,6 @@ struct Cli {
     #[arg(long)]
     categories: Option<String>,
 
-    /// Output JSON report file path.
-    #[arg(long, default_value = "locomo_results.json")]
-    output: PathBuf,
-
-    /// Skip LLM judge evaluation.
-    #[arg(long)]
-    no_judge: bool,
-
-    /// Retrieval-only mode (no LLM generation).
-    #[arg(long)]
-    retrieval_only: bool,
-
     /// Directory for persistent KB storage.
     #[arg(long, default_value = "data/kb")]
     ingest_dir: PathBuf,
@@ -105,122 +74,87 @@ struct Cli {
     #[arg(long)]
     reuse: bool,
 
-    /// When set, P4 Consolidation refines each Observation's
-    /// `(subject, predicate, object)` triple via the LLM at this
-    /// alias (typically the `--llm-alias` value) before grouping
-    /// into Facts.  Off by default — keeps the SRL/DEP triple P3
-    /// produces.  Adds one LLM call per Observation per cycle.
-    #[arg(long)]
-    extract_triples_llm_alias: Option<String>,
-
-    /// Disable the graph spreading-activation channel in Phase 2 recall.
-    /// Default: on.  Channel only fires when the query has at least one
-    /// resolvable entity seed.
-    #[arg(long)]
-    no_phase2_graph: bool,
-
-    /// Disable the temporal-interval channel in Phase 2 recall.
-    /// Default: on.  Channel only fires when the query has a parsed
-    /// temporal phrase (e.g. "last May", "yesterday").
-    #[arg(long)]
-    no_phase2_temporal: bool,
-
-    /// Path to xervo model catalog JSON file.
+    /// Path to a xervo model catalog JSON file (advanced — overrides
+    /// the catalog built from the bench-config when present).
     #[arg(long)]
     catalog: Option<PathBuf>,
 
-    /// Path to schema JSON file.
+    /// Path to schema JSON file (advanced — overrides the default
+    /// schema registration).
     #[arg(long)]
     schema: Option<PathBuf>,
+}
 
-    /// Override embedding dimensions (default 384 for BGE-small / MiniLM,
-    /// 768 for Nomic, 1024 for BGE-large).
-    #[arg(long)]
-    embedding_dim: Option<usize>,
+/// Legacy flags that have been folded into the bench-config JSON.
+/// Listed here so the pre-parse pass can emit migration-specific
+/// errors when an operator still passes one of them.
+const RETIRED_FLAGS: &[(&str, &str)] = &[
+    ("--llm-alias", "models.gen.alias"),
+    ("--llm-model-id", "models.gen.model_id"),
+    ("--llm-provider", "models.gen.provider"),
+    ("--llm-base-url", "models.gen.base_url"),
+    ("--llm-use-default-options", "models.gen.use_default_options"),
+    ("--judge-alias", "models.judge.alias"),
+    ("--judge-model-id", "models.judge.model_id"),
+    ("--judge-provider", "models.judge.provider"),
+    ("--judge-base-url", "models.judge.base_url"),
+    ("--no-judge", "judge_enabled (set to false)"),
+    ("--retrieval-only", "retrieval_only (set to true)"),
+    (
+        "--extract-triples-llm-alias",
+        "models.extract_triples.alias (set models.extract_triples to an LlmAlias object)",
+    ),
+    ("--no-phase2-graph", "recall.phase2_graph_enabled (set false)"),
+    (
+        "--no-phase2-temporal",
+        "recall.phase2_temporal_enabled (set false)",
+    ),
+    ("--embedding", "models.embedder.preset"),
+    (
+        "--embedding-dim",
+        "models.embedder.inline.dimensions (use inline embedder)",
+    ),
+    ("--no-reranker", "models.reranker.enabled (set false)"),
+    ("--reranker-model", "models.reranker.model_id"),
+    ("--reranker-style", "models.reranker.style"),
+    ("--reranker-top-n", "models.reranker.top_n"),
+    ("--recall-limit", "recall.limit"),
+    ("--phase1-strategy", "recall.phase1_strategy"),
+    ("--phase1-boost-alpha", "recall.phase1_boost_alpha"),
+    ("--variants", "recall.variants (as JSON array)"),
+    (
+        "--no-consolidation-cluster",
+        "recall.consolidation_cluster_objects (set false)",
+    ),
+    (
+        "--no-date-augment-embedding",
+        "recall.consolidation_date_augment_embedding (set false)",
+    ),
+    ("--pricing-csv", "cost.pricing_csv"),
+    ("--events-jsonl", "cost.events_jsonl"),
+    ("--no-events", "cost.no_events"),
+];
 
-    /// Embedding preset to use. One of:
-    /// - `bge-small` (default, 384d, BGE-small-en-v1.5)
-    /// - `minilm` (384d, BERT-based)
-    /// - `nomic` (768d, Nomic-embed-text-v1.5)
-    /// - `bge-large` (1024d, BGE-large-en-v1.5)
-    /// Selects the full preset (model_id + dimensions + prefixes).
-    /// `bge-small` is the Pareto winner on conv-26 — highest evidence
-    /// hit / F1 across the preset sweep with the lowest recall latency.
-    #[arg(long, default_value = "bge-small")]
-    embedding: String,
-
-    /// Disable the reranker.  Reranker is **on by default** (ms-marco
-    /// MiniLM-L-6-v2) — pass `--no-reranker` to fall back to pure
-    /// recall ranking.  Useful for A/B comparison or low-latency runs.
-    #[arg(long)]
-    no_reranker: bool,
-
-    /// HuggingFace model id for the reranker. xervo 0.11 auto-detects
-    /// `token_type_ids`, so XLM-R-based models (e.g.
-    /// `BAAI/bge-reranker-base`) work alongside BERT-based ones
-    /// (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`). For
-    /// `--reranker-style generative`, use a decoder-LM export such as
-    /// `onnx-community/Qwen3-Reranker-0.6B-ONNX`.
-    #[arg(long, default_value = "cross-encoder/ms-marco-MiniLM-L-6-v2")]
-    reranker_model: String,
-
-    /// Reranker code path. `cross-encoder` (default) for BERT-family
-    /// (BGE/MiniLM) cross-encoders that emit a relevance logit;
-    /// `generative` for decoder-LM rerankers that score yes/no via
-    /// next-token logits (Qwen3-Reranker and compatible exports).
-    #[arg(long, default_value = "cross-encoder")]
-    reranker_style: String,
-
-    /// Top-N RRF candidates fed to the reranker. Memory cost scales
-    /// roughly linearly for cross-encoders and super-linearly for
-    /// decoder-LM rerankers (KV-cache). Default 50 works for BGE on a
-    /// modern GPU; lower (10-15) for Qwen3-Reranker to stay under VRAM.
-    #[arg(long, default_value = "50")]
-    reranker_top_n: usize,
-
-    /// Maximum items in the recall bundle (overrides `recall_limit`
-    /// in the embedding config).  Larger values give the gen LLM more
-    /// context at the cost of token budget.  Mem0's published runs
-    /// use 30; uniko's spec default is 15.
-    #[arg(long)]
-    recall_limit: Option<usize>,
-
-    /// Phase 1 (Compact) contribution strategy:
-    /// - `boost` (default) — Facts/Observations influence chunk ranking
-    ///   via a session-level boost; bundle stays 100% Chunks.  Validated
-    ///   to beat `merge` on conv-26+conv-30.
-    /// - `merge` — cap=3 interleave Facts by score into the Phase 3
-    ///   bundle.
-    /// - `off` — skip Phase 1 entirely.
-    #[arg(long, default_value = "boost")]
-    phase1_strategy: String,
-
-    /// Multiplicative weight applied to Fact scores when computing the
-    /// session-chunk boost under `--phase1-strategy boost`.  α=0.6 is
-    /// the validated default; α only has effect when `recall_limit <
-    /// reranker_top_n` (boost reorders the post-rerank set and pushes
-    /// boosted chunks above the truncation cutoff).
-    #[arg(long, default_value = "0.6")]
-    phase1_boost_alpha: f64,
-
-    /// Comma-separated list of query-reformulation variants to enable.
-    /// Recognised: `keywords`, `original`, `declarative`, `type_anchored`.
-    /// Empty / unset uses the *legacy single-variant default* (keywords
-    /// only).  Pass an explicit list to opt into multi-query fan-out.
-    #[arg(long, default_value = "")]
-    variants: String,
-
-    /// Disable cosine-similarity clustering of object surface forms in
-    /// P4 Consolidation.  Default: clustering on.  Useful for A/B
-    /// comparison against legacy exact-string vote bucketing.
-    #[arg(long)]
-    no_consolidation_cluster: bool,
-
-    /// Disable the `"[Month Year] "` date prefix prepended to Fact
-    /// embed text in P4 Consolidation.  Default: date-augment on.
-    /// Useful for A/B comparison against unaugmented embeddings.
-    #[arg(long)]
-    no_date_augment_embedding: bool,
+/// Scan `argv` for retired flags before clap parses, so we can emit
+/// a migration-pointer error instead of clap's generic "unexpected
+/// argument" message.
+///
+/// # Errors
+///
+/// Returns an error with the migration hint when a retired flag is
+/// detected.  The caller should propagate it to `main`.
+fn reject_retired_flags(argv: &[String]) -> Result<()> {
+    for arg in argv {
+        let name = arg.split('=').next().unwrap_or(arg);
+        if let Some((_, replacement)) = RETIRED_FLAGS.iter().find(|(flag, _)| *flag == name) {
+            anyhow::bail!(
+                "{name} is no longer accepted; move it under {replacement} in your \
+                 --bench-config JSON.  See crates/uniko-bench/src/bench_config.rs for \
+                 the full schema and crates/uniko-bench/bench-configs/ for examples."
+            );
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -235,7 +169,11 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let argv: Vec<String> = std::env::args().collect();
+    reject_retired_flags(&argv)?;
     let cli = Cli::parse();
+    let bench_cfg = BenchConfig::load(&cli.bench_config)
+        .with_context(|| format!("loading bench config {}", cli.bench_config.display()))?;
 
     // Load dataset.
     tracing::info!(path = %cli.data.display(), "loading LoCoMo dataset");
@@ -259,81 +197,16 @@ async fn main() -> Result<()> {
         .as_ref()
         .map(|c| c.split(',').filter_map(|s| s.trim().parse().ok()).collect());
 
-    // Build config with optional catalog/schema/embedding overrides.
+    // Build UnikoConfig from defaults + bench-config overrides.
     let mut config = uniko_store::config::UnikoConfig {
         catalog_path: cli.catalog.clone(),
         schema_path: cli.schema.clone(),
         ..Default::default()
     };
-    // Apply embedding preset BEFORE explicit `--embedding-dim` override so
-    // the latter wins when both are passed.
-    config.embedding = match cli.embedding.as_str() {
-        "nomic" => uniko_store::config::EmbeddingConfig::nomic_v15(),
-        "minilm" => uniko_store::config::EmbeddingConfig::minilm_l6_v2(),
-        "bge-small" => uniko_store::config::EmbeddingConfig::bge_small_en_v15(),
-        "bge-large" => uniko_store::config::EmbeddingConfig::bge_large_en_v15(),
-        other => anyhow::bail!(
-            "unknown --embedding preset {other:?}; expected one of: nomic, minilm, bge-small, bge-large"
-        ),
-    };
-    if let Some(dim) = cli.embedding_dim {
-        config.embedding.dimensions = dim;
-    }
-    // Reranker is default-on via `RerankerConfig::default()`.  Apply
-    // CLI overrides (model/style/top_n) regardless, so the user can
-    // swap models without explicitly enabling.  `--no-reranker`
-    // disables.
-    config.reranker.enabled = !cli.no_reranker;
-    if config.reranker.enabled {
-        config.reranker.model_id = cli.reranker_model.clone();
-        config.reranker.style = cli.reranker_style.clone();
-        config.reranker.top_n = cli.reranker_top_n;
-    }
-    if let Some(limit) = cli.recall_limit {
-        config.recall_limit = limit;
-        // Reranker top_n must be >= recall_limit per UnikoConfig
-        // validation; bump it when the caller raised the limit
-        // without explicitly choosing a top_n.
-        if config.reranker.enabled && config.reranker.top_n < limit {
-            config.reranker.top_n = limit;
-        }
-    }
-    config.phase1_strategy = cli.phase1_strategy.clone();
-    config.phase2_graph_enabled = !cli.no_phase2_graph;
-    config.phase2_temporal_enabled = !cli.no_phase2_temporal;
-    config.phase1_boost_alpha = cli.phase1_boost_alpha;
-    config.consolidation_cluster_objects = !cli.no_consolidation_cluster;
-    config.consolidation_date_augment_embedding = !cli.no_date_augment_embedding;
-    if !cli.variants.trim().is_empty() {
-        config.query_variants = cli
-            .variants
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
+    bench_cfg.apply_to_uniko_config(&mut config)?;
 
-    // Build extra catalog for LLM.
-    // `--llm-base-url` implies `remote/openai` provider unless explicitly
-    // overridden — that's how an OpenAI-compatible local server (LM Studio,
-    // vLLM, llama.cpp) is reached.
-    let llm_provider = cli.llm_provider.as_deref().or_else(|| {
-        if cli.llm_base_url.is_some() {
-            Some("remote/openai")
-        } else {
-            None
-        }
-    });
-    let extra_catalog = uniko_bench::build_llm_catalog(
-        cli.llm_alias.as_deref(),
-        cli.llm_model_id.as_deref(),
-        llm_provider,
-        cli.llm_base_url.as_deref(),
-        cli.judge_alias.as_deref(),
-        cli.judge_model_id.as_deref(),
-        cli.judge_provider.as_deref(),
-        cli.judge_base_url.as_deref(),
-    );
+    // Build the LLM catalog (gen + judge + optional extract-triples).
+    let extra_catalog = bench_cfg.build_catalog_specs();
     for spec in &extra_catalog {
         tracing::info!(
             alias = %spec.alias,
@@ -343,21 +216,64 @@ async fn main() -> Result<()> {
             "catalog entry"
         );
     }
-    let llm_alias = if cli.retrieval_only {
+
+    let llm_alias: Option<&str> = if bench_cfg.retrieval_only {
         None
     } else {
-        cli.llm_alias.as_deref()
+        Some(bench_cfg.models.generator.alias.as_str())
     };
-    // OpenAI gpt-5 / o-series rejects custom temperature and `max_tokens`
-    // — pass `GenerationOptions::default()` for those.  Auto-detected
-    // from the resolved provider (set explicitly, or implied by
-    // `--llm-base-url`).
-    let llm_use_default_options = matches!(llm_provider, Some("remote/openai"));
-    let judge_alias = if cli.no_judge || cli.retrieval_only {
+    let llm_use_default_options = bench_cfg.gen_use_default_options();
+    let judge_alias: Option<&str> =
+        if !bench_cfg.judge_enabled || bench_cfg.retrieval_only {
+            None
+        } else {
+            Some(bench_cfg.models.judge.alias.as_str())
+        };
+    let gen_model_id = bench_cfg.models.generator.model_id.clone();
+    let judge_model_id = bench_cfg.models.judge.model_id.clone();
+
+    // Load pricing table and open the per-event JSONL writer.
+    let pricing = match pricing_mod::Pricing::load(&bench_cfg.cost.pricing_csv) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                path = %bench_cfg.cost.pricing_csv.display(),
+                error = %e,
+                "could not load pricing CSV; cost columns will be zero",
+            );
+            pricing_mod::Pricing::empty()
+        }
+    };
+    let events_writer: Option<events::EventWriter> = if bench_cfg.cost.no_events {
         None
     } else {
-        cli.judge_alias.as_deref().or(cli.llm_alias.as_deref())
+        let events_path = bench_cfg.cost.events_jsonl.clone().unwrap_or_else(|| {
+            let stem = cli
+                .output
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "locomo_results".to_string());
+            cli.output
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(format!("{stem}_events.jsonl"))
+        });
+        match events::EventWriter::open(&events_path) {
+            Ok(w) => {
+                tracing::info!(path = %events_path.display(), "events JSONL opened");
+                Some(w)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %events_path.display(),
+                    error = %e,
+                    "could not open events JSONL; continuing without per-event capture",
+                );
+                None
+            }
+        }
     };
+    let embedding_model_id = config.embedding.model_id.clone();
 
     // Run benchmark.
     let mut all_results: Vec<(QueryResult, f64, Option<f64>)> = Vec::new();
@@ -371,7 +287,6 @@ async fn main() -> Result<()> {
             sample.sample_id,
         );
 
-        // Parse sessions.
         let sessions = parse_sessions(&sample.sample_id, &sample.conversation)
             .with_context(|| format!("parsing sessions for {}", sample.sample_id))?;
 
@@ -382,19 +297,24 @@ async fn main() -> Result<()> {
             "conversation structure",
         );
 
-        // Ingest or reuse persistent KB.
         let kb_dir = cli.ingest_dir.join(&sample.sample_id);
         let kb = if cli.reuse && kb_dir.exists() {
             tracing::info!(path = %kb_dir.display(), "reusing existing KB");
             uniko_bench::open_kb(&kb_dir, config.clone(), &extra_catalog).await?
         } else {
             let ingest_start = Instant::now();
-            let kb = ingest::ingest_conversation(
+            let observer = IngestObserver {
+                events: events_writer.as_ref(),
+                pricing: Some(&pricing),
+                embedding_model: Some(embedding_model_id.clone()),
+            };
+            let kb = ingest::ingest_conversation_with_observer(
                 sample,
                 &sessions,
                 &kb_dir,
                 config.clone(),
                 &extra_catalog,
+                &observer,
             )
             .await?;
             tracing::info!(
@@ -404,53 +324,18 @@ async fn main() -> Result<()> {
             kb
         };
 
-        // P4 Consolidation: derive Facts from the just-ingested
-        // Observations so the recall cascade has a Phase 1 (Compact)
-        // surface to query.  Idempotent — `--reuse` paths re-enter
-        // here and only the freshly-added Observations get processed.
-        // Cap is generous because per-conversation observation counts
-        // can run into the thousands; spec default 500 would force
-        // multiple cycles.
-        let cycle_start = Instant::now();
-        let triple_source = match cli.extract_triples_llm_alias.as_deref() {
-            Some(alias) => uniko_memory::consolidation::TripleSource::Llm {
-                alias: alias.to_string(),
+        // P4 + P5 + P6 sweep — identical to the legacy run flow.
+        let triple_source = match bench_cfg.models.extract_triples.as_ref() {
+            Some(triples) => uniko_memory::consolidation::TripleSource::Llm {
+                alias: triples.alias.clone(),
             },
             None => uniko_memory::consolidation::TripleSource::SrlDep,
         };
-        match uniko_memory::consolidation::run_cycle_with(
-            &kb,
-            &sample.sample_id,
-            Some(10_000),
-            &triple_source,
-        )
-        .await
-        {
-            Ok(stats) => {
-                tracing::info!(
-                    sample_id = %sample.sample_id,
-                    processed = stats.observations_processed,
-                    facts_created = stats.facts_created,
-                    facts_reinforced = stats.facts_reinforced,
-                    duration_ms = cycle_start.elapsed().as_millis(),
-                    "consolidation cycle complete",
-                );
-                verify_label_visible(&kb, "ConsolidationCycle", "agent_id", &sample.sample_id)
-                    .await;
-            }
-            Err(e) => tracing::warn!(
-                sample_id = %sample.sample_id,
-                error = %e,
-                "consolidation cycle failed (continuing without Facts)",
-            ),
-        }
+        uniko_bench::run_post_ingest_sweep(&kb, &sample.sample_id, &triple_source).await;
+        verify_label_visible(&kb, "ConsolidationCycle", "agent_id", &sample.sample_id).await;
 
-        // Build evidence lookup for retrieval evaluation.
         let evidence_lookup = build_evidence_lookup(&sessions);
 
-        // Ensure a Participant exists for the bench "agent" so we can
-        // record query-outcome Episodes against it.  `merge_node` is
-        // idempotent so `--reuse` paths are safe.
         let bench_agent_id = format!("bench-agent-{}", sample.sample_id);
         let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
             std::collections::HashMap::new();
@@ -470,7 +355,6 @@ async fn main() -> Result<()> {
             verify_label_visible(&kb, "Participant", "participant_id", &bench_agent_id).await;
         }
 
-        // Query each question.
         let questions: Vec<_> = sample
             .qa
             .iter()
@@ -491,8 +375,9 @@ async fn main() -> Result<()> {
                 );
             }
 
+            let q_wall_start = Instant::now();
             let evidence_texts = resolve_evidence(qa, &evidence_lookup);
-            let qr = query::run_query(
+            let mut qr = query::run_query(
                 &kb,
                 &sample.sample_id,
                 q_idx,
@@ -502,15 +387,19 @@ async fn main() -> Result<()> {
                 llm_use_default_options,
             )
             .await?;
+            // `run_query` populates `answer_model` with the alias
+            // (e.g. `llm/gen`); pricing.csv is keyed by HF model id,
+            // so substitute it from the bench config here.
+            if !qr.answer_model.is_empty() {
+                qr.answer_model = gen_model_id.clone();
+            }
 
-            // Compute token-level F1.
             let f1 = eval::token_f1(&qr.predicted_answer, &qr.gold_answer, qr.category);
 
-            // Run LLM judge (if enabled and not adversarial).
             let judge_score = if let Some(alias) = judge_alias
                 && qr.category != QuestionCategory::Adversarial
             {
-                match eval::llm_judge(
+                match eval::llm_judge_with_usage(
                     &kb,
                     &qr.question,
                     &qr.gold_answer,
@@ -519,7 +408,13 @@ async fn main() -> Result<()> {
                 )
                 .await
                 {
-                    Ok(score) => Some(score),
+                    Ok(outcome) => {
+                        qr.judge_latency_ms = Some(outcome.latency_ms);
+                        qr.judge_input_tokens = outcome.prompt_tokens;
+                        qr.judge_output_tokens = outcome.completion_tokens;
+                        qr.judge_model = Some(judge_model_id.clone());
+                        Some(outcome.score)
+                    }
                     Err(e) => {
                         tracing::warn!(error = %e, "LLM judge failed");
                         None
@@ -529,26 +424,79 @@ async fn main() -> Result<()> {
                 None
             };
 
-            // Record an Episode tagging this retrieval outcome.  Feeds
-            // procedure promotion (P5), relevance decay, and Phase 2 of
-            // the recall cascade.  Errors here are non-fatal — bench
-            // accuracy is unaffected.
+            if let Some(writer) = events_writer.as_ref() {
+                let answer_cost = qr
+                    .answer_input_tokens
+                    .and_then(|t| pricing.cost_input(&qr.answer_model, t))
+                    .unwrap_or(0.0)
+                    + qr.answer_output_tokens
+                        .and_then(|t| pricing.cost_output(&qr.answer_model, t))
+                        .unwrap_or(0.0);
+                let judge_cost = qr
+                    .judge_model
+                    .as_deref()
+                    .map(|m| {
+                        qr.judge_input_tokens
+                            .and_then(|t| pricing.cost_input(m, t))
+                            .unwrap_or(0.0)
+                            + qr.judge_output_tokens
+                                .and_then(|t| pricing.cost_output(m, t))
+                                .unwrap_or(0.0)
+                    })
+                    .unwrap_or(0.0);
+                let event = events::BenchEvent::Query {
+                    sample_id: qr.sample_id.clone(),
+                    question_index: qr.question_index,
+                    ts_unix_ms: events::now_unix_ms(),
+                    wall_ms: q_wall_start.elapsed().as_millis() as u64,
+                    recall_ms: qr.recall_latency_ms,
+                    generation_ms: qr.generation_latency_ms,
+                    judge_ms: qr.judge_latency_ms,
+                    answer_input_tokens: qr.answer_input_tokens,
+                    answer_output_tokens: qr.answer_output_tokens,
+                    answer_model: qr.answer_model.clone(),
+                    judge_input_tokens: qr.judge_input_tokens,
+                    judge_output_tokens: qr.judge_output_tokens,
+                    judge_model: qr.judge_model.clone(),
+                    evidence_found: qr.evidence_found,
+                    evidence_total: qr.evidence_total,
+                    f1,
+                    judge_score,
+                    cost_usd: answer_cost + judge_cost,
+                };
+                if let Err(e) = writer.write(&event) {
+                    tracing::warn!(error = %e, "failed to append Query event");
+                }
+            }
+
             let outcome = if f1 >= 0.5 { "success" } else { "failure" };
-            let state = serde_json::json!({
-                "topic": qr.question.clone(),
-                "question": qr.question.clone(),
+            // Bench-specific extras — sample_id / question_index /
+            // category aren't part of the library's Episode schema, so
+            // we attach them via `extra_state`.  Built-in fields
+            // (question, answer, recall_*, answer_*) win on key clash,
+            // so e.g. a stray "question" key here would be ignored.
+            let extra_state = serde_json::json!({
                 "category": format!("{:?}", qr.category),
                 "sample_id": qr.sample_id.clone(),
                 "question_index": qr.question_index,
             });
-            let params = uniko_memory::RecordEpisodeParams {
-                action_type: "retrieve".into(),
-                outcome: Some(outcome.into()),
-                state: Some(state),
+            let recall_ids: Vec<i64> =
+                qr.recall_bundle.iter().map(|item| item.node_id).collect();
+            let params = uniko_memory::RecordQueryEpisodeParams {
+                question: &qr.question,
+                answer: &qr.predicted_answer,
+                recall_node_ids: &recall_ids,
+                recall_coverage: qr.coverage,
+                recall_tokens: qr.total_tokens,
+                answer_input_tokens: qr.answer_input_tokens,
+                answer_output_tokens: qr.answer_output_tokens,
+                answer_model: Some(qr.answer_model.as_str()),
                 importance: Some(f1.clamp(0.0, 1.0)),
-                ..Default::default()
+                outcome: Some(outcome),
+                action_type: Some("retrieve"),
+                extra_state: Some(extra_state),
             };
-            match uniko_memory::record_episode(&kb, &bench_agent_id, params).await {
+            match uniko_memory::record_query_episode(&kb, &bench_agent_id, params).await {
                 Ok(episode_nid) => {
                     verify_node_visible_by_label(&kb, "Episode", episode_nid).await;
                 }
@@ -558,11 +506,6 @@ async fn main() -> Result<()> {
             all_results.push((qr, f1, judge_score));
         }
 
-        // Cleanly shut down the KB so the WAL is checkpointed into a
-        // snapshot manifest. Without this, `--reuse` on a subsequent run
-        // hits uni-db's "WAL segments but no snapshot manifest" guard
-        // and refuses to open. `try_unwrap` only succeeds when nothing
-        // else holds the Arc — after the question loop that's just us.
         match Arc::try_unwrap(kb) {
             Ok(kb_owned) => {
                 if let Err(e) = kb_owned.shutdown().await {
@@ -581,12 +524,10 @@ async fn main() -> Result<()> {
             "conversation complete",
         );
 
-        // Per-conversation checkpoint: write the running results to the
-        // output path so a kill mid-run preserves everything completed.
-        // `conv_idx + 1` is the count-so-far for averages; the final
-        // write below uses `samples.len()` for the full denominator.
-        let partial = report::aggregate(&all_results, conv_idx + 1);
-        if let Err(e) = report::write_json(&all_results, &partial, &cli.output) {
+        let partial = report::aggregate_with_pricing(&all_results, conv_idx + 1, &pricing);
+        if let Err(e) =
+            report::write_json_with_pricing(&all_results, &partial, &cli.output, &pricing)
+        {
             tracing::warn!(error = %e, "checkpoint write failed (continuing)");
         }
     }
@@ -598,10 +539,9 @@ async fn main() -> Result<()> {
         "benchmark complete",
     );
 
-    // Aggregate and report.
-    let report = report::aggregate(&all_results, samples.len());
+    let report = report::aggregate_with_pricing(&all_results, samples.len(), &pricing);
     report::print_report(&report);
-    report::write_json(&all_results, &report, &cli.output)?;
+    report::write_json_with_pricing(&all_results, &report, &cli.output, &pricing)?;
     tracing::info!(path = %cli.output.display(), "results written");
 
     Ok(())
@@ -612,7 +552,6 @@ async fn main() -> Result<()> {
 /// Watches for a uni-db symptom seen on conv-26 where vertices written
 /// during the bench run are visible to unconstrained `MATCH (n)` (via
 /// edge traversal or `id(n)=$vid`) but invisible to `MATCH (n:Label)`.
-/// Catches the bug at write time instead of finding 0 nodes after shutdown.
 async fn verify_label_visible(
     kb: &Arc<uniko_store::KnowledgeBase>,
     label: &str,
@@ -648,9 +587,6 @@ async fn verify_label_visible(
 }
 
 /// Verify a node id is visible to a label-anchored MATCH after writing.
-///
-/// Same idea as [`verify_label_visible`] but keyed by NodeId — used when
-/// the writer returns the vid directly (e.g. `record_episode`).
 async fn verify_node_visible_by_label(
     kb: &Arc<uniko_store::KnowledgeBase>,
     label: &str,

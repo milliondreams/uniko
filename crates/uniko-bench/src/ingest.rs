@@ -25,8 +25,37 @@ use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 
 use crate::data::{Conversation, LocomoSample, ParsedSession};
+use crate::events::{BenchEvent, EventWriter, now_unix_ms};
+use crate::pricing::Pricing;
+
+/// Optional per-turn cost / event recording wired into the ingest loop.
+///
+/// All fields are independently optional — pass `None` for a field
+/// to skip the corresponding accounting.  The bench binary populates
+/// every field; library consumers that don't need cost telemetry
+/// leave them all unset and get identical behaviour to the
+/// pre-events code path.
+#[derive(Default)]
+pub struct IngestObserver<'a> {
+    /// Sink for `BenchEvent::IngestTurn` rows.
+    pub events: Option<&'a EventWriter>,
+    /// Pricing table for embedding cost.
+    pub pricing: Option<&'a Pricing>,
+    /// Embedding model id (matches a row in `pricing.csv`).
+    pub embedding_model: Option<String>,
+}
 
 /// Ingest a full LoCoMo conversation into a persistent KB.
+///
+/// Opens the KB at `ingest_dir`, then delegates to
+/// [`ingest_into_kb`].  Use [`ingest_into_kb`] directly when the
+/// caller already manages KB lifecycle (e.g. an HTTP service that
+/// opens the KB once at warmup).
+///
+/// # Errors
+///
+/// Returns an error if the KB cannot be opened or any turn fails to
+/// ingest.
 pub async fn ingest_conversation(
     sample: &LocomoSample,
     sessions: &[ParsedSession],
@@ -34,11 +63,76 @@ pub async fn ingest_conversation(
     config: UnikoConfig,
     extra_catalog: &[ModelAliasSpec],
 ) -> Result<Arc<KnowledgeBase>> {
+    ingest_conversation_with_observer(
+        sample,
+        sessions,
+        ingest_dir,
+        config,
+        extra_catalog,
+        &IngestObserver::default(),
+    )
+    .await
+}
+
+/// Like [`ingest_conversation`] but threads an [`IngestObserver`]
+/// through the per-turn loop so the caller can record bench events
+/// and cost.
+///
+/// # Errors
+///
+/// Returns an error if the KB cannot be opened or any turn fails to
+/// ingest.
+pub async fn ingest_conversation_with_observer(
+    sample: &LocomoSample,
+    sessions: &[ParsedSession],
+    ingest_dir: &Path,
+    config: UnikoConfig,
+    extra_catalog: &[ModelAliasSpec],
+    observer: &IngestObserver<'_>,
+) -> Result<Arc<KnowledgeBase>> {
     let kb = KnowledgeBase::open_with_xervo(ingest_dir, config, extra_catalog.to_vec())
         .await
         .context("creating KB")?;
     let kb = Arc::new(kb);
+    ingest_into_kb_with_observer(&kb, sample, sessions, observer).await?;
+    Ok(kb)
+}
 
+/// Ingest every session of a LoCoMo sample into an already-open KB.
+///
+/// The KB-lifecycle-free entry point: callers (the bench's
+/// `ingest_conversation` wrapper, or a future HTTP `/memorize`
+/// handler) can share the per-turn pipeline (`ingest_message` →
+/// entity extraction → observation extraction → session chunking)
+/// without re-opening the KB.
+///
+/// # Errors
+///
+/// Returns an error if any turn fails to ingest.
+pub async fn ingest_into_kb(
+    kb: &Arc<KnowledgeBase>,
+    sample: &LocomoSample,
+    sessions: &[ParsedSession],
+) -> Result<()> {
+    ingest_into_kb_with_observer(kb, sample, sessions, &IngestObserver::default()).await
+}
+
+/// Ingest every session of a LoCoMo sample with optional event /
+/// cost recording.
+///
+/// Identical to [`ingest_into_kb`] when `observer` is the default
+/// (every field `None`).  When `observer.events` is set, one
+/// [`BenchEvent::IngestTurn`] is appended per turn.
+///
+/// # Errors
+///
+/// Returns an error if any turn fails to ingest.
+pub async fn ingest_into_kb_with_observer(
+    kb: &Arc<KnowledgeBase>,
+    sample: &LocomoSample,
+    sessions: &[ParsedSession],
+    observer: &IngestObserver<'_>,
+) -> Result<()> {
     let breaker = Arc::new(CircuitBreaker::new(5, 60_000));
     let cancel = CancellationToken::new();
     let entity_step = EntityExtractionStep;
@@ -196,6 +290,39 @@ pub async fn ingest_conversation(
                     "turn processed",
                 );
             }
+
+            if let Some(writer) = observer.events {
+                let wall_ms = (ingest_ms + ner_ms + obs_ms) as u64;
+                // Char-count proxy for embedding tokens (chars/4 ≈
+                // tokens).  Real provider usage is unavailable because
+                // uni-db's xervo.embed() does not surface the
+                // openai/anthropic usage struct.  Local embedders
+                // produce 0 cost regardless of chars.
+                let embedding_chars = content.chars().count() as u64;
+                let cost_usd = observer
+                    .pricing
+                    .zip(observer.embedding_model.as_deref())
+                    .and_then(|(p, model)| p.cost_embedding(model, embedding_chars / 4))
+                    .unwrap_or(0.0);
+                let event = BenchEvent::IngestTurn {
+                    sample_id: sample.sample_id.clone(),
+                    turn_index: total_turns as usize - 1,
+                    ts_unix_ms: now_unix_ms(),
+                    wall_ms,
+                    ingest_ms: ingest_ms as u64,
+                    ner_ms: ner_ms as u64,
+                    obs_ms: obs_ms as u64,
+                    extraction_input_tokens: None,
+                    extraction_output_tokens: None,
+                    extraction_model: None,
+                    embedding_chars,
+                    embedding_model: observer.embedding_model.clone(),
+                    cost_usd,
+                };
+                if let Err(e) = writer.write(&event) {
+                    tracing::warn!(error = %e, "failed to append IngestTurn event");
+                }
+            }
         }
 
         // Chunk the session for retrieval (concatenates turns with speaker prefixes).
@@ -224,7 +351,7 @@ pub async fn ingest_conversation(
         "conversation ingested",
     );
 
-    Ok(kb)
+    Ok(())
 }
 
 /// Parse session datetime string with flexible fallback.

@@ -27,6 +27,7 @@ uniko-extract = { path = "crates/uniko-extract" }
 uniko-memory = { path = "crates/uniko-memory" }
 uniko-cortex = { path = "crates/uniko-cortex" }
 uniko-api = { path = "crates/uniko-api" }
+uniko-bench = { path = "crates/uniko-bench" }
 
 # Database — uni-db default features already include lance-backend,
 # provider-onnx (embeddings + NLP + reranker), and every remote provider.

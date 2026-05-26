@@ -523,6 +523,10 @@ async fn main() -> Result<()> {
                     ),
                 }
 
+                // P5 + P6 — explicit cortex sweep per question so the
+                // bench always exercises procedure + topic surfaces.
+                run_cortex_sweep(&kb, &item.question_id).await;
+
                 let bench_agent_id = format!("bench-agent-{}", item.question_id);
                 let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
                     std::collections::HashMap::new();
@@ -674,4 +678,46 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run P5 (procedure promotion) + P6 (topic detection) for one
+/// bench item.  Mirrors the live consolidation worker's cortex
+/// sweep but unconditional, so every LME run exercises the full
+/// downstream surface regardless of consolidation cadence.
+///
+/// Failures are logged and dropped — cortex is downstream of
+/// consolidation, never a hard requirement for the eval.
+async fn run_cortex_sweep(kb: &Arc<uniko_store::KnowledgeBase>, question_id: &str) {
+    use std::time::Instant;
+    let proc_start = Instant::now();
+    match uniko_cortex::promote_procedures_once(
+        kb,
+        question_id,
+        uniko_cortex::LifecycleConfig::default(),
+    )
+    .await
+    {
+        Ok(r) => tracing::info!(
+            question_id,
+            created = r.created,
+            reinforced = r.reinforced,
+            promoted = r.promoted,
+            duration_ms = proc_start.elapsed().as_millis(),
+            "P5 procedure sweep complete",
+        ),
+        Err(e) => tracing::warn!(question_id, error = %e, "P5 procedure sweep failed"),
+    }
+
+    let topic_start = Instant::now();
+    match uniko_cortex::detect_topics_once(kb, uniko_cortex::TopicConfig::default()).await {
+        Ok(r) => tracing::info!(
+            question_id,
+            created = r.created,
+            updated = r.updated,
+            entities_assigned = r.entities_assigned,
+            duration_ms = topic_start.elapsed().as_millis(),
+            "P6 topic sweep complete",
+        ),
+        Err(e) => tracing::warn!(question_id, error = %e, "P6 topic sweep failed"),
+    }
 }

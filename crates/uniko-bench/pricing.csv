@@ -1,0 +1,22 @@
+model_id,provider,input_per_million_usd,output_per_million_usd,embedding_per_million_usd,notes
+gpt-4o-mini,openai,0.15,0.60,,as of 2026-05
+gpt-4o,openai,2.50,10.00,,as of 2026-05
+gpt-5,openai,,,,fill in current pricing
+gpt-5-mini,openai,,,,fill in current pricing
+claude-sonnet-4-6,anthropic,,,,fill in current pricing
+claude-opus-4-7,anthropic,,,,fill in current pricing
+gemini-2.5-pro,google,,,,fill in current pricing
+gemini-3.1-flash-lite,google,0.25,1.50,,Vertex AI preview as of 2026-05; ≤200K context
+gemini-3.1-pro-preview,google,2.00,12.00,,Vertex AI preview as of 2026-05; ≤200K context; thoughts-tokens NOT captured (uni-xervo drops thoughtsTokenCount); bill may be 5-50x reported cost
+text-embedding-3-small,openai,,,0.02,
+text-embedding-3-large,openai,,,0.13,
+NomicEmbedTextV15,local,0,0,0,fastembed local
+NomicEmbedTextV15Q,local,0,0,0,fastembed local
+AllMiniLML6V2,local,0,0,0,fastembed local
+BGESmallENV15,local,0,0,0,fastembed local
+BGELargeENV15,local,0,0,0,fastembed local
+onnx-community/embeddinggemma-300m-ONNX,local,0,0,0,xervo local-onnx GPU
+google/embeddinggemma-300m,local,0,0,0,xervo local-mistralrs GPU
+ms-marco-MiniLM-L-6-v2,local,0,0,,local cross-encoder reranker
+gemma-3,local,0,0,,mistralrs local
+phi-4,local,0,0,,mistralrs local

@@ -4,7 +4,31 @@
 //! (LoCoMo, LongMemEval, etc.): KB lifecycle, LLM catalog
 //! construction, context formatting, and serde helpers.
 
+pub mod bench_config;
+pub mod data;
+pub mod eval;
+pub mod events;
+pub mod ingest;
 pub mod longmemeval;
+pub mod pricing;
+pub mod query;
+pub mod report;
+
+#[doc(inline)]
+pub use data::{
+    Conversation, DialogTurn, LocomoSample, ParsedSession, QaPair, QuestionCategory,
+    build_evidence_lookup, load_locomo, parse_sessions, resolve_evidence,
+};
+#[doc(inline)]
+pub use ingest::{
+    IngestObserver, ingest_conversation, ingest_conversation_with_observer, ingest_into_kb,
+    ingest_into_kb_with_observer,
+};
+#[doc(inline)]
+pub use query::{
+    AnsweredQuestion, fetch_session_dates, fetch_temporal_anchors, generate_answer,
+    generate_answer_with_usage, run_query,
+};
 
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -13,6 +37,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
+use uniko_memory::consolidation::TripleSource;
 use uniko_memory::recall::ContextBundle;
 use uniko_store::config::UnikoConfig;
 use uniko_store::{KnowledgeBase, ModelRuntime};
@@ -124,7 +149,10 @@ pub fn build_llm_catalog(
 /// `local/mistralrs` defaults to ISQ Q4K so the user doesn't need a
 /// pre-quantized model file. `remote/openai` (and OpenAI-compatible
 /// servers like LM Studio / vLLM / llama.cpp) accept an optional
-/// `base_url` override; uni-xervo 0.10+ honors it.
+/// `base_url` override; uni-xervo 0.10+ honors it. `remote/vertexai`
+/// pins `location=global` (the cross-region endpoint) and reads
+/// `project_id` from `VERTEXAI_PROJECT`; the access token comes from
+/// `VERTEXAI_API_TOKEN` (override `gcloud auth print-access-token`).
 fn provider_options(provider: &str, base_url: Option<&str>) -> serde_json::Value {
     match provider {
         "local/mistralrs" => serde_json::json!({"isq": "Q4K"}),
@@ -132,6 +160,15 @@ fn provider_options(provider: &str, base_url: Option<&str>) -> serde_json::Value
             Some(url) => serde_json::json!({"base_url": url}),
             None => serde_json::json!({}),
         },
+        "remote/vertexai" => {
+            let mut opts = serde_json::Map::new();
+            opts.insert("location".into(), serde_json::json!("global"));
+            opts.insert("api_token_env".into(), serde_json::json!("VERTEXAI_API_TOKEN"));
+            if let Ok(project) = std::env::var("VERTEXAI_PROJECT") {
+                opts.insert("project_id".into(), serde_json::json!(project));
+            }
+            serde_json::Value::Object(opts)
+        }
         _ => serde_json::json!({}),
     }
 }
@@ -178,6 +215,82 @@ pub fn retrieval_answer(bundle: &ContextBundle, top_k: usize) -> String {
         .map(|item| item.content.as_str())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+// ── Post-Ingest Sweep ───────────────────────────────────────────
+
+/// Run consolidation + P5 procedure promotion + P6 topic detection.
+///
+/// Mirrors the sequence the bench binary runs after each
+/// conversation ingest (`uniko-bench/src/main.rs:421-446` for
+/// consolidation, `:624-657` for the cortex sweep).  Pulled into the
+/// library so other consumers (e.g. a future `uniko-api`) execute
+/// the identical post-ingest behavior.
+///
+/// Failures are logged at `warn` level and dropped — cortex is
+/// downstream of consolidation and never a hard requirement for the
+/// eval.  Consolidation failures similarly degrade gracefully (the
+/// KB still has Messages/Observations/Chunks, just no derived Facts).
+///
+/// `triple_source` controls how observation triples are extracted
+/// during P4.  Pass `TripleSource::SrlDep` for the no-LLM default the
+/// bench uses by default; pass `TripleSource::Llm { alias }` when an
+/// LLM-refined triple pass is desired.
+pub async fn run_post_ingest_sweep(
+    kb: &Arc<KnowledgeBase>,
+    sample_id: &str,
+    triple_source: &TripleSource,
+) {
+    let cycle_start = std::time::Instant::now();
+    match uniko_memory::consolidation::run_cycle_with(kb, sample_id, Some(10_000), triple_source)
+        .await
+    {
+        Ok(stats) => tracing::info!(
+            sample_id,
+            processed = stats.observations_processed,
+            facts_created = stats.facts_created,
+            facts_reinforced = stats.facts_reinforced,
+            duration_ms = cycle_start.elapsed().as_millis(),
+            "consolidation cycle complete",
+        ),
+        Err(e) => tracing::warn!(
+            sample_id,
+            error = %e,
+            "consolidation cycle failed (continuing without Facts)",
+        ),
+    }
+
+    let proc_start = std::time::Instant::now();
+    match uniko_cortex::promote_procedures_once(
+        kb,
+        sample_id,
+        uniko_cortex::LifecycleConfig::default(),
+    )
+    .await
+    {
+        Ok(r) => tracing::info!(
+            sample_id,
+            created = r.created,
+            reinforced = r.reinforced,
+            promoted = r.promoted,
+            duration_ms = proc_start.elapsed().as_millis(),
+            "P5 procedure sweep complete",
+        ),
+        Err(e) => tracing::warn!(sample_id, error = %e, "P5 procedure sweep failed"),
+    }
+
+    let topic_start = std::time::Instant::now();
+    match uniko_cortex::detect_topics_once(kb, uniko_cortex::TopicConfig::default()).await {
+        Ok(r) => tracing::info!(
+            sample_id,
+            created = r.created,
+            updated = r.updated,
+            entities_assigned = r.entities_assigned,
+            duration_ms = topic_start.elapsed().as_millis(),
+            "P6 topic sweep complete",
+        ),
+        Err(e) => tracing::warn!(sample_id, error = %e, "P6 topic sweep failed"),
+    }
 }
 
 // ── Serde Helpers ───────────────────────────────────────────────

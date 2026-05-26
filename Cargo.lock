@@ -10857,6 +10857,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uni-db",
+ "uniko-cortex",
  "uniko-extract",
  "uniko-memory",
  "uniko-pipes",
@@ -10867,11 +10868,14 @@ dependencies = [
 name = "uniko-cortex"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "uni-db",
  "uniko-memory",
+ "uniko-store",
 ]
 
 [[package]]
@@ -10936,6 +10940,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uni-db",
+ "uniko-cortex",
  "uniko-extract",
  "uniko-pipes",
  "uniko-store",

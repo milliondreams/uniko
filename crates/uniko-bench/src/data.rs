@@ -46,7 +46,7 @@ pub struct DialogTurn {
     pub query: Option<String>,
 }
 
-use uniko_bench::string_or_number;
+use crate::string_or_number;
 
 /// A question-answer pair with evaluation metadata.
 #[derive(Debug, Deserialize)]

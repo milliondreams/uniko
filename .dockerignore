@@ -1,0 +1,48 @@
+# .dockerignore for the uniko2 workspace.
+#
+# Applied when Docker uses uniko2/ as a build context (currently only
+# `crates/uniko-dmas/Dockerfile` via the KTH testbed compose file).
+# Keeps the context small — the workspace's target/, data/, and bug
+# repros are multi-GB and never needed for a build.
+
+# Host-specific cargo config (references /tmp/cc_no_usrlib.sh linker
+# + mold, neither of which exist in the container).  Container falls
+# back to the default `cc` linker.
+.cargo/
+
+# Build artefacts.
+target/
+**/target/
+
+# Git history.
+.git/
+
+# Editor / OS state.
+.idea/
+.vscode/
+.claude/
+.DS_Store
+Thumbs.db
+
+# Submodules — uniko-dmas's runtime doesn't depend on them.
+submodules/
+
+# Bench data + outputs (246 GB on disk).
+data/
+
+# Repros + training fixtures + ad-hoc bug snapshots.
+repros/
+training/
+bugs/
+locomo_results.json
+lme_*
+locomo_*
+abl_*
+
+# Runtime model caches.
+**/.uni_cache/
+**/.cache/
+
+# Logs.
+*.log
+**/*.log

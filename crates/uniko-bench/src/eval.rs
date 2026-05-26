@@ -271,9 +271,24 @@ fn contains_at_word_boundary(haystack: &str, needle: &str) -> bool {
 
 // ── LLM-as-Judge ─────────────────────────────────────────────────
 
+/// Verdict plus accounting for one judge call.
+#[derive(Debug, Clone)]
+pub struct JudgeOutcome {
+    /// 1.0 for CORRECT, 0.0 for WRONG.
+    pub score: f64,
+    /// Wall-clock latency of the generate call in milliseconds.
+    pub latency_ms: u64,
+    /// Provider-reported prompt tokens, if any.
+    pub prompt_tokens: Option<u64>,
+    /// Provider-reported completion tokens, if any.
+    pub completion_tokens: Option<u64>,
+}
+
 /// Run LLM-as-judge evaluation on a single question.
 ///
-/// Returns 1.0 if the judge says "correct", 0.0 otherwise.
+/// Returns 1.0 if the judge says "correct", 0.0 otherwise.  Kept as
+/// a thin wrapper around [`llm_judge_with_usage`] so existing
+/// callers that only need the score continue to compile.
 ///
 /// # Errors
 ///
@@ -285,6 +300,24 @@ pub async fn llm_judge(
     predicted_answer: &str,
     judge_alias: &str,
 ) -> anyhow::Result<f64> {
+    let outcome = llm_judge_with_usage(kb, question, gold_answer, predicted_answer, judge_alias)
+        .await?;
+    Ok(outcome.score)
+}
+
+/// Same as [`llm_judge`] but surfaces latency and token usage.
+///
+/// # Errors
+///
+/// Returns an error if LLM generation fails.
+pub async fn llm_judge_with_usage(
+    kb: &uniko_store::KnowledgeBase,
+    question: &str,
+    gold_answer: &str,
+    predicted_answer: &str,
+    judge_alias: &str,
+) -> anyhow::Result<JudgeOutcome> {
+    use std::time::Instant;
     use uni_db::xervo::{GenerationOptions, Message};
 
     // Verbatim Mem0 LoCoMo judge prompt (mem0ai/mem0
@@ -332,12 +365,24 @@ pub async fn llm_judge(
     // default 1.0).
     let options = GenerationOptions::default();
 
+    let started = Instant::now();
     let result = kb
         .db()
         .xervo()
         .generate(judge_alias, &messages, options)
         .await?;
-    Ok(parse_mem0_judge_label(&result.text))
+    let latency_ms = started.elapsed().as_millis() as u64;
+    let (prompt_tokens, completion_tokens) = result
+        .usage
+        .as_ref()
+        .map(|u| (Some(u.prompt_tokens as u64), Some(u.completion_tokens as u64)))
+        .unwrap_or((None, None));
+    Ok(JudgeOutcome {
+        score: parse_mem0_judge_label(&result.text),
+        latency_ms,
+        prompt_tokens,
+        completion_tokens,
+    })
 }
 
 /// Parse the Mem0 judge's response into 1.0 (CORRECT) or 0.0 (WRONG).
