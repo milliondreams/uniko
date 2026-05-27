@@ -108,4 +108,23 @@ mod tests {
             Err(PdfExtractError::Parse(_)) | Err(PdfExtractError::Panic)
         ));
     }
+
+    #[test]
+    fn extracts_text_from_real_pdf_fixture() {
+        // Real round trip through `pdf-extract` against a tiny W3C WAI
+        // test PDF — see `tests/fixtures/README.md`.
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/dummy.pdf"
+        ))
+        .expect("read dummy.pdf fixture");
+        let pages = PdfExtractCrate.extract(&bytes).expect("extract");
+        assert_eq!(pages.len(), 1, "dummy.pdf has one page");
+        assert_eq!(pages[0].page_number, 1);
+        assert!(
+            pages[0].text.to_lowercase().contains("dummy"),
+            "expected 'dummy' in extracted text, got: {:?}",
+            pages[0].text
+        );
+    }
 }

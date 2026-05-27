@@ -191,6 +191,78 @@ async fn ingest_pdf_dedups_by_hash() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ingest_pdf_real_pdf_round_trip() {
+    // End-to-end through the default `PdfExtractCrate` against a real
+    // PDF fixture — see `tests/fixtures/README.md`.
+    let kb = test_kb().await;
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dummy.pdf"
+    ))
+    .expect("read fixture");
+
+    let opts = PdfIngestOptions {
+        artifact_id: "pdf-real-1".into(),
+        extractor: None, // default = PdfExtractCrate
+        source_path: Some("tests/fixtures/dummy.pdf".into()),
+    };
+    let result = ingest_pdf(&kb, PdfInput::Bytes(bytes), opts)
+        .await
+        .expect("ingest_pdf");
+
+    assert!(!result.was_deduplicated);
+    assert!(
+        result.extraction_failure.is_none(),
+        "real PDF should extract cleanly, got: {:?}",
+        result.extraction_failure
+    );
+    assert_eq!(result.page_count, 1);
+    assert_eq!(result.chunk_node_ids.len(), 1);
+
+    let session = kb.db().session();
+    let rows = session
+        .query(
+            "MATCH (a:Artifact {artifact_id: 'pdf-real-1'})-[:HAS_CHUNK]->(c:Chunk) \
+             RETURN c.text AS text, c.metadata AS md",
+        )
+        .await
+        .expect("query chunks");
+    let row = rows.rows().first().expect("one chunk row");
+    let text = row.get::<String>("text").unwrap();
+    assert!(
+        text.to_lowercase().contains("dummy"),
+        "expected 'dummy' in chunk text, got: {text:?}"
+    );
+    let md = row.value("md").expect("metadata present");
+    let map = md.as_object().expect("metadata is a map");
+    assert_eq!(map.get("page_number").and_then(|v| v.as_i64()), Some(1));
+    assert_eq!(map.get("page_count").and_then(|v| v.as_i64()), Some(1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ingest_pdf_real_pdf_via_path() {
+    // Same fixture, exercised via `PdfInput::Path` so the read-from-fs
+    // branch is also covered.
+    let kb = test_kb().await;
+    let path = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dummy.pdf"
+    ));
+
+    let opts = PdfIngestOptions {
+        artifact_id: "pdf-real-path-1".into(),
+        extractor: None,
+        source_path: Some(path.display().to_string()),
+    };
+    let result = ingest_pdf(&kb, PdfInput::Path(path), opts)
+        .await
+        .expect("ingest_pdf via Path");
+    assert!(result.extraction_failure.is_none());
+    assert_eq!(result.page_count, 1);
+    assert_eq!(result.chunk_node_ids.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ingest_pdf_rejects_empty_artifact_id() {
     let kb = test_kb().await;
     let opts = PdfIngestOptions {
