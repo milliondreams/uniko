@@ -13,6 +13,7 @@ pub mod chunking;
 pub mod context;
 pub mod message;
 pub mod overflow;
+pub mod pdf;
 pub mod session;
 pub mod session_chunk;
 
@@ -20,6 +21,10 @@ pub use artifact::ArtifactIngestResult;
 pub use atomic::{AtomicIngestResult, AtomicTimings, ingest_message_atomic};
 pub use chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, select_chunker};
 pub use message::MessageIngestResult;
+pub use pdf::{
+    PdfExtractCrate, PdfExtractError, PdfIngestOptions, PdfIngestResult, PdfInput,
+    PdfTextExtractor, ingest_pdf,
+};
 
 use async_trait::async_trait;
 

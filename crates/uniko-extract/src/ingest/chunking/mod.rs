@@ -11,7 +11,6 @@ pub mod text;
 pub mod code;
 
 pub mod html;
-pub mod pdf;
 pub mod structured;
 
 use std::sync::OnceLock;
@@ -37,6 +36,11 @@ pub struct ChunkData {
     pub symbol_name: Option<String>,
     /// Nearest preceding heading (for markdown/HTML).
     pub heading: Option<String>,
+    /// Modality-specific scalars (e.g. `{"page_number": 3,
+    /// "page_count": 12}` for PDF page chunks). Persisted into the
+    /// `:Chunk.metadata` JSON column. `None` for chunkers that have
+    /// no extra structured metadata to carry.
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Chunking parameters derived from [`uniko_store::config::UnikoConfig`].
@@ -112,7 +116,6 @@ pub fn select_chunker(content_type: &str, language: Option<&str>) -> Box<dyn Chu
             Box::new(text::TextChunker)
         }
         "html" => Box::new(html::HtmlChunker),
-        "pdf" => Box::new(pdf::PdfChunker),
         "csv" | "json" | "structured" => Box::new(structured::StructuredChunker),
         // Default for "text", "tool_result", "error", "system", and unknown.
         _ => Box::new(text::TextChunker),

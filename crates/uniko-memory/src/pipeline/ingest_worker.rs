@@ -115,6 +115,11 @@ impl IngestWorker {
             let (content, content_type) = match &task {
                 IngestTask::Message(m) => (m.content.clone(), m.content_type.clone()),
                 IngestTask::Artifact(a) => (a.content.clone(), a.kind.clone()),
+                // PDF ingest is routed through `uniko_extract::ingest_pdf`
+                // directly; it never lands on the generic worker step
+                // chain because `content` is binary (not UTF-8 String)
+                // and chunker selection is handled internally.
+                IngestTask::Pdf(p) => (String::new(), format!("pdf:{}", p.artifact_id)),
             };
 
             let mut ctx = PipelineContext::new(

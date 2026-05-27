@@ -51,6 +51,33 @@ pub struct IngestArtifact {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+/// Source of PDF bytes — mirrors `uniko_extract::ingest::pdf::PdfInput`.
+///
+/// Mirrored here (rather than re-exported) because `uniko-pipes` is
+/// upstream of `uniko-extract` in the workspace dep graph. The wire
+/// types intentionally stay serializable; the runtime
+/// `PdfIngestOptions::extractor` knob lives only on the extract side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PdfInput {
+    /// In-memory bytes (base64-decoded by the caller before this point).
+    Bytes(Vec<u8>),
+    /// Filesystem path; bytes are read at ingest time.
+    Path(std::path::PathBuf),
+}
+
+/// A PDF document to ingest into the knowledge graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestPdf {
+    /// Caller-provided artifact identifier.
+    pub artifact_id: String,
+    /// PDF byte source.
+    pub input: PdfInput,
+    /// Optional source path / URL recorded on `:Artifact.path`.
+    pub source_path: Option<String>,
+    /// Arbitrary caller metadata.
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
 /// A task submitted to the ingest pipeline.
 #[derive(Debug, Clone)]
 pub enum IngestTask {
@@ -58,6 +85,8 @@ pub enum IngestTask {
     Message(IngestMessage),
     /// Ingest an artifact (file, document, etc.).
     Artifact(IngestArtifact),
+    /// Ingest a PDF document.
+    Pdf(IngestPdf),
 }
 
 // ── Consolidation tasks ─────────────────────────────────────────────

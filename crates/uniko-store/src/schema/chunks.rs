@@ -35,6 +35,12 @@ pub(crate) fn register_labels<'a>(
         // Tracks which derivation model produced this chunk. NULL for
         // non-derived chunks (e.g., direct text chunking).
         .property_nullable("source_model_version", DataType::String)
+        // Modality-specific scalars (page_number, time bounds, bbox, …)
+        // ride in this JSON bag until a Cypher query needs to filter on
+        // one — at which point that field gets promoted to its own
+        // typed column. Avoids the speculative typed-column path that
+        // tripped the uni-db List<T> Arrow-inference fallback.
+        .property_nullable("metadata", DataType::CypherValue)
         .property_nullable(
             "embedding",
             DataType::Vector {

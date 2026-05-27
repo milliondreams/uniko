@@ -390,6 +390,9 @@ pub async fn create_chunks_in_tx(
             if let Some(ref h) = c.heading {
                 props.insert("heading".into(), Value::String(h.clone()));
             }
+            if let Some(ref meta) = c.metadata {
+                props.insert("metadata".into(), json_to_uni_value(meta));
+            }
             props
         })
         .collect();
@@ -419,4 +422,38 @@ pub async fn create_chunks_in_tx(
     .await?;
 
     Ok(chunk_nids)
+}
+
+/// Convert a `serde_json::Value` into a `uni_db::Value` suitable for
+/// storage in a `DataType::CypherValue` column.
+///
+/// JSON numbers split across `Value::Int` (when they fit in `i64` and
+/// have no fractional part) or `Value::Float` otherwise. Nulls become
+/// `Value::Null`; arrays / objects recurse.
+fn json_to_uni_value(v: &serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                // u64 > i64::MAX — fall back to string to avoid lossy cast.
+                Value::String(n.to_string())
+            }
+        }
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        serde_json::Value::Array(arr) => {
+            Value::List(arr.iter().map(json_to_uni_value).collect())
+        }
+        serde_json::Value::Object(obj) => {
+            let mut m: HashMap<String, Value> = HashMap::with_capacity(obj.len());
+            for (k, v) in obj {
+                m.insert(k.clone(), json_to_uni_value(v));
+            }
+            Value::Map(m)
+        }
+    }
 }

@@ -34,6 +34,7 @@ pub fn chunk_text(content: &str, config: &ChunkConfig) -> Vec<ChunkData> {
             language: None,
             symbol_name: None,
             heading: extract_heading(content),
+            metadata: None,
         }];
     }
 
@@ -61,6 +62,7 @@ pub fn chunk_text(content: &str, config: &ChunkConfig) -> Vec<ChunkData> {
             language: None,
             symbol_name: None,
             heading: rc.heading,
+            metadata: None,
         })
         .collect()
 }

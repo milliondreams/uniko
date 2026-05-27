@@ -30,6 +30,6 @@ pub use retry::RetryPolicy;
 pub use step::{PipelineContext, Step};
 #[doc(inline)]
 pub use types::{
-    ConsolidationTask, IngestArtifact, IngestMessage, IngestTask, ItemResult, ObservationsReady,
-    StepErrorPolicy, StepOutcome,
+    ConsolidationTask, IngestArtifact, IngestMessage, IngestPdf, IngestTask, ItemResult,
+    ObservationsReady, PdfInput, StepErrorPolicy, StepOutcome,
 };

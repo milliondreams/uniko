@@ -82,6 +82,7 @@ fn chunk_code(content: &str, language: &str, config: &ChunkConfig) -> Option<Vec
                 language: Some(language.to_string()),
                 symbol_name,
                 heading: None,
+                metadata: None,
             });
         } else {
             // Large node — split at child boundaries.
@@ -206,6 +207,7 @@ fn split_large_node(
                 language: Some(language.to_string()),
                 symbol_name,
                 heading: None,
+                metadata: None,
             });
         }
     }

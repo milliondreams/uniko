@@ -256,6 +256,7 @@ fn push_chunk(
         language: None,
         symbol_name: None,
         heading: Some(heading_json.to_string()),
+        metadata: None,
     });
     *chunk_index += 1;
 }
