@@ -169,21 +169,21 @@ pub async fn ingest_into_kb_with_observer(
 
             // Enrich message content with image caption/query if present.
             let mut content = turn.text.clone();
-            if let Some(ref caption) = turn.blip_caption {
-                if !caption.is_empty() {
-                    if !content.is_empty() {
-                        content.push(' ');
-                    }
-                    content.push_str(caption);
+            if let Some(ref caption) = turn.blip_caption
+                && !caption.is_empty()
+            {
+                if !content.is_empty() {
+                    content.push(' ');
                 }
+                content.push_str(caption);
             }
-            if let Some(ref query) = turn.query {
-                if !query.is_empty() {
-                    if !content.is_empty() {
-                        content.push(' ');
-                    }
-                    content.push_str(query);
+            if let Some(ref query) = turn.query
+                && !query.is_empty()
+            {
+                if !content.is_empty() {
+                    content.push(' ');
                 }
+                content.push_str(query);
             }
 
             let msg = IngestMessage {
@@ -200,7 +200,7 @@ pub async fn ingest_into_kb_with_observer(
             let turn_start = std::time::Instant::now();
 
             // Ingest the message (creates node, edges, chunks).
-            let result = ingest_message(&kb, &msg, &mut session_ctx)
+            let result = ingest_message(kb, &msg, &mut session_ctx)
                 .await
                 .with_context(|| format!("ingesting {}", turn.dia_id))?;
 
@@ -223,7 +223,7 @@ pub async fn ingest_into_kb_with_observer(
                         metadata: HashMap::new(),
                     };
 
-                    if let Err(e) = ingest_artifact(&kb, &artifact).await {
+                    if let Err(e) = ingest_artifact(kb, &artifact).await {
                         tracing::warn!(
                             dia_id = %turn.dia_id,
                             error = %e,
@@ -266,19 +266,18 @@ pub async fn ingest_into_kb_with_observer(
             total_observations += ctx.extracted_observations.len();
 
             // Read back updated sentence context for pronoun resolution.
-            if let Some(updated) = ctx.metadata.get("sentence_ctx_updated") {
-                if let Ok(sent_ctx) = serde_json::from_value::<
+            if let Some(updated) = ctx.metadata.get("sentence_ctx_updated")
+                && let Ok(sent_ctx) = serde_json::from_value::<
                     uniko_extract::ingest::context::SentenceContext,
                 >(updated.clone())
-                {
-                    session_ctx.sentence_ctx = sent_ctx;
-                }
+            {
+                session_ctx.sentence_ctx = sent_ctx;
             }
 
             total_turns += 1;
 
             // Progress every 20 turns or on first turn.
-            if total_turns == 1 || total_turns % 20 == 0 {
+            if total_turns == 1 || total_turns.is_multiple_of(20) {
                 tracing::info!(
                     turn = total_turns,
                     dia_id = %turn.dia_id,
@@ -327,14 +326,14 @@ pub async fn ingest_into_kb_with_observer(
 
         // Chunk the session for retrieval (concatenates turns with speaker prefixes).
         let chunk_ids =
-            uniko_extract::ingest::session_chunk::chunk_session(&kb, &session.session_id)
+            uniko_extract::ingest::session_chunk::chunk_session(kb, &session.session_id)
                 .await
                 .with_context(|| format!("chunking session {}", session.session_id))?;
         total_session_chunks += chunk_ids.len();
 
         // Aggregate per-message observations into searchable session-level chunks.
         let obs_chunk_ids = uniko_extract::ingest::session_chunk::chunk_session_observations(
-            &kb,
+            kb,
             &session.session_id,
         )
         .await

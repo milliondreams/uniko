@@ -11,8 +11,6 @@
 //! See [`feedback_no_edit_uni`] in the user's memory — embed-usage
 //! capture requires a uni-db patch that is out of scope here.
 
-// Rust guideline compliant
-
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::Path;

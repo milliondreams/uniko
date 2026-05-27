@@ -10,8 +10,6 @@
 //!    Observation nodes are trace-only (no indexes); these chunks are the
 //!    searchable representation.
 
-// Rust guideline compliant
-
 use std::collections::{HashMap, HashSet};
 
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};

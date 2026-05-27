@@ -209,7 +209,7 @@ async fn review_observations_quality() {
         .fetch_all()
         .await
         .unwrap();
-    let mut buckets = vec![0; 11];
+    let mut buckets = [0; 11];
     let mut none_conf = 0;
     for row in conf.rows() {
         match row.get::<f64>("c") {

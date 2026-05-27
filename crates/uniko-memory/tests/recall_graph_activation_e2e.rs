@@ -7,8 +7,6 @@
 //! - Edge-weight multipliers actually bias the ranking — flipping the
 //!   default IN_SESSION/ABOUT weights reorders the output.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::Utc;

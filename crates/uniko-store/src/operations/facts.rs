@@ -5,8 +5,6 @@
 //! `ConsolidationCycle` audit node.  Embeddings are computed by Layer 2
 //! and supplied as an opaque vector — this module never calls Xervo.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
@@ -790,7 +788,8 @@ impl KnowledgeBase {
             .await
             .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
 
-        let mut out: HashMap<(String, String), Vec<(NodeId, Btic, String)>> = HashMap::new();
+        type FactRow = (NodeId, Btic, String);
+        let mut out: HashMap<(String, String), Vec<FactRow>> = HashMap::new();
         for row in result.rows() {
             let Ok(subject) = row.get::<String>("subject") else {
                 continue;
@@ -1007,5 +1006,3 @@ mod tests {
         assert!(c100 < 1.0);
     }
 }
-
-// Rust guideline compliant

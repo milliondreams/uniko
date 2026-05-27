@@ -8,8 +8,6 @@
 //!
 //! Run: cargo nextest run -p uniko-store --test get_edges_scaling_autoembed_repro --run-ignored all
 
-// Rust guideline compliant
-
 use std::time::Instant;
 
 use uni_db::api::schema::EmbeddingCfg;
@@ -101,7 +99,7 @@ async fn create_node(db: &Uni, cypher: &str, params: &[(&str, Value)]) -> i64 {
     let tx = session.tx().await.unwrap();
     let mut qb = tx.query_with(cypher);
     for (k, v) in params {
-        qb = qb.param(*k, v.clone());
+        qb = qb.param(k, v.clone());
     }
     let result = qb.fetch_all().await.unwrap();
     tx.commit().await.unwrap();

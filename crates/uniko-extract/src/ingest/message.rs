@@ -1,7 +1,5 @@
 //! Message ingest: create the Message node and all associated edges.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::Value;

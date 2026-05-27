@@ -3,8 +3,6 @@
 //! [`Filter`] translates to parameterized Cypher `WHERE` clauses, preventing
 //! injection by using numbered `$p{N}` parameters for all values.
 
-// Rust guideline compliant
-
 use uni_db::Value;
 
 use super::validate_property_name;

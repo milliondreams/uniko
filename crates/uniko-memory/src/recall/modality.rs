@@ -18,8 +18,6 @@
 //! counters at recall start, assert image/audio/video remain at zero
 //! for text-only corpora.
 //
-// Rust guideline compliant
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

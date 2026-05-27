@@ -18,8 +18,6 @@
 //!    surrounding body becomes `chunk_type="text"` with `Chunk.heading`
 //!    set to the nearest enclosing heading.
 //
-// Rust guideline compliant
-
 use dom_smoothie::Readability;
 
 use super::text::TextChunker;

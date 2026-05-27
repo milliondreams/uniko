@@ -1,7 +1,5 @@
 //! Intent profile construction for recall queries.
 
-// Rust guideline compliant
-
 use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use uniko_extract::ner::rules::extract_entities_rule_based;
@@ -430,119 +428,6 @@ pub fn predict_answer_type(question: &str) -> Option<&'static str> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn predicts_basic_wh() {
-        assert_eq!(
-            predict_answer_type("Who attended the wedding?"),
-            Some("person")
-        );
-        assert_eq!(
-            predict_answer_type("Where did I attend my cousin's wedding?"),
-            Some("location"),
-        );
-        assert_eq!(
-            predict_answer_type("When did I book the Airbnb?"),
-            Some("date"),
-        );
-        assert_eq!(
-            predict_answer_type("How many items of clothing do I need?"),
-            Some("measurement"),
-        );
-        assert_eq!(
-            predict_answer_type("What time do I wake up on Tuesdays?"),
-            Some("date"),
-        );
-        assert_eq!(
-            predict_answer_type("What book am I currently reading?"),
-            Some("other"),
-        );
-        assert_eq!(
-            predict_answer_type("What university did I attend?"),
-            Some("organization"),
-        );
-    }
-
-    #[test]
-    fn unknowns_return_none() {
-        assert_eq!(predict_answer_type("What did I buy for my sister?"), None);
-        assert_eq!(predict_answer_type("Why did I quit?"), None);
-        assert_eq!(
-            predict_answer_type("Tell me what was the rotation for Admon."),
-            None,
-        );
-    }
-
-    #[test]
-    fn variant_type_anchored_with_known_type() {
-        let entity_refs = vec!["Caroline".to_string()];
-        let got = build_type_anchored_text(&entity_refs, Some("other"));
-        assert_eq!(got.as_deref(), Some("Caroline other"));
-
-        let multi = vec!["Caroline".to_string(), "Sweden".to_string()];
-        let got = build_type_anchored_text(&multi, Some("date"));
-        assert_eq!(got.as_deref(), Some("Caroline Sweden date"));
-    }
-
-    #[test]
-    fn variant_type_anchored_skipped_when_inputs_missing() {
-        // No expected type → no variant.
-        let entity_refs = vec!["Caroline".to_string()];
-        assert!(build_type_anchored_text(&entity_refs, None).is_none());
-        // No entities → no variant.
-        let empty: Vec<String> = vec![];
-        assert!(build_type_anchored_text(&empty, Some("person")).is_none());
-    }
-
-    #[cfg(feature = "onnx")]
-    #[test]
-    fn variant_declarative_from_svo_triple() {
-        use uniko_extract::nlp::decode::SvoTriple;
-        let analysis = QueryAnalysis {
-            keywords: "pet Caroline have".to_string(),
-            entity_refs: vec!["Caroline".to_string()],
-            svo_triples: vec![SvoTriple {
-                subject: "Caroline".to_string(),
-                verb: "have".to_string(),
-                object: "pet".to_string(),
-            }],
-        };
-        let got = build_declarative_text(&analysis);
-        assert_eq!(got.as_deref(), Some("Caroline have pet"));
-    }
-
-    #[cfg(feature = "onnx")]
-    #[test]
-    fn variant_declarative_skipped_when_no_svo() {
-        let analysis = QueryAnalysis {
-            keywords: "pet".to_string(),
-            entity_refs: vec![],
-            svo_triples: vec![],
-        };
-        assert!(build_declarative_text(&analysis).is_none());
-    }
-
-    #[cfg(feature = "onnx")]
-    #[test]
-    fn variant_declarative_skipped_when_too_short() {
-        // Only a verb, no subject and no object → fewer than 2 tokens.
-        use uniko_extract::nlp::decode::SvoTriple;
-        let analysis = QueryAnalysis {
-            keywords: String::new(),
-            entity_refs: vec![],
-            svo_triples: vec![SvoTriple {
-                subject: String::new(),
-                verb: "go".to_string(),
-                object: String::new(),
-            }],
-        };
-        assert!(build_declarative_text(&analysis).is_none());
-    }
-}
-
 /// Analyze query with NLP pipeline to extract entities, content
 /// keywords, and SVO triples that downstream variant builders consume.
 ///
@@ -656,5 +541,117 @@ fn normalize_entity_text(raw: &str) -> Option<String> {
         None
     } else {
         Some(cleaned)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicts_basic_wh() {
+        assert_eq!(
+            predict_answer_type("Who attended the wedding?"),
+            Some("person")
+        );
+        assert_eq!(
+            predict_answer_type("Where did I attend my cousin's wedding?"),
+            Some("location"),
+        );
+        assert_eq!(
+            predict_answer_type("When did I book the Airbnb?"),
+            Some("date"),
+        );
+        assert_eq!(
+            predict_answer_type("How many items of clothing do I need?"),
+            Some("measurement"),
+        );
+        assert_eq!(
+            predict_answer_type("What time do I wake up on Tuesdays?"),
+            Some("date"),
+        );
+        assert_eq!(
+            predict_answer_type("What book am I currently reading?"),
+            Some("other"),
+        );
+        assert_eq!(
+            predict_answer_type("What university did I attend?"),
+            Some("organization"),
+        );
+    }
+
+    #[test]
+    fn unknowns_return_none() {
+        assert_eq!(predict_answer_type("What did I buy for my sister?"), None);
+        assert_eq!(predict_answer_type("Why did I quit?"), None);
+        assert_eq!(
+            predict_answer_type("Tell me what was the rotation for Admon."),
+            None,
+        );
+    }
+
+    #[test]
+    fn variant_type_anchored_with_known_type() {
+        let entity_refs = vec!["Caroline".to_string()];
+        let got = build_type_anchored_text(&entity_refs, Some("other"));
+        assert_eq!(got.as_deref(), Some("Caroline other"));
+
+        let multi = vec!["Caroline".to_string(), "Sweden".to_string()];
+        let got = build_type_anchored_text(&multi, Some("date"));
+        assert_eq!(got.as_deref(), Some("Caroline Sweden date"));
+    }
+
+    #[test]
+    fn variant_type_anchored_skipped_when_inputs_missing() {
+        // No expected type → no variant.
+        let entity_refs = vec!["Caroline".to_string()];
+        assert!(build_type_anchored_text(&entity_refs, None).is_none());
+        // No entities → no variant.
+        let empty: Vec<String> = vec![];
+        assert!(build_type_anchored_text(&empty, Some("person")).is_none());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn variant_declarative_from_svo_triple() {
+        use uniko_extract::nlp::decode::SvoTriple;
+        let analysis = QueryAnalysis {
+            keywords: "pet Caroline have".to_string(),
+            entity_refs: vec!["Caroline".to_string()],
+            svo_triples: vec![SvoTriple {
+                subject: "Caroline".to_string(),
+                verb: "have".to_string(),
+                object: "pet".to_string(),
+            }],
+        };
+        let got = build_declarative_text(&analysis);
+        assert_eq!(got.as_deref(), Some("Caroline have pet"));
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn variant_declarative_skipped_when_no_svo() {
+        let analysis = QueryAnalysis {
+            keywords: "pet".to_string(),
+            entity_refs: vec![],
+            svo_triples: vec![],
+        };
+        assert!(build_declarative_text(&analysis).is_none());
+    }
+
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn variant_declarative_skipped_when_too_short() {
+        // Only a verb, no subject and no object → fewer than 2 tokens.
+        use uniko_extract::nlp::decode::SvoTriple;
+        let analysis = QueryAnalysis {
+            keywords: String::new(),
+            entity_refs: vec![],
+            svo_triples: vec![SvoTriple {
+                subject: String::new(),
+                verb: "go".to_string(),
+                object: String::new(),
+            }],
+        };
+        assert!(build_declarative_text(&analysis).is_none());
     }
 }

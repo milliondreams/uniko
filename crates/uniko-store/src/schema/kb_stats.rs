@@ -1,7 +1,5 @@
 //! Layer 8: `:KnowledgeBaseStats` — singleton KB-level metadata node.
 //
-// Rust guideline compliant.
-
 use uni_db::{DataType, IndexType, ScalarType, SchemaBuilder};
 
 use super::constants::labels;

@@ -18,8 +18,6 @@
 //!   cargo build -p uniko-bench --bin insert-microbench --release
 //!   ./target/release/insert-microbench --nodes 510 --sess 1,8,24 --reps 3
 
-// Rust guideline compliant
-
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -378,6 +376,7 @@ async fn run_worker_nodes(
 
 /// One worker for edge-insert scenarios. Picks endpoints from the
 /// pre-populated `vids` for this label. Each per-tx insert is one edge.
+#[allow(clippy::too_many_arguments)]
 async fn run_worker_edges(
     db: Arc<Uni>,
     _label: &str,

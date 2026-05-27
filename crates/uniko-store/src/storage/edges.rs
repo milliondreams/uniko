@@ -1,7 +1,5 @@
 //! Edge CRUD operations on the knowledge graph.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::{Transaction, Value};
@@ -161,10 +159,9 @@ impl KnowledgeBase {
         // Group by edge_type, preserving input order within each group.
         // BTreeMap so the per-type call order is deterministic — eases
         // log/diff inspection and is irrelevant to correctness.
-        let mut by_type: std::collections::BTreeMap<
-            &str,
-            Vec<(NodeId, NodeId, HashMap<String, Value>)>,
-        > = std::collections::BTreeMap::new();
+        type EdgeTriple = (NodeId, NodeId, HashMap<String, Value>);
+        let mut by_type: std::collections::BTreeMap<&str, Vec<EdgeTriple>> =
+            std::collections::BTreeMap::new();
         for (edge_type, from, to, props) in edges {
             by_type
                 .entry(*edge_type)

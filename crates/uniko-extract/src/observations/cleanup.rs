@@ -19,8 +19,6 @@
 //!   modifier strings (`not`, `n't`, `never`, `no`) for the upcoming
 //!   `polarity` field.
 
-// Rust guideline compliant
-
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -86,10 +84,10 @@ fn strip_aux_prefix(predicate: &str) -> &str {
         "to_",
     ];
     for prefix in PREFIXES {
-        if let Some(rest) = predicate.strip_prefix(prefix) {
-            if !rest.is_empty() {
-                return rest;
-            }
+        if let Some(rest) = predicate.strip_prefix(prefix)
+            && !rest.is_empty()
+        {
+            return rest;
         }
     }
     predicate

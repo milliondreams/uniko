@@ -16,8 +16,6 @@
 //! `HAS_CONTENT`) are identical across backends. Only the path to
 //! bytes differs.
 //
-// Rust guideline compliant.
-
 use std::path::PathBuf;
 
 use async_trait::async_trait;

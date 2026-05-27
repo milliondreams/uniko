@@ -4,8 +4,6 @@
 //! property names are validated before interpolation; values are always
 //! bound as `$pN` parameters.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::{Transaction, Value};

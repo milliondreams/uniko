@@ -20,8 +20,6 @@
 //! "missed" when the rule didn't bind any matches in that
 //! consolidation pass; recording a match resets the counter.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};

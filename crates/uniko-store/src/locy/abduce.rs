@@ -1,7 +1,5 @@
 //! Abductive reasoning: given a conclusion, find minimal supporting facts.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::Value;

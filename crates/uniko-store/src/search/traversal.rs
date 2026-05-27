@@ -1,7 +1,5 @@
 //! Graph traversal: BFS, shortest path, and Personalized PageRank.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use crate::error::{Result, UnikoError};

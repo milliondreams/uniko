@@ -13,8 +13,6 @@
 //! ~3.9x. The missing label disjunction support costs us ~2x on this
 //! workload.
 
-// Rust guideline compliant
-
 use uni_db::{Uni, Value};
 
 async fn setup_db() -> Uni {

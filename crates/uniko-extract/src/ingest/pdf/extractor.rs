@@ -6,8 +6,6 @@
 //! underlying parser does not bring down the ingest worker
 //! (pdf-extract issue #141 tracks ~50 known panics on adversarial input).
 
-// Rust guideline compliant
-
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 /// Per-page extraction result. `page_number` is 1-indexed to match the

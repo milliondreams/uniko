@@ -3,8 +3,6 @@
 //! Wraps uni-db's `uni.vector.query` procedure with typed results and
 //! optional property filtering.
 
-// Rust guideline compliant
-
 use crate::error::{Result, UnikoError};
 use crate::search::SearchResult;
 use crate::storage::filter::Filter;

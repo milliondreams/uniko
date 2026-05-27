@@ -11,8 +11,6 @@
 //! we panic with a clear message so a missing key fails loud
 //! instead of letting the test pass vacuously.
 
-// Rust guideline compliant
-
 use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;

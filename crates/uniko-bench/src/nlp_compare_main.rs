@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Serialize;
 
-use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
+use uni_db::ModelAliasSpec;
 use uniko_bench::longmemeval::data;
 use uniko_extract::ingest::context::SentenceContext;
 use uniko_extract::nlp::NlpPipeline;

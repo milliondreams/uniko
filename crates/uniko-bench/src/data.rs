@@ -189,21 +189,21 @@ pub fn build_evidence_lookup(sessions: &[ParsedSession]) -> HashMap<String, Stri
     for session in sessions {
         for turn in &session.turns {
             let mut text = turn.text.clone();
-            if let Some(ref caption) = turn.blip_caption {
-                if !caption.is_empty() {
-                    if !text.is_empty() {
-                        text.push(' ');
-                    }
-                    text.push_str(caption);
+            if let Some(ref caption) = turn.blip_caption
+                && !caption.is_empty()
+            {
+                if !text.is_empty() {
+                    text.push(' ');
                 }
+                text.push_str(caption);
             }
-            if let Some(ref query) = turn.query {
-                if !query.is_empty() {
-                    if !text.is_empty() {
-                        text.push(' ');
-                    }
-                    text.push_str(query);
+            if let Some(ref query) = turn.query
+                && !query.is_empty()
+            {
+                if !text.is_empty() {
+                    text.push(' ');
                 }
+                text.push_str(query);
             }
             lookup.insert(turn.dia_id.clone(), text);
         }

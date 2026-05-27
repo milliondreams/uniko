@@ -10,8 +10,6 @@
 //!   skip cross-modal channels in text-only corpora. Phase 3 reads it;
 //!   Track B writes flip the bits when binary ingest lands.
 //
-// Rust guideline compliant.
-
 use std::collections::HashMap;
 
 use chrono::Utc;

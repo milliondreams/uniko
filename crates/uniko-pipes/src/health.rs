@@ -1,7 +1,5 @@
 //! Worker health tracking and status classification.
 
-// Rust guideline compliant
-
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};

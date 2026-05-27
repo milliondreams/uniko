@@ -5,8 +5,6 @@
 //! `:ArtifactContent` row. There is no separate backend write — the
 //! Lance column store holds the bytes directly.
 //
-// Rust guideline compliant.
-
 use async_trait::async_trait;
 
 use super::{BlobStore, PutOutcome};

@@ -1,7 +1,5 @@
 //! Session lifecycle management for the ingest pipeline.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};

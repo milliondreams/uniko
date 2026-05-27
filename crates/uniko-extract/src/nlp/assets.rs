@@ -4,8 +4,6 @@
 //! inference works without external file dependencies.  Only the ONNX
 //! model itself is downloaded from HuggingFace on first use.
 
-// Rust guideline compliant
-
 use std::sync::OnceLock;
 
 use serde::Deserialize;

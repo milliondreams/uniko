@@ -4,8 +4,6 @@
 //! BIO tags → entity spans, dep2label tags → dependency tree,
 //! and dependency tree → SVO triples.
 
-// Rust guideline compliant
-
 use ndarray::{ArrayView1, ArrayView2, ArrayView3};
 
 use super::types::{DepArc, NerEntityType, NerSpan, SentenceClass, SrlArg, SrlFrame};
@@ -736,16 +734,15 @@ fn resolve_subject(
     }
 
     // Second person → other speaker.
-    if lower == "you"
+    if (lower == "you"
         || lower.starts_with("you'")
         || lower.starts_with("you\u{2019}")
         || lower == "your"
         || lower == "yours"
-        || lower == "yourself"
+        || lower == "yourself")
+        && let Some(other) = ctx.other_speakers.first()
     {
-        if let Some(other) = ctx.other_speakers.first() {
-            return other.clone();
-        }
+        return other.clone();
     }
 
     // Third person pronoun → last noun from context.
@@ -792,13 +789,12 @@ fn collect_noun_phrase(root_idx: usize, words: &[String], dep_arcs: &[DepArc]) -
         }
     }
     indices.sort_unstable();
-    let phrase = indices
+    indices
         .iter()
         .filter_map(|&i| words.get(i))
         .map(|w| strip_trailing_punct(w))
         .collect::<Vec<_>>()
-        .join(" ");
-    phrase
+        .join(" ")
 }
 
 /// Update the sentence context with noun phrases from a processed sentence.

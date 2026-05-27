@@ -1,7 +1,5 @@
 //! Data types for the observation extraction pipeline.
 
-// Rust guideline compliant
-
 use chrono::{DateTime, Utc};
 
 use uniko_store::NodeId;

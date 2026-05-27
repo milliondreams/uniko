@@ -4,8 +4,6 @@
 //! uniko.  Higher layers (Extract, Memory, Cortex) interact with the graph
 //! exclusively through this struct.
 
-// Rust guideline compliant
-
 pub mod batch;
 pub mod blob;
 pub mod edges;

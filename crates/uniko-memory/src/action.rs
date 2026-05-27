@@ -13,8 +13,6 @@
 //! This keeps the hot path's payload small while preserving searchable
 //! content in the Artifact node's full-text and embedding indexes.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};

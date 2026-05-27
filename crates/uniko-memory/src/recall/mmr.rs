@@ -11,8 +11,6 @@
 //! MMR objective at each selection step:
 //!     `lambda * rel(i) - (1 - lambda) * max_sim(i, selected)`
 
-// Rust guideline compliant
-
 use std::collections::HashSet;
 
 use super::RecallItem;

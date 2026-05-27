@@ -3,8 +3,6 @@
 //! Forks graph state, applies mutations, runs a query, then rolls back
 //! — the original graph is never modified.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::Value;

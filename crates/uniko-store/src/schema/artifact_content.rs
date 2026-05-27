@@ -1,8 +1,6 @@
 //! Layer 3: `:ArtifactContent` — content-addressed metadata/index node
 //! for every unique blob.
 //
-// Rust guideline compliant.
-
 use uni_db::{DataType, IndexType, ScalarType, SchemaBuilder};
 
 use super::constants::{edges, labels};

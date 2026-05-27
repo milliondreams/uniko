@@ -396,7 +396,8 @@ async fn main() -> Result<()> {
     // no cross-item write contention.  Results land in a shared Vec
     // (order is the completion order, not the input order — the
     // aggregation routines key on question_id, not position).
-    let all_results: Arc<tokio::sync::Mutex<Vec<(query::LmeQueryResult, Option<f64>)>>> =
+    type ResultEntry = (query::LmeQueryResult, Option<f64>);
+    let all_results: Arc<tokio::sync::Mutex<Vec<ResultEntry>>> =
         Arc::new(tokio::sync::Mutex::new(Vec::with_capacity(items.len())));
     let bench_start = Instant::now();
     let total_items = items.len();

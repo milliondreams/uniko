@@ -17,8 +17,6 @@
 //!     cargo run -p uniko-bench --release --features gpu-cuda \
 //!         --bin profile-writes -- --kb-dir data/lme_kb_dbg/5d3d2817
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 

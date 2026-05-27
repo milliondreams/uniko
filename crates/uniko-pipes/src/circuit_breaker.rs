@@ -3,8 +3,6 @@
 //! Wraps all LLM calls.  When the provider fails repeatedly the breaker
 //! opens and pipeline steps fall back to local alternatives.
 
-// Rust guideline compliant
-
 use std::future::Future;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};

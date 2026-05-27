@@ -1,7 +1,5 @@
 //! Action output overflow: large outputs become Artifact nodes.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::Value;

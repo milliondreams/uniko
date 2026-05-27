@@ -5,8 +5,6 @@
 //! converts `UNWIND … MATCH WHERE id() = e.col` into an efficient
 //! hash join rather than a cross-join + filter.
 
-// Rust guideline compliant
-
 use std::collections::{BTreeSet, HashMap};
 
 use uni_db::{Transaction, Value, Vid};

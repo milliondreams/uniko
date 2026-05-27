@@ -213,10 +213,10 @@ async fn run_repl(kb: &KnowledgeBase, format: &str, quiet: bool) -> Result<()> {
             let q = std::mem::take(&mut buf);
             // Strip trailing semicolon — uni-db parser doesn't accept it.
             let q = q.trim().trim_end_matches(';').to_string();
-            if !q.is_empty() {
-                if let Err(e) = run_one(kb, &q, format, quiet).await {
-                    eprintln!("ERROR: {e}");
-                }
+            if !q.is_empty()
+                && let Err(e) = run_one(kb, &q, format, quiet).await
+            {
+                eprintln!("ERROR: {e}");
             }
         }
     }

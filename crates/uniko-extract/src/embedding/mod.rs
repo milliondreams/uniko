@@ -9,8 +9,6 @@
 //! whose embedding text is synthesized from multiple properties
 //! (e.g. Entity: `"name (type)"`).
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::Value;

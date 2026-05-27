@@ -3,8 +3,6 @@
 //! All types derive `Serialize`/`Deserialize` so that [`NlpResult`] can be
 //! passed between pipeline steps via `PipelineContext::metadata` as JSON.
 
-// Rust guideline compliant
-
 use serde::{Deserialize, Serialize};
 
 /// Full NLP analysis result for a single text input.

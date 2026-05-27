@@ -3,8 +3,6 @@
 //! These types flow through channels between the pipeline system and its
 //! workers.  They carry no logic — only data.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};

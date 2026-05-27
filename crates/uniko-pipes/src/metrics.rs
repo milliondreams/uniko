@@ -3,8 +3,6 @@
 //! All metrics use the `uniko.` prefix and the [`metrics`] crate for
 //! Counter, Gauge, and Histogram types.
 
-// Rust guideline compliant
-
 use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use serde::Serialize;
 

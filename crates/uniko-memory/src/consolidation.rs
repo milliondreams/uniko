@@ -33,8 +33,6 @@
 //! [`DRIFT_THRESHOLD`], `Entity.unstable = true` so the recall cascade
 //! can force Phase 2+ for queries that reference it.
 
-// Rust guideline compliant
-
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};

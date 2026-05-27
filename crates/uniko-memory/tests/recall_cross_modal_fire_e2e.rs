@@ -6,8 +6,6 @@
 //! Companion to [`recall_modality_lazy_e2e.rs`] which proves the
 //! dormant case in a text-only corpus.
 //
-// Rust guideline compliant
-
 use uni_db::Value;
 use uniko_memory::recall::RecallConfig;
 use uniko_memory::recall::intent::{IntentProfile, QueryModalities};
@@ -71,10 +69,12 @@ async fn image_channel_fires_when_all_preconditions_met() {
         },
     };
 
-    let mut cfg = RecallConfig::default();
-    cfg.enable_image_channel = true;
-    // Keep min_score sane for cosine on one-hot vectors.
-    cfg.min_score = 0.0;
+    let cfg = RecallConfig {
+        enable_image_channel: true,
+        // Keep min_score sane for cosine on one-hot vectors.
+        min_score: 0.0,
+        ..Default::default()
+    };
 
     let counters = RecallCounters::new();
     let items = phase2_expand(&kb, &intent, &cfg, Some(counters.clone())).await;
@@ -153,8 +153,10 @@ async fn image_channel_dormant_when_no_query_vec() {
         query_modalities: QueryModalities::default(),
     };
 
-    let mut cfg = RecallConfig::default();
-    cfg.enable_image_channel = true;
+    let cfg = RecallConfig {
+        enable_image_channel: true,
+        ..Default::default()
+    };
 
     let counters = RecallCounters::new();
     let _ = phase2_expand(&kb, &intent, &cfg, Some(counters.clone())).await;

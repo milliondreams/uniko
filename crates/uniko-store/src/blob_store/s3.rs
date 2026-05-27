@@ -7,8 +7,6 @@
 //! Key layout mirrors [`super::fs::FsBlobStore`]: `<prefix>/<aa>/<bb>/<content_id>`,
 //! so an operator can copy a `Fs` tree to S3 without re-keying.
 //
-// Rust guideline compliant.
-
 use std::sync::Arc;
 
 use async_trait::async_trait;

@@ -5,8 +5,6 @@
 //! be inferred from messages; tools handle what only the agent can
 //! decide to record.
 
-// Rust guideline compliant
-
 pub use uniko_memory::nl_to_cypher::{is_safe_read_only, translate as translate_nl_to_cypher};
 pub use uniko_memory::policy::{Viewer, filter_bundle, visibility_admits};
 pub use uniko_memory::rules::{

@@ -4,8 +4,6 @@
 //! implements [`Step`].  Steps are composed into chains and executed
 //! per-item with error isolation.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::sync::Arc;
 

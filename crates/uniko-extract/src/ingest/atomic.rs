@@ -20,8 +20,6 @@
 //! Pre-tx `ensure_session_and_sender` still uses its own commits
 //! (one per first-sight); folding those is a follow-up.
 
-// Rust guideline compliant
-
 use uniko_pipes::types::IngestMessage;
 use uniko_store::{KnowledgeBase, NodeId};
 
@@ -280,6 +278,7 @@ async fn extract_entities_and_nlp(
     }
 
     // 3. ONNX NER + per-sentence NLP cascade.
+    #[allow(unused_assignments)]
     let mut nlp_ms: u128 = 0;
     #[cfg(feature = "onnx")]
     let nlp_results = {

@@ -20,8 +20,6 @@
 //! Markdown cells with `|` or `\n` are escaped so the emitted table is
 //! always well-formed.
 //
-// Rust guideline compliant
-
 use std::collections::BTreeMap;
 
 use serde_json::Value;

@@ -4,8 +4,6 @@
 //! chunks with `symbol_name` metadata.  Falls back to [`TextChunker`] if
 //! parsing fails.
 
-// Rust guideline compliant
-
 #![cfg(feature = "code-parse")]
 
 use tree_sitter::Parser;

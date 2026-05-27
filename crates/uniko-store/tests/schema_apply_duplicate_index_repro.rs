@@ -49,8 +49,6 @@
 //! no-op for those indexes — neither growing the indexes vector nor
 //! triggering a synchronous physical rebuild.
 
-// Rust guideline compliant
-
 use uni_db::{DataType, IndexType, ScalarType, Uni};
 
 /// Define a small schema with one label, one property, and one

@@ -3,8 +3,6 @@
 //! Runs before any observation extraction (< 1 ms).  Filters out
 //! greetings, pure questions, system messages, and very short content.
 
-// Rust guideline compliant
-
 use std::collections::HashSet;
 use std::sync::OnceLock;
 

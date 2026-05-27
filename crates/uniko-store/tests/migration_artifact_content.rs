@@ -6,8 +6,6 @@
 //! `HAS_CONTENT` edge connects the pair, and `a.content` is NULL.
 //! Re-running the migration is a no-op.
 //
-// Rust guideline compliant.
-
 use uniko_store::KnowledgeBase;
 use uniko_store::blob_store::BlobStorage;
 use uniko_store::config::UnikoConfig;
@@ -86,9 +84,11 @@ async fn migration_lance_backend_basic_and_idempotent() {
 #[tokio::test]
 async fn migration_fs_backend_writes_bytes_to_disk() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut cfg = UnikoConfig::default();
-    cfg.blob_storage = BlobStorage::Fs {
-        root: tmp.path().to_path_buf(),
+    let cfg = UnikoConfig {
+        blob_storage: BlobStorage::Fs {
+            root: tmp.path().to_path_buf(),
+        },
+        ..Default::default()
     };
     let kb = KnowledgeBase::in_memory(cfg).await.expect("KB Fs");
 

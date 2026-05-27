@@ -4,8 +4,6 @@
 //! of hex chars form the directory fanout so a million blobs leaves
 //! ~256 entries per second-level dir.
 //
-// Rust guideline compliant.
-
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;

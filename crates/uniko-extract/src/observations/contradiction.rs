@@ -48,8 +48,6 @@
 //! P3's role is to **extract observations** — contradiction resolution
 //! is P4's responsibility by design (spec F38).
 
-// Rust guideline compliant
-
 use super::types::ContradictionFlag;
 
 /// Check a new observation against existing ones for contradictions.

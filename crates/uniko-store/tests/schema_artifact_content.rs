@@ -8,8 +8,6 @@
 //! - the singleton-mismatch test needs an on-disk KB (the in-memory
 //!   variant can't be reopened).
 //
-// Rust guideline compliant.
-
 use uniko_store::KnowledgeBase;
 use uniko_store::blob_store::BlobStorage;
 use uniko_store::config::UnikoConfig;
@@ -114,9 +112,11 @@ async fn reopen_with_mismatched_blob_storage_is_hard_error() {
 
     // Reopen with Fs backend: must error from init_kb_stats.
     let blob_root = tmp.path().join("blobs");
-    let mut cfg = UnikoConfig::default();
-    cfg.blob_storage = BlobStorage::Fs {
-        root: blob_root.clone(),
+    let cfg = UnikoConfig {
+        blob_storage: BlobStorage::Fs {
+            root: blob_root.clone(),
+        },
+        ..Default::default()
     };
     let err = KnowledgeBase::open(&path, cfg).await;
     assert!(

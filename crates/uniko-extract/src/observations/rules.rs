@@ -4,8 +4,6 @@
 //! observation is a self-contained sentence that can be understood
 //! without surrounding context.
 
-// Rust guideline compliant
-
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};

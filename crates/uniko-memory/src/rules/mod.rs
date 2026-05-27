@@ -1,7 +1,5 @@
 //! Rule management: stdlib Locy rules and lifecycle.
 
-// Rust guideline compliant
-
 pub mod lifecycle;
 pub mod stdlib;
 

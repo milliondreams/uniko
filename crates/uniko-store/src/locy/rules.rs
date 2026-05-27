@@ -1,7 +1,5 @@
 //! Locy rule creation, execution, and lifecycle management.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::Value;

@@ -3,8 +3,6 @@
 //! Failed pipeline items are stored as `DeadLetter` nodes and can be
 //! retried automatically or managed manually.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::sync::Arc;
 

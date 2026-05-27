@@ -6,7 +6,7 @@
 //! mean cluster size, and the top-N most-supported triples.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use uniko_bench::open_kb;
 use uniko_store::config::UnikoConfig;
@@ -54,7 +54,7 @@ struct Summary {
     predicates: BTreeSet<String>,
 }
 
-async fn summarize(path: &PathBuf) -> anyhow::Result<Summary> {
+async fn summarize(path: &Path) -> anyhow::Result<Summary> {
     let kb = open_kb(path, UnikoConfig::default(), &[]).await?;
     let session = kb.db().session();
 

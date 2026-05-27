@@ -8,8 +8,6 @@
 //! - Facts whose `valid_at` BTIC overlaps the window surface; ones
 //!   that don't overlap do not.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, TimeZone, Utc};

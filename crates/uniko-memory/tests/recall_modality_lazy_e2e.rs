@@ -12,8 +12,6 @@
 //! must return `false` regardless of whether the per-channel config
 //! toggles are flipped on.
 //
-// Rust guideline compliant
-
 use uniko_memory::recall::RecallConfig;
 use uniko_memory::recall::modality::{
     RecallCounters, audio_channel_active, image_channel_active, multimodal_channel_active,

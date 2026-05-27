@@ -9,8 +9,6 @@
 //! not raw text fragments. "I'm starting a dance studio" → "Jon is
 //! starting a dance studio" (clean, declarative, speaker-attributed).
 
-// Rust guideline compliant
-
 pub mod cleanup;
 pub mod contradiction;
 pub mod filter;

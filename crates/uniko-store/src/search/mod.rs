@@ -1,8 +1,6 @@
 //! Search operations: vector similarity, fulltext BM25, hybrid RRF, and
 //! graph traversal.
 
-// Rust guideline compliant
-
 pub mod fulltext;
 pub mod hybrid;
 pub mod traversal;

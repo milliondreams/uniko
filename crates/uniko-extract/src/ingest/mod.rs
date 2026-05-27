@@ -5,8 +5,6 @@
 //! [`artifact::ingest_artifact`] based on the `ingest_type` metadata
 //! key in the [`PipelineContext`](uniko_pipes::PipelineContext).
 
-// Rust guideline compliant
-
 pub mod artifact;
 pub mod atomic;
 pub mod chunking;

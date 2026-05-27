@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use uni_db::{Uni, Value};
+use uni_db::Value;
 use uniko_store::config::UnikoConfig;
 use uniko_store::storage::KnowledgeBase;
 

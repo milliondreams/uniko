@@ -11,8 +11,6 @@
 //! Chunk `index` is global (0..N across all pages), matching the rest
 //! of the chunker pipeline.
 
-// Rust guideline compliant
-
 use serde_json::json;
 
 use super::super::chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, text::TextChunker};

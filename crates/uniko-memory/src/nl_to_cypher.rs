@@ -19,8 +19,6 @@
 //! Cypher — that's the caller's responsibility, so this module stays
 //! a thin pure-text bridge.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -41,10 +39,10 @@ const RETRY_ATTEMPTS: u32 = 2;
 /// LLM generation budget.  Sized for gpt-5-nano: reasoning models
 /// burn completion tokens on internal chain-of-thought before
 /// emitting visible content.  Empirical measurement: a one-line
-/// "count messages" query used 471 completion tokens (448 reasoning
-/// + 23 visible).  2048 gives ~1500 tokens of headroom after a worst-
-/// case reasoning pass — enough for any single Cypher query while
-/// keeping cost bounded.
+/// "count messages" query used 471 completion tokens (448 reasoning,
+/// 23 visible).  2048 gives ~1500 tokens of headroom after a worst-case
+/// reasoning pass — enough for any single Cypher query while keeping
+/// cost bounded.
 const MAX_TOKENS: usize = 2048;
 
 /// System prompt instructing the LLM to emit read-only Cypher.

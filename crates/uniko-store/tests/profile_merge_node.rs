@@ -17,8 +17,6 @@
 //!   --ignored --nocapture
 //! ```
 
-// Rust guideline compliant
-
 use std::path::PathBuf;
 
 use uni_db::{ModelAliasSpec, ModelTask, Uni, Value, WarmupPolicy};

@@ -17,8 +17,6 @@
 //! Every model / device / recall / cost knob lives in the bench-config
 //! JSON; CLI carries only what changes per invocation.
 
-// Rust guideline compliant
-
 use uniko_bench::{
     IngestObserver, bench_config::BenchConfig, data, eval, events, ingest, pricing as pricing_mod,
     query, report,

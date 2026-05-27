@@ -67,8 +67,6 @@
 //! `minilm`, `embeddinggemma`, `embeddinggemma-mistralrs`) or
 //! `{"inline": <EmbeddingConfig>}` for a fully specified config.
 
-// Rust guideline compliant
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};

@@ -3,8 +3,6 @@
 //! [`select_chunker`] picks the right strategy based on content type.
 //! [`count_tokens`] provides accurate token counting via tiktoken.
 
-// Rust guideline compliant
-
 pub mod text;
 
 #[cfg(feature = "code-parse")]

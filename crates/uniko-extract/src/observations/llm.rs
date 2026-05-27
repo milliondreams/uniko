@@ -2,8 +2,6 @@
 //!
 //! Real implementation deferred until an LLM provider is available.
 
-// Rust guideline compliant
-
 use super::types::RawObservation;
 
 /// Enhance observation extraction using an LLM provider.

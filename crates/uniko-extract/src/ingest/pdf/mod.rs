@@ -9,8 +9,6 @@
 //! `metadata.page_number`, so adding rendered-page derivations later
 //! does not require re-chunking.
 
-// Rust guideline compliant
-
 pub mod chunker;
 pub mod extractor;
 pub mod input;

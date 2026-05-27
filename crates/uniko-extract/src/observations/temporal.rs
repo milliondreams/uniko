@@ -9,8 +9,6 @@
 //! recognised, the reference is returned unchanged — callers can detect
 //! a no-match by comparing the result to the reference.
 
-// Rust guideline compliant
-
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc, Weekday};
@@ -728,7 +726,6 @@ mod tests {
         assert_eq!(hi.to_rfc3339(), "2026-01-01T00:00:00+00:00");
     }
 
-    #[test]
     // ── Regression tests for substring weekday false-positives ──────
 
     /// `"next Whitsun"` once matched as `"next … sun"` (trailing 3 chars

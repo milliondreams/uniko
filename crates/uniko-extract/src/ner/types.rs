@@ -1,7 +1,5 @@
 //! Data types for the entity extraction pipeline.
 
-// Rust guideline compliant
-
 use serde::{Deserialize, Serialize};
 
 use uniko_store::NodeId;

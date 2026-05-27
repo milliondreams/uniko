@@ -3,8 +3,6 @@
 //! Extracts function, class, struct, and import names from source code
 //! with high confidence (0.9) since AST parsing is deterministic.
 
-// Rust guideline compliant
-
 #![cfg(feature = "code-parse")]
 
 use tree_sitter::Parser;

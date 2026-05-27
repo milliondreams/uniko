@@ -13,8 +13,6 @@
 //!   the `:ArtifactContent.bytes` column; for Fs / S3 dispatches to
 //!   the backend.
 //
-// Rust guideline compliant.
-
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use uni_db::Value;

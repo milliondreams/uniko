@@ -3,8 +3,6 @@
 //! Wraps uni-db's Locy engine for rule management, hypothetical reasoning
 //! (ASSUME), and abductive reasoning (ABDUCE).
 
-// Rust guideline compliant
-
 pub mod abduce;
 pub mod assume;
 pub mod rules;

@@ -6,8 +6,6 @@
 //! expected behavior.  Compact (Phase 1) and Expand (Phase 2)
 //! activate in execution Phase 2 when consolidation creates Facts.
 
-// Rust guideline compliant
-
 pub mod intent;
 pub mod mmr;
 pub mod modality;
@@ -1042,6 +1040,7 @@ pub async fn phase2_expand(
 /// tolerate per-source errors without poisoning the whole phase.  This
 /// is the parallel-callable building block fed into
 /// `futures::future::join_all` inside [`phase2_expand`].
+#[allow(clippy::too_many_arguments)]
 async fn run_phase2_source(
     kb: &KnowledgeBase,
     label: &str,
@@ -1562,6 +1561,7 @@ async fn run_recall_for_variant(
     let has_vec = !qvec.is_empty();
 
     // Hybrid (vector + BM25) over chunk types.
+    #[allow(clippy::type_complexity)]
     let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str, &str)] = &[
         (
             "Chunk",
@@ -1804,7 +1804,7 @@ mod rrf_tests {
 
     fn fused_sorted(per_variant: Vec<Vec<RankedHit>>, k: f64) -> Vec<(NodeId, f64)> {
         let slices: Vec<&[RankedHit]> = per_variant.iter().map(|v| v.as_slice()).collect();
-        let mut pairs: Vec<(NodeId, f64)> = rrf_fuse(slices.into_iter(), k)
+        let mut pairs: Vec<(NodeId, f64)> = rrf_fuse(slices, k)
             .into_iter()
             .map(|(nid, (_, _, s))| (nid, s))
             .collect();

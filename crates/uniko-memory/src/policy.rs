@@ -15,8 +15,6 @@
 //! module; consolidation and ingest write the field and the recall
 //! filter reads it back at assembly time.
 
-// Rust guideline compliant
-
 use std::collections::HashSet;
 
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
@@ -170,7 +168,7 @@ pub async fn filter_bundle(
     let visibilities = fetch_visibilities(kb, &policy_node_ids).await?;
     bundle.items.retain(|item| {
         visibility_for(item, &visibilities)
-            .map_or(true, |v| visibility_admits(Some(v.as_str()), viewer))
+            .is_none_or(|v| visibility_admits(Some(v.as_str()), viewer))
     });
     // Recompute token count after filtering — same heuristic the
     // recall cascade and working memory use.

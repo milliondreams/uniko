@@ -5,6 +5,4 @@
 //! types.  P4 Consolidation calls these helpers rather than building
 //! Cypher by hand at the worker layer.
 
-// Rust guideline compliant
-
 pub mod facts;

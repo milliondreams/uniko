@@ -24,8 +24,6 @@
 //! Recording is **off by default** at the convenience wrapper — the
 //! caller must supply [`QueryRecordOptions`] to opt in. The standalone
 //! primitive is always explicit.
-// Rust guideline compliant
-
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};

@@ -4,8 +4,6 @@
 //! It is the single entry point for submitting ingest and consolidation
 //! tasks.
 
-// Rust guideline compliant
-
 pub(crate) mod consolidation_worker;
 pub(crate) mod ingest_worker;
 

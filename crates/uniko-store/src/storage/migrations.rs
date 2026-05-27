@@ -7,8 +7,6 @@
 //! idempotent and backend PUTs are idempotent on the hash key (CAS
 //! dedup).
 //
-// Rust guideline compliant.
-
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -276,6 +274,20 @@ fn mean_pool(vectors: &[Vec<f32>]) -> Option<Vec<f32>> {
     Some(acc)
 }
 
+/// Coarse MIME guess from the legacy `Artifact.kind` value. Text-only
+/// path was the only producer of `Artifact.content`, so the guess is
+/// always a `text/*` variant.
+fn best_mime_guess(kind: &str) -> String {
+    match kind {
+        "html" => "text/html".into(),
+        "markdown" | "md" => "text/markdown".into(),
+        "code" => "text/plain".into(),
+        "csv" => "text/csv".into(),
+        "json" => "application/json".into(),
+        _ => "text/plain".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,19 +308,5 @@ mod tests {
     fn test_mean_pool_dim_mismatch() {
         let vecs = vec![vec![1.0_f32, 2.0], vec![1.0, 2.0, 3.0]];
         assert!(mean_pool(&vecs).is_none());
-    }
-}
-
-/// Coarse MIME guess from the legacy `Artifact.kind` value. Text-only
-/// path was the only producer of `Artifact.content`, so the guess is
-/// always a `text/*` variant.
-fn best_mime_guess(kind: &str) -> String {
-    match kind {
-        "html" => "text/html".into(),
-        "markdown" | "md" => "text/markdown".into(),
-        "code" => "text/plain".into(),
-        "csv" => "text/csv".into(),
-        "json" => "application/json".into(),
-        _ => "text/plain".into(),
     }
 }

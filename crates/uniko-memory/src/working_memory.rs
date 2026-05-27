@@ -17,8 +17,6 @@
 //! `budget` is None a default of 8192 tokens is used (matches the
 //! recall cascade default).
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use serde::Serialize;

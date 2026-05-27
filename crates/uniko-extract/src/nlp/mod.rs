@@ -10,8 +10,6 @@
 //! unavailable, [`NlpPipeline::try_new`] returns `None` and callers
 //! fall back to rule-based extraction.
 
-// Rust guideline compliant
-
 pub mod assets;
 pub mod decode;
 pub mod types;

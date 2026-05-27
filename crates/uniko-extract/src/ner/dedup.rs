@@ -4,8 +4,6 @@
 //! similarity above threshold, (3) create new.  Creates MENTIONS edges
 //! from source nodes to Entity nodes.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::{Transaction, Value};

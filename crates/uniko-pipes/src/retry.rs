@@ -1,7 +1,5 @@
 //! Retry with exponential backoff, jitter, and cancellation awareness.
 
-// Rust guideline compliant
-
 use std::future::Future;
 use std::time::Duration;
 

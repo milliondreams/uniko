@@ -4,8 +4,6 @@
 //! carries optional knobs — caller-provided `artifact_id`, custom extractor,
 //! optional source `path` for the [`Artifact.path`](uniko_store) field.
 
-// Rust guideline compliant
-
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -14,8 +14,6 @@
 //! fabricated zeros).  Unknown models trigger a one-shot warning so
 //! the operator notices missing entries without flooding logs.
 
-// Rust guideline compliant
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;

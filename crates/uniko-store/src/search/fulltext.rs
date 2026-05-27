@@ -1,7 +1,5 @@
 //! BM25-ranked fulltext search via uni-db's fulltext indexes.
 
-// Rust guideline compliant
-
 use crate::error::{Result, UnikoError};
 use crate::search::SearchResult;
 use crate::storage::{KnowledgeBase, validate_label};

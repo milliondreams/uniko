@@ -3,8 +3,6 @@
 //! Split hierarchy: paragraphs (`\n\n`) → sentences (`. `) → words (` `).
 //! Chunks target 400-512 tokens.  No mid-sentence breaks.
 
-// Rust guideline compliant
-
 use super::{ChunkConfig, ChunkData, Chunker, count_tokens};
 
 /// Recursive paragraph/sentence splitter for plain text and markdown.

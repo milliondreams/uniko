@@ -5,8 +5,6 @@
 //! (stub) entity extraction followed by deduplication and graph
 //! persistence.
 
-// Rust guideline compliant
-
 #[cfg(feature = "code-parse")]
 pub mod code;
 pub mod dedup;

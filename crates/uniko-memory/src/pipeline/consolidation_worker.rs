@@ -1,7 +1,5 @@
 //! Consolidation pipeline worker with threshold, timer, and force triggers.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

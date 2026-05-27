@@ -9,8 +9,6 @@
 //! [`UnikoError::Embedding`] as "skip embedding-dependent assertions"
 //! so they remain runnable in environments without the xervo
 //! embedding model warm.
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use serde_json::json;

@@ -4,8 +4,6 @@
 //! URLs, emails, dates, measurements, preferences, proper nouns, and
 //! quoted strings.
 
-// Rust guideline compliant
-
 use std::sync::OnceLock;
 
 use regex::Regex;

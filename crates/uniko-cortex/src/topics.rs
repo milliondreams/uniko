@@ -20,8 +20,6 @@
 //! reason about; swap in Louvain when the entity count grows past
 //! ~50K.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use serde::Serialize;
@@ -534,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn lpa_two_cliques_one_thin_edge() {
         let n = 6;
         let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];

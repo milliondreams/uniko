@@ -20,8 +20,6 @@
 //! their column-name union, padding missing columns with NULL) or
 //! return a typed error before reaching DataFusion.
 
-// Rust guideline compliant
-
 use uni_db::{DataType, Uni, Value};
 
 async fn setup_db_asymmetric_schemas() -> Uni {

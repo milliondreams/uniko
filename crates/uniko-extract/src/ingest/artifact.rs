@@ -1,7 +1,5 @@
 //! Artifact ingest: hash, dedup, create Artifact node, chunk, and link.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};

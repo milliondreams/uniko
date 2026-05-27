@@ -1,8 +1,6 @@
 //! Ingest pipeline worker with biased select, semaphore concurrency,
 //! and per-item step chain execution.
 
-// Rust guideline compliant
-
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Semaphore, mpsc};

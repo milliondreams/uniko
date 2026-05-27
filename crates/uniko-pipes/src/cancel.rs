@@ -3,8 +3,6 @@
 //! Tokens form a parent-child tree: cancelling a parent cancels all
 //! children, but cancelling a child only affects that subtree.
 
-// Rust guideline compliant
-
 use std::time::Duration;
 
 use tokio::task::JoinHandle;

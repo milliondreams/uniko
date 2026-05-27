@@ -6,8 +6,6 @@
 //!    error).
 //! 3. `delete` → `exists` false → re-`delete` is idempotent.
 //
-// Rust guideline compliant.
-
 use std::sync::Arc;
 
 use object_store::ObjectStore;

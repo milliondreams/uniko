@@ -4,8 +4,6 @@
 //! (topic detection) after a successful consolidation cycle when the
 //! cadence gates allow, and that the per-agent counter gate works.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -93,9 +91,11 @@ async fn cortex_sweep_fires_after_consolidation_when_gate_open() {
 
     // Cadence: run cortex after every successful consolidation cycle,
     // no wall-clock throttle.
-    let mut config = PipelineConfig::default();
-    config.cortex_cycle_every_n_consolidations = 1;
-    config.cortex_min_interval_secs = 0;
+    let config = PipelineConfig {
+        cortex_cycle_every_n_consolidations: 1,
+        cortex_min_interval_secs: 0,
+        ..Default::default()
+    };
 
     let ps = PipelineSystem::new(config, kb.clone(), Vec::<Box<dyn Step>>::new());
 
@@ -130,9 +130,11 @@ async fn cortex_sweep_skipped_until_counter_threshold() {
     seed_cooccurrence(&kb).await;
 
     // Require two consolidation cycles before cortex fires.
-    let mut config = PipelineConfig::default();
-    config.cortex_cycle_every_n_consolidations = 2;
-    config.cortex_min_interval_secs = 0;
+    let config = PipelineConfig {
+        cortex_cycle_every_n_consolidations: 2,
+        cortex_min_interval_secs: 0,
+        ..Default::default()
+    };
 
     let ps = PipelineSystem::new(config, kb.clone(), Vec::<Box<dyn Step>>::new());
 
@@ -174,9 +176,11 @@ async fn cortex_sweep_disabled_when_every_n_is_zero() {
     let kb = kb_arc().await;
     seed_cooccurrence(&kb).await;
 
-    let mut config = PipelineConfig::default();
-    config.cortex_cycle_every_n_consolidations = 0;
-    config.cortex_min_interval_secs = 0;
+    let config = PipelineConfig {
+        cortex_cycle_every_n_consolidations: 0,
+        cortex_min_interval_secs: 0,
+        ..Default::default()
+    };
 
     let ps = PipelineSystem::new(config, kb.clone(), Vec::<Box<dyn Step>>::new());
 

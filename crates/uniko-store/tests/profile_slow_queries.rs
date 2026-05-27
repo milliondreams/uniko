@@ -18,8 +18,6 @@
 //!
 //! Requires `/tmp/locomo-minilm-v4-kb/conv-44` to exist.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 

@@ -1,7 +1,5 @@
 //! Pipeline configuration with spec-mandated defaults.
 
-// Rust guideline compliant
-
 use serde::{Deserialize, Serialize};
 
 use crate::retry::RetryPolicy;

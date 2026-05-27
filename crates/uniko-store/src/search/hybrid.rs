@@ -1,8 +1,6 @@
 //! Hybrid search combining vector similarity and fulltext BM25 via
 //! Reciprocal Rank Fusion (RRF).
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use crate::error::Result;

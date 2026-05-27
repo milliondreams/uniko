@@ -21,8 +21,6 @@
 //!
 //! Run: `cargo nextest run -p uniko-store --test observed_in_growth_repro --run-ignored all`
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 use std::time::Instant;
 

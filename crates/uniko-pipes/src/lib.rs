@@ -5,8 +5,6 @@
 //!
 //! Depends on `uniko-store` only. Content processing steps live in `uniko-extract`.
 
-// Rust guideline compliant
-
 pub mod cancel;
 pub mod circuit_breaker;
 pub mod config;

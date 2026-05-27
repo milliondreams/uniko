@@ -10,8 +10,6 @@
 //! worth recording* — it's an explicit subjective act, not something
 //! that can be inferred from message content.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};

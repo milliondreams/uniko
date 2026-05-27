@@ -23,8 +23,6 @@
 //! state machine on every call; `promote_procedures_once` runs the
 //! sequence detector and creates/refreshes Procedure nodes.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use serde::Serialize;

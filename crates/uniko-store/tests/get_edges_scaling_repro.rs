@@ -7,8 +7,6 @@
 //!
 //! Filed as <https://github.com/rustic-ai/uni-db/issues/55>.
 
-// Rust guideline compliant
-
 use std::time::Instant;
 
 use uni_db::{Uni, Value};

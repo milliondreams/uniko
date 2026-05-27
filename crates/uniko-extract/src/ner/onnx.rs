@@ -4,8 +4,6 @@
 //! spans into [`RawEntity`] values.  Without the feature, returns an
 //! error indicating the model is unavailable.
 
-// Rust guideline compliant
-
 #[cfg(feature = "onnx")]
 use super::types::{EntityType, ExtractionSource, RawEntity};
 

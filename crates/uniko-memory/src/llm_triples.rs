@@ -9,8 +9,6 @@
 //! batches so I/O overlaps the model's per-request latency.  Failed
 //! parses leave the Observation's existing triple untouched.
 
-// Rust guideline compliant
-
 use futures::stream::{self, StreamExt};
 use uni_db::xervo::{GenerationOptions, Message};
 

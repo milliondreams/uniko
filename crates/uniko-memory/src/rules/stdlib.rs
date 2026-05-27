@@ -4,8 +4,6 @@
 //! They are registered as Rule nodes in the graph AND in uni-db's
 //! Locy runtime.
 
-// Rust guideline compliant
-
 use std::collections::HashMap;
 
 use uni_db::Value;
