@@ -51,9 +51,18 @@ fn mock_opts(artifact_id: &str, pages: Vec<ExtractedPage>) -> PdfIngestOptions {
 async fn ingest_pdf_creates_artifact_content_and_chunks() {
     let kb = test_kb().await;
     let pages = vec![
-        ExtractedPage { page_number: 1, text: "First page text.".into() },
-        ExtractedPage { page_number: 2, text: "Second page content.".into() },
-        ExtractedPage { page_number: 3, text: "Third and final.".into() },
+        ExtractedPage {
+            page_number: 1,
+            text: "First page text.".into(),
+        },
+        ExtractedPage {
+            page_number: 2,
+            text: "Second page content.".into(),
+        },
+        ExtractedPage {
+            page_number: 3,
+            text: "Third and final.".into(),
+        },
     ];
     let bytes = b"fake pdf bytes 1".to_vec();
     let result = ingest_pdf(
@@ -179,13 +188,9 @@ async fn ingest_pdf_dedups_by_hash() {
     .expect("first ingest");
     assert!(!first.was_deduplicated);
 
-    let second = ingest_pdf(
-        &kb,
-        PdfInput::Bytes(bytes),
-        mock_opts("pdf-dup-2", pages),
-    )
-    .await
-    .expect("second ingest");
+    let second = ingest_pdf(&kb, PdfInput::Bytes(bytes), mock_opts("pdf-dup-2", pages))
+        .await
+        .expect("second ingest");
     assert!(second.was_deduplicated);
     assert_eq!(second.artifact_node_id, first.artifact_node_id);
 }

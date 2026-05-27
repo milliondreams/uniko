@@ -108,8 +108,14 @@ mod tests {
     #[test]
     fn one_chunk_per_short_page() {
         let pages = vec![
-            ExtractedPage { page_number: 1, text: "Short page one.".into() },
-            ExtractedPage { page_number: 2, text: "Short page two.".into() },
+            ExtractedPage {
+                page_number: 1,
+                text: "Short page one.".into(),
+            },
+            ExtractedPage {
+                page_number: 2,
+                text: "Short page two.".into(),
+            },
         ];
         let chunks = chunk_pages(&pages, &cfg());
         assert_eq!(chunks.len(), 2);
@@ -126,9 +132,15 @@ mod tests {
     #[test]
     fn long_page_splits_within_page() {
         let long = "The quick brown fox jumps over the lazy dog. ".repeat(40);
-        let pages = vec![ExtractedPage { page_number: 7, text: long }];
+        let pages = vec![ExtractedPage {
+            page_number: 7,
+            text: long,
+        }];
         let chunks = chunk_pages(&pages, &cfg());
-        assert!(chunks.len() >= 2, "expected long page to split into multiple chunks");
+        assert!(
+            chunks.len() >= 2,
+            "expected long page to split into multiple chunks"
+        );
         for c in &chunks {
             assert_eq!(c.chunk_type, "page");
             let m = c.metadata.as_ref().unwrap();
@@ -144,9 +156,18 @@ mod tests {
     #[test]
     fn skips_empty_pages() {
         let pages = vec![
-            ExtractedPage { page_number: 1, text: "Real content.".into() },
-            ExtractedPage { page_number: 2, text: "   \n\n  ".into() },
-            ExtractedPage { page_number: 3, text: "More content.".into() },
+            ExtractedPage {
+                page_number: 1,
+                text: "Real content.".into(),
+            },
+            ExtractedPage {
+                page_number: 2,
+                text: "   \n\n  ".into(),
+            },
+            ExtractedPage {
+                page_number: 3,
+                text: "More content.".into(),
+            },
         ];
         let chunks = chunk_pages(&pages, &cfg());
         assert_eq!(chunks.len(), 2);
@@ -159,8 +180,14 @@ mod tests {
         // Even when a page is skipped, page_count is the input length —
         // it tells you the source document's total pages.
         let pages = vec![
-            ExtractedPage { page_number: 1, text: "A".into() },
-            ExtractedPage { page_number: 2, text: " ".into() },
+            ExtractedPage {
+                page_number: 1,
+                text: "A".into(),
+            },
+            ExtractedPage {
+                page_number: 2,
+                text: " ".into(),
+            },
         ];
         let chunks = chunk_pages(&pages, &cfg());
         assert_eq!(chunks.len(), 1);

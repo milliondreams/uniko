@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use tokio::fs as tfs;
 use tokio::io::AsyncReadExt;
 
-use super::{fs_relative_path, BlobStore, PutOutcome};
+use super::{BlobStore, PutOutcome, fs_relative_path};
 use crate::error::{Result, UnikoError};
 
 /// Local filesystem CAS blob store rooted at [`Self::root`].

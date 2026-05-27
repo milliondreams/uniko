@@ -162,7 +162,6 @@ impl uniko_pipes::Step for ObservationExtractionStep {
     }
 }
 
-
 /// Load the observation rule set, honouring `UnikoConfig.observation_rules_path`.
 ///
 /// External paths are read once and cached in a process-global map keyed
@@ -681,7 +680,8 @@ mod resolve_temporal_in_content_tests {
             "Caroline went to the LGBTQ support group 2023-05-07"
         );
         assert_eq!(
-            anchor.expect("expected resolved anchor for 'yesterday'")
+            anchor
+                .expect("expected resolved anchor for 'yesterday'")
                 .format("%Y-%m-%d")
                 .to_string(),
             "2023-05-07"
@@ -697,10 +697,7 @@ mod resolve_temporal_in_content_tests {
             ref_date(),
         );
         assert_eq!(content, "Melanie ran a charity race 2023-05-05");
-        assert_eq!(
-            anchor.unwrap().format("%Y-%m-%d").to_string(),
-            "2023-05-05"
-        );
+        assert_eq!(anchor.unwrap().format("%Y-%m-%d").to_string(), "2023-05-05");
     }
 
     #[test]
@@ -734,11 +731,8 @@ mod resolve_temporal_in_content_tests {
 
     #[test]
     fn no_temporal_phrase_passes_content_through() {
-        let (content, anchor) = resolve_temporal_in_content(
-            "Caroline bought a yellow dress".into(),
-            None,
-            ref_date(),
-        );
+        let (content, anchor) =
+            resolve_temporal_in_content("Caroline bought a yellow dress".into(), None, ref_date());
         assert_eq!(content, "Caroline bought a yellow dress");
         assert!(anchor.is_none());
     }
@@ -773,9 +767,6 @@ mod resolve_temporal_in_content_tests {
             Some("yesterday"),
             ref_date(),
         );
-        assert_eq!(
-            content,
-            "I went 2023-05-07 and 2023-05-07 it was sunny"
-        );
+        assert_eq!(content, "I went 2023-05-07 and 2023-05-07 it was sunny");
     }
 }

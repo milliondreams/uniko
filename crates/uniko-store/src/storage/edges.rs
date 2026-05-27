@@ -256,13 +256,7 @@ impl KnowledgeBase {
         if !recipient_nids.is_empty() {
             let edges: Vec<(Vid, Vid, HashMap<String, Value>)> = recipient_nids
                 .iter()
-                .map(|&r| {
-                    (
-                        Vid::new(msg_nid as u64),
-                        Vid::new(r as u64),
-                        HashMap::new(),
-                    )
-                })
+                .map(|&r| (Vid::new(msg_nid as u64), Vid::new(r as u64), HashMap::new()))
                 .collect();
             tx.bulk_insert_edges("ADDRESSED_TO", edges)
                 .await

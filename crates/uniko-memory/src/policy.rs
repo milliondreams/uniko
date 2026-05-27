@@ -168,9 +168,10 @@ pub async fn filter_bundle(
     }
 
     let visibilities = fetch_visibilities(kb, &policy_node_ids).await?;
-    bundle
-        .items
-        .retain(|item| visibility_for(item, &visibilities).map_or(true, |v| visibility_admits(Some(v.as_str()), viewer)));
+    bundle.items.retain(|item| {
+        visibility_for(item, &visibilities)
+            .map_or(true, |v| visibility_admits(Some(v.as_str()), viewer))
+    });
     // Recompute token count after filtering — same heuristic the
     // recall cascade and working memory use.
     bundle.total_tokens = bundle.items.len() * 50;
@@ -192,10 +193,7 @@ async fn fetch_visibilities(
     node_ids: &[NodeId],
 ) -> Result<std::collections::HashMap<NodeId, String>, UnikoError> {
     let session = kb.db().session();
-    let ids: Vec<uni_db::Value> = node_ids
-        .iter()
-        .map(|n| uni_db::Value::Int(*n))
-        .collect();
+    let ids: Vec<uni_db::Value> = node_ids.iter().map(|n| uni_db::Value::Int(*n)).collect();
     let cypher = "MATCH (n) WHERE id(n) IN $ids \
                   RETURN id(n) AS nid, coalesce(n.visibility, '') AS vis";
     let result = session

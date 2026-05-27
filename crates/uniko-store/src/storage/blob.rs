@@ -19,7 +19,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use uni_db::Value;
 
-use crate::blob_store::{BlobStore, BlobStorage, PutOutcome, build_backend};
+use crate::blob_store::{BlobStorage, BlobStore, PutOutcome, build_backend};
 use crate::error::{Result, UnikoError};
 use crate::storage::KnowledgeBase;
 use crate::types::datetime_value;
@@ -87,10 +87,7 @@ impl KnowledgeBase {
     /// # Errors
     ///
     /// Returns [`UnikoError::Storage`] on database failure.
-    pub async fn merge_artifact_content(
-        &self,
-        spec: MergeContent,
-    ) -> Result<crate::types::NodeId> {
+    pub async fn merge_artifact_content(&self, spec: MergeContent) -> Result<crate::types::NodeId> {
         // We can't use `MERGE (c:ArtifactContent {content_id: $cid}) ON
         // CREATE SET ...` here: uni-db evaluates NOT NULL constraints
         // on the initial MERGE create (before ON CREATE SET runs), so
@@ -127,10 +124,7 @@ impl KnowledgeBase {
                 }) RETURN id(c) AS vid",
             )
             .param("cid", Value::String(spec.content_id.clone()))
-            .param(
-                "bytes",
-                spec.bytes.map(Value::Bytes).unwrap_or(Value::Null),
-            )
+            .param("bytes", spec.bytes.map(Value::Bytes).unwrap_or(Value::Null))
             .param("uri", spec.uri.map(Value::String).unwrap_or(Value::Null))
             .param("mime", Value::String(spec.mime.clone()))
             .param("size", Value::Int(spec.size))

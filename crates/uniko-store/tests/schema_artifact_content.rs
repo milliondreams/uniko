@@ -51,10 +51,7 @@ async fn has_content_edge_registered() {
         .await
         .expect("in-memory KB");
     assert!(
-        kb.db()
-            .edge_type_exists("HAS_CONTENT")
-            .await
-            .unwrap(),
+        kb.db().edge_type_exists("HAS_CONTENT").await.unwrap(),
         "HAS_CONTENT edge type must be registered"
     );
     kb.shutdown().await.unwrap();
@@ -72,7 +69,12 @@ async fn knowledge_base_stats_singleton_exists_after_init() {
         .unwrap()
         .expect(":KnowledgeBaseStats must be registered");
     let names: Vec<&str> = info.properties.iter().map(|p| p.name.as_str()).collect();
-    for required in ["stats_id", "blob_storage", "modality_presence", "updated_at"] {
+    for required in [
+        "stats_id",
+        "blob_storage",
+        "modality_presence",
+        "updated_at",
+    ] {
         assert!(
             names.contains(&required),
             ":KnowledgeBaseStats missing {required}; have {names:?}"

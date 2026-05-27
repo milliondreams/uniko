@@ -438,9 +438,8 @@ async fn community_name_llm(
         return None;
     }
     // Strip wrapping quotes / Markdown emphasis if the model added any.
-    let cleaned = trimmed.trim_matches(|c: char| {
-        c == '"' || c == '\'' || c == '`' || c == '*' || c == '_'
-    });
+    let cleaned =
+        trimmed.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '*' || c == '_');
     if cleaned.is_empty() {
         None
     } else {
@@ -478,10 +477,7 @@ fn community_summary(members: &[EntityRow]) -> String {
             community_name(members)
         );
     }
-    let breakdown: Vec<String> = by_type
-        .iter()
-        .map(|(t, n)| format!("{n} {t}"))
-        .collect();
+    let breakdown: Vec<String> = by_type.iter().map(|(t, n)| format!("{n} {t}")).collect();
     format!(
         "Topic of {} entities ({}); representative members: {}",
         members.len(),
@@ -597,7 +593,12 @@ mod tests {
 
     #[test]
     fn community_name_joins_up_to_three() {
-        let n = community_name(&[ent("e1", "a"), ent("e2", "b"), ent("e3", "c"), ent("e4", "d")]);
+        let n = community_name(&[
+            ent("e1", "a"),
+            ent("e2", "b"),
+            ent("e3", "c"),
+            ent("e4", "d"),
+        ]);
         assert_eq!(n, "a, b, c");
     }
 

@@ -333,8 +333,16 @@ const NODE_SUMMARY: &[(&str, &str, &str)] = &[
     (labels::TASK, "task_id", "title, status, priority"),
     (labels::SESSION, "session_id", "topic, started_at, ended_at"),
     (labels::MESSAGE, "message_id", "content, timestamp"),
-    (labels::ACTION, "action_id", "action_type, status, started_at"),
-    (labels::EPISODE, "episode_id", "action_type, outcome, importance"),
+    (
+        labels::ACTION,
+        "action_id",
+        "action_type, status, started_at",
+    ),
+    (
+        labels::EPISODE,
+        "episode_id",
+        "action_type, outcome, importance",
+    ),
     (labels::ARTIFACT, "artifact_id", "kind, path, content"),
     (labels::CHUNK, "chunk_id", "text, chunk_type, language"),
     (labels::ENTITY, "entity_id", "name, entity_type, frequency"),
@@ -349,7 +357,11 @@ const NODE_SUMMARY: &[(&str, &str, &str)] = &[
         "subject, predicate, object, confidence, valid_at",
     ),
     (labels::TOPIC, "topic_id", "name, summary, entity_count"),
-    (labels::PROCEDURE, "procedure_id", "name, description, status"),
+    (
+        labels::PROCEDURE,
+        "procedure_id",
+        "name, description, status",
+    ),
     (labels::RULE, "rule_id", "name, status, confidence"),
 ];
 
@@ -369,7 +381,11 @@ const EDGE_SUMMARY: &[(&str, &str, &str)] = &[
     ("PRODUCED", "Action", "Artifact"),
     ("NEXT_ACTION", "Action", "Action"),
     ("HAS_CHUNK", "Artifact|Message", "Chunk"),
-    ("MENTIONS", "Message|Chunk|Action|Episode|Artifact", "Entity"),
+    (
+        "MENTIONS",
+        "Message|Chunk|Action|Episode|Artifact",
+        "Entity",
+    ),
     ("OBSERVED_IN", "Observation", "Message|Chunk"),
     ("OBSERVED_DURING", "Observation", "Episode"),
     ("ABOUT", "Observation|Fact|Chunk", "Entity|Participant"),
@@ -471,7 +487,10 @@ mod tests {
 
     #[test]
     fn normalise_collapses_whitespace_and_lowercases() {
-        assert_eq!(normalise("  What  did Caroline\nresearch?  "), "what did caroline research?");
+        assert_eq!(
+            normalise("  What  did Caroline\nresearch?  "),
+            "what did caroline research?"
+        );
     }
 
     #[test]
@@ -510,7 +529,10 @@ mod tests {
 
     #[test]
     fn clean_response_strips_fences() {
-        assert_eq!(clean_response("```cypher\nMATCH (n) RETURN n\n```"), "MATCH (n) RETURN n");
+        assert_eq!(
+            clean_response("```cypher\nMATCH (n) RETURN n\n```"),
+            "MATCH (n) RETURN n"
+        );
         assert_eq!(clean_response("```\nMATCH (n)\n```"), "MATCH (n)");
         assert_eq!(
             clean_response("Cypher: MATCH (n) RETURN n"),

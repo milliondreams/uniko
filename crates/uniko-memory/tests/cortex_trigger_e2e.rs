@@ -17,10 +17,10 @@ use uniko_memory::PipelineSystem;
 use uniko_pipes::config::PipelineConfig;
 use uniko_pipes::step::Step;
 use uniko_pipes::types::ConsolidationTask;
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::types::datetime_value;
-use uniko_store::KnowledgeBase;
 
 async fn kb_arc() -> Arc<KnowledgeBase> {
     Arc::new(

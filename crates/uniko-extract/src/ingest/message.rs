@@ -193,8 +193,7 @@ pub(crate) async fn apply_message_writes_in_tx(
 
     // Create all per-message edges in ONE Cypher statement.
     let edges_start = std::time::Instant::now();
-    let edge_count =
-        2 + setup.recipient_nids.len() + usize::from(setup.prev_msg_nid.is_some());
+    let edge_count = 2 + setup.recipient_nids.len() + usize::from(setup.prev_msg_nid.is_some());
     kb.create_message_edges_in_tx(
         tx,
         message_nid,
@@ -445,9 +444,7 @@ fn json_to_uni_value(v: &serde_json::Value) -> Value {
             }
         }
         serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(arr) => {
-            Value::List(arr.iter().map(json_to_uni_value).collect())
-        }
+        serde_json::Value::Array(arr) => Value::List(arr.iter().map(json_to_uni_value).collect()),
         serde_json::Value::Object(obj) => {
             let mut m: HashMap<String, Value> = HashMap::with_capacity(obj.len());
             for (k, v) in obj {

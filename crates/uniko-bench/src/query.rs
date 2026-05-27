@@ -113,9 +113,14 @@ pub async fn run_query(
     let gen_start = Instant::now();
     let (predicted_answer, answer_input_tokens, answer_output_tokens, answer_model) =
         if let Some(alias) = llm_alias {
-            let answered =
-                generate_answer_with_usage(kb, &bundle, &qa.question, alias, llm_use_default_options)
-                    .await?;
+            let answered = generate_answer_with_usage(
+                kb,
+                &bundle,
+                &qa.question,
+                alias,
+                llm_use_default_options,
+            )
+            .await?;
             (
                 answered.text,
                 answered.prompt_tokens,
@@ -123,7 +128,12 @@ pub async fn run_query(
                 alias.to_string(),
             )
         } else {
-            (crate::retrieval_answer(&bundle, 5), None, None, String::new())
+            (
+                crate::retrieval_answer(&bundle, 5),
+                None,
+                None,
+                String::new(),
+            )
         };
     let generation_latency_ms = gen_start.elapsed().as_millis() as u64;
 
@@ -277,7 +287,12 @@ pub async fn generate_answer_with_usage(
     let (prompt_tokens, completion_tokens) = result
         .usage
         .as_ref()
-        .map(|u| (Some(u.prompt_tokens as u64), Some(u.completion_tokens as u64)))
+        .map(|u| {
+            (
+                Some(u.prompt_tokens as u64),
+                Some(u.completion_tokens as u64),
+            )
+        })
         .unwrap_or((None, None));
     Ok(AnsweredQuestion {
         text: result.text.trim().to_string(),

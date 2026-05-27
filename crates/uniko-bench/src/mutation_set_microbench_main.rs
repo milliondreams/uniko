@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use uni_db::common::TemporalValue;
-use uni_db::{DataType, IndexType, ScalarType, Uni, Value, VectorAlgo, VectorIndexCfg, VectorMetric};
+use uni_db::{
+    DataType, IndexType, ScalarType, Uni, Value, VectorAlgo, VectorIndexCfg, VectorMetric,
+};
 
 fn now_value() -> Value {
     Value::Temporal(TemporalValue::DateTime {
@@ -34,11 +36,36 @@ struct Variant {
 }
 
 const VARIANTS: &[Variant] = &[
-    Variant { name: "noindex",      hash_indexes: false, fulltext_name: false, vector_embedding: false },
-    Variant { name: "hash_only",    hash_indexes: true,  fulltext_name: false, vector_embedding: false },
-    Variant { name: "fulltext_name",hash_indexes: true,  fulltext_name: true,  vector_embedding: false },
-    Variant { name: "vector_only",  hash_indexes: false, fulltext_name: false, vector_embedding: true  },
-    Variant { name: "production",   hash_indexes: true,  fulltext_name: true,  vector_embedding: true  },
+    Variant {
+        name: "noindex",
+        hash_indexes: false,
+        fulltext_name: false,
+        vector_embedding: false,
+    },
+    Variant {
+        name: "hash_only",
+        hash_indexes: true,
+        fulltext_name: false,
+        vector_embedding: false,
+    },
+    Variant {
+        name: "fulltext_name",
+        hash_indexes: true,
+        fulltext_name: true,
+        vector_embedding: false,
+    },
+    Variant {
+        name: "vector_only",
+        hash_indexes: false,
+        fulltext_name: false,
+        vector_embedding: true,
+    },
+    Variant {
+        name: "production",
+        hash_indexes: true,
+        fulltext_name: true,
+        vector_embedding: true,
+    },
 ];
 
 #[tokio::main(flavor = "multi_thread")]

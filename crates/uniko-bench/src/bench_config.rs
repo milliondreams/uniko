@@ -148,13 +148,9 @@ pub struct LlmAlias {
 #[serde(untagged)]
 pub enum EmbedderChoice {
     /// `{"preset": "<name>"}` — resolves to a hardcoded preset.
-    Preset {
-        preset: String,
-    },
+    Preset { preset: String },
     /// `{"inline": <EmbeddingConfig>}` — full custom config.
-    Inline {
-        inline: EmbeddingConfig,
-    },
+    Inline { inline: EmbeddingConfig },
 }
 
 /// Recall-pipeline settings.  Defaults match the bench's historical

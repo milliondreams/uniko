@@ -155,9 +155,7 @@ impl BlobStore for S3BlobStore {
         match self.inner.delete(&key).await {
             Ok(()) => Ok(()),
             Err(object_store::Error::NotFound { .. }) => Ok(()),
-            Err(e) => Err(UnikoError::Storage(format!(
-                "S3 delete {content_id}: {e}"
-            ))),
+            Err(e) => Err(UnikoError::Storage(format!("S3 delete {content_id}: {e}"))),
         }
     }
 }
@@ -183,7 +181,12 @@ mod tests {
 
         let out = s.put(cid, payload).await.unwrap();
         assert!(out.bytes_inline.is_none());
-        assert_eq!(out.uri.as_deref(), Some("s3://test-bucket/kb/x/ab/cd/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"));
+        assert_eq!(
+            out.uri.as_deref(),
+            Some(
+                "s3://test-bucket/kb/x/ab/cd/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            )
+        );
 
         assert!(s.exists(cid, None).await.unwrap());
         let got = s.get(cid, None).await.unwrap();

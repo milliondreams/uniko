@@ -38,11 +38,8 @@ impl Chunker for StructuredChunker {
         // `[` after trim. JSON with embedded commas would otherwise
         // trick the CSV delimiter sniffer.
         let trimmed_lead = content.trim_start();
-        let looks_like_json =
-            trimmed_lead.starts_with('{') || trimmed_lead.starts_with('[');
-        if looks_like_json
-            && let Some(rows) = parse_json(content)
-        {
+        let looks_like_json = trimmed_lead.starts_with('{') || trimmed_lead.starts_with('[');
+        if looks_like_json && let Some(rows) = parse_json(content) {
             return chunk_rows(&rows, config, "json");
         }
         if let Some(rows) = parse_csv(content) {
@@ -51,9 +48,7 @@ impl Chunker for StructuredChunker {
         // Last-resort JSON attempt for content that doesn't start with
         // `{`/`[` (e.g. leading whitespace + valid JSON), then fall
         // back to TextChunker so we never silently drop content.
-        if !looks_like_json
-            && let Some(rows) = parse_json(content)
-        {
+        if !looks_like_json && let Some(rows) = parse_json(content) {
             return chunk_rows(&rows, config, "json");
         }
         TextChunker.chunk(content, config)
@@ -96,10 +91,7 @@ fn parse_csv(content: &str) -> Option<Rows> {
     if rows.is_empty() {
         return None;
     }
-    Some(Rows {
-        header,
-        rows,
-    })
+    Some(Rows { header, rows })
 }
 
 /// Pick the highest-count delimiter from `,` / `\t` / `;` / `|` based
@@ -477,7 +469,10 @@ mod tests {
         let chunks = StructuredChunker.chunk(csv, &ChunkConfig::default());
         let text = &chunks[0].text;
         // The pipe is escaped, the newline becomes <br>.
-        assert!(text.contains("a\\|b<br>c"), "expected escaped cell, got: {text}");
+        assert!(
+            text.contains("a\\|b<br>c"),
+            "expected escaped cell, got: {text}"
+        );
         // Every data line must still have the expected number of
         // unescaped `|` separators (= cols + 1 = 3).
         for line in text.lines().filter(|l| l.contains("a\\|b<br>c")) {

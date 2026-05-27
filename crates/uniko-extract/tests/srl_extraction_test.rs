@@ -279,7 +279,9 @@ fn srl_action_captures_arg2_recipient_for_transfer_verbs() {
     );
     let texts = run(&[f]);
     assert!(
-        texts.iter().any(|t| t.contains("a necklace") && t.contains("Melanie")),
+        texts
+            .iter()
+            .any(|t| t.contains("a necklace") && t.contains("Melanie")),
         "expected ARG2 recipient to surface alongside theme, got: {texts:?}",
     );
 }
@@ -288,7 +290,10 @@ fn srl_action_captures_arg2_recipient_for_transfer_verbs() {
 fn srl_action_captures_arg3_source_for_motion_verbs() {
     // PropBank come.01: ARG0=mover, ARG3=start point.
     // "Caroline came from the kitchen" — ARG3 source must surface.
-    let f = frame("came", &[("ARG0", "Caroline"), ("ARG3", "from the kitchen")]);
+    let f = frame(
+        "came",
+        &[("ARG0", "Caroline"), ("ARG3", "from the kitchen")],
+    );
     let texts = run(&[f]);
     assert!(
         texts.iter().any(|t| t.contains("from the kitchen")),
@@ -305,7 +310,9 @@ fn srl_action_arg4_destination_falls_back_to_intransitive_when_only_dest_present
     let f = frame("went", &[("ARG0", "Caroline"), ("ARG4", "to the park")]);
     let texts = run(&[f]);
     assert!(
-        texts.iter().any(|t| t.contains("to the park") || t.contains("the park")),
+        texts
+            .iter()
+            .any(|t| t.contains("to the park") || t.contains("the park")),
         "expected ARG4-only motion verb to retain destination, got: {texts:?}",
     );
 }

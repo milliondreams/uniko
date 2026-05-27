@@ -224,7 +224,11 @@ async fn record_action_overflows_large_output_to_artifact() {
     let kind: String = row.get("kind").expect("kind");
     assert_eq!(kind, "action_output");
     let content: String = row.get("content").expect("content");
-    assert!(content.len() > 5_000, "expected full payload, got len {}", content.len());
+    assert!(
+        content.len() > 5_000,
+        "expected full payload, got len {}",
+        content.len()
+    );
 
     // Action.output is a short stub, not the full payload.
     let rows = session
@@ -258,7 +262,9 @@ async fn record_action_extracts_entities_via_kniv() {
 
     let params = RecordActionParams {
         action_type: "shell".into(),
-        input: Some(json!("send a status update to Caroline about the refund pipeline")),
+        input: Some(json!(
+            "send a status update to Caroline about the refund pipeline"
+        )),
         output: Some(json!("ok, sent")),
         status: Some("success".into()),
         ..Default::default()

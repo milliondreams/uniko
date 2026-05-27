@@ -566,10 +566,7 @@ mod tests {
             mk(RecallTier::Episodic),
         ];
         let c = coverage_score(&items);
-        assert!(
-            (c - 0.6).abs() < 1e-9,
-            "expected 3/5 = 0.6, got {c}",
-        );
+        assert!((c - 0.6).abs() < 1e-9, "expected 3/5 = 0.6, got {c}",);
     }
 
     #[test]

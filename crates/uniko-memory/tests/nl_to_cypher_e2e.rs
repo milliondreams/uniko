@@ -65,13 +65,9 @@ async fn translate_grounds_against_schema_labels() {
     // pin the exact Cypher — the LLM is free to phrase it different
     // ways — but the output must mention `Goal` somewhere because
     // the schema prompt lists it as the relevant node type.
-    let cypher = translate(
-        &kb,
-        "List the titles of every active goal",
-        CHAT_ALIAS,
-    )
-    .await
-    .expect("translate");
+    let cypher = translate(&kb, "List the titles of every active goal", CHAT_ALIAS)
+        .await
+        .expect("translate");
     let upper = cypher.to_uppercase();
     assert!(
         upper.contains("GOAL"),
@@ -95,13 +91,19 @@ async fn translate_caches_repeat_queries() {
     let second = translate(&kb, q, CHAT_ALIAS)
         .await
         .expect("second translate must hit cache");
-    assert_eq!(first, second, "repeat call should return the cached Cypher byte-for-byte");
+    assert_eq!(
+        first, second,
+        "repeat call should return the cached Cypher byte-for-byte"
+    );
 
     // Normalisation should collapse case + whitespace into the same key.
     let third = translate(&kb, "  WHAT entities did MELANIE mention?  ", CHAT_ALIAS)
         .await
         .expect("normalised variant should hit cache");
-    assert_eq!(first, third, "normalised variant should share the cache slot");
+    assert_eq!(
+        first, third,
+        "normalised variant should share the cache slot"
+    );
 }
 
 #[tokio::test]
@@ -159,7 +161,9 @@ async fn is_safe_read_only_rejects_classic_mutations() {
     // coverage.
     assert!(is_safe_read_only("MATCH (n) RETURN n LIMIT 5"));
     assert!(!is_safe_read_only("CREATE (x:Person)"));
-    assert!(!is_safe_read_only("MATCH (n) MERGE (m) ON CREATE SET m.x=1"));
+    assert!(!is_safe_read_only(
+        "MATCH (n) MERGE (m) ON CREATE SET m.x=1"
+    ));
     assert!(!is_safe_read_only("MATCH (n) DETACH DELETE n"));
     assert!(!is_safe_read_only("MATCH (n) SET n.x = 1"));
     assert!(!is_safe_read_only("DROP INDEX foo"));

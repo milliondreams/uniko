@@ -102,7 +102,10 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Measure UPDATE wall + exec_time across batch sizes
     println!("## Wall + exec_time vs batch size (median of 5 iters)");
-    println!("{:>6} {:>10} {:>10} {:>10}", "batch", "wall_ms", "exec_ms", "ms/row");
+    println!(
+        "{:>6} {:>10} {:>10} {:>10}",
+        "batch", "wall_ms", "exec_ms", "ms/row"
+    );
     for &batch in &[1usize, 3, 10, 100, 1000] {
         let updates: Vec<Value> = all_vids[..batch]
             .iter()
@@ -137,7 +140,13 @@ async fn main() -> anyhow::Result<()> {
         };
         let w = med(walls);
         let e = med(execs);
-        println!("{:>6} {:>10.2} {:>10.2} {:>10.3}", batch, w, e, w / batch as f64);
+        println!(
+            "{:>6} {:>10.2} {:>10.2} {:>10.3}",
+            batch,
+            w,
+            e,
+            w / batch as f64
+        );
     }
 
     // ── Per-operator breakdown via .profile()

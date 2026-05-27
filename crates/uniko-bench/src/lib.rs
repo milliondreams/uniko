@@ -163,7 +163,10 @@ fn provider_options(provider: &str, base_url: Option<&str>) -> serde_json::Value
         "remote/vertexai" => {
             let mut opts = serde_json::Map::new();
             opts.insert("location".into(), serde_json::json!("global"));
-            opts.insert("api_token_env".into(), serde_json::json!("VERTEXAI_API_TOKEN"));
+            opts.insert(
+                "api_token_env".into(),
+                serde_json::json!("VERTEXAI_API_TOKEN"),
+            );
             if let Ok(project) = std::env::var("VERTEXAI_PROJECT") {
                 opts.insert("project_id".into(), serde_json::json!(project));
             }

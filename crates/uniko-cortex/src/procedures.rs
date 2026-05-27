@@ -180,9 +180,7 @@ pub async fn record_procedure_use(
 
     let new_status = match snapshot.status.as_str() {
         STATUS_CANDIDATE => snapshot.status.clone(),
-        STATUS_ACTIVE if effectiveness < cfg.demote_effectiveness => {
-            STATUS_DEPRECATED.to_string()
-        }
+        STATUS_ACTIVE if effectiveness < cfg.demote_effectiveness => STATUS_DEPRECATED.to_string(),
         STATUS_DEPRECATED if effectiveness >= cfg.repromote_effectiveness => {
             STATUS_ACTIVE.to_string()
         }
@@ -371,9 +369,10 @@ async fn read_procedure(
         .fetch_all()
         .await
         .map_err(|e| UnikoError::Storage(e.to_string()))?;
-    let row = result.rows().first().ok_or_else(|| {
-        UnikoError::Storage(format!("procedure '{procedure_id}' not found"))
-    })?;
+    let row = result
+        .rows()
+        .first()
+        .ok_or_else(|| UnikoError::Storage(format!("procedure '{procedure_id}' not found")))?;
     Ok(ProcedureSnapshot {
         use_count: row.get("uc").unwrap_or(0),
         success_count: row.get("sc").unwrap_or(0),

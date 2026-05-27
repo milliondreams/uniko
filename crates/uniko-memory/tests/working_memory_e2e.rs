@@ -10,10 +10,10 @@ use chrono::Utc;
 use uni_db::Value;
 
 use uniko_memory::{WorkingMemoryParams, working_memory};
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::types::datetime_value;
-use uniko_store::KnowledgeBase;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -147,20 +147,14 @@ async fn working_memory_traverses_subgoals_when_enabled() {
     let bundle = working_memory(&kb, WorkingMemoryParams::new("parent_goal"))
         .await
         .expect("traversal");
-    let has_sub_msg = bundle
-        .items
-        .iter()
-        .any(|i| i.node_type == labels::MESSAGE);
+    let has_sub_msg = bundle.items.iter().any(|i| i.node_type == labels::MESSAGE);
     assert!(has_sub_msg, "expected to see sub-goal's message");
 
     // With include_subgoals=false we should not.
     let mut p = WorkingMemoryParams::new("parent_goal");
     p.include_subgoals = false;
     let bundle = working_memory(&kb, p).await.expect("traversal");
-    let has_sub_msg = bundle
-        .items
-        .iter()
-        .any(|i| i.node_type == labels::MESSAGE);
+    let has_sub_msg = bundle.items.iter().any(|i| i.node_type == labels::MESSAGE);
     assert!(
         !has_sub_msg,
         "should NOT see sub-goal's message when subgoals disabled"

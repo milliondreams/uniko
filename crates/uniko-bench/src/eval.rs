@@ -300,8 +300,8 @@ pub async fn llm_judge(
     predicted_answer: &str,
     judge_alias: &str,
 ) -> anyhow::Result<f64> {
-    let outcome = llm_judge_with_usage(kb, question, gold_answer, predicted_answer, judge_alias)
-        .await?;
+    let outcome =
+        llm_judge_with_usage(kb, question, gold_answer, predicted_answer, judge_alias).await?;
     Ok(outcome.score)
 }
 
@@ -375,7 +375,12 @@ pub async fn llm_judge_with_usage(
     let (prompt_tokens, completion_tokens) = result
         .usage
         .as_ref()
-        .map(|u| (Some(u.prompt_tokens as u64), Some(u.completion_tokens as u64)))
+        .map(|u| {
+            (
+                Some(u.prompt_tokens as u64),
+                Some(u.completion_tokens as u64),
+            )
+        })
         .unwrap_or((None, None));
     Ok(JudgeOutcome {
         score: parse_mem0_judge_label(&result.text),

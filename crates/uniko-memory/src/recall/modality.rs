@@ -108,19 +108,13 @@ impl RecallCounters {
 /// Centralised so test instrumentation hits exactly one branch. The
 /// actual vector-search call is gated on this returning `true`.
 #[must_use]
-pub fn image_channel_active(
-    presence: &ModalityPresence,
-    image_channel_enabled: bool,
-) -> bool {
+pub fn image_channel_active(presence: &ModalityPresence, image_channel_enabled: bool) -> bool {
     presence.has_image_content && image_channel_enabled
 }
 
 /// Mirror of [`image_channel_active`] for audio.
 #[must_use]
-pub fn audio_channel_active(
-    presence: &ModalityPresence,
-    audio_channel_enabled: bool,
-) -> bool {
+pub fn audio_channel_active(presence: &ModalityPresence, audio_channel_enabled: bool) -> bool {
     presence.has_audio_content && audio_channel_enabled
 }
 
@@ -128,10 +122,7 @@ pub fn audio_channel_active(
 /// have an audio track too; the channel still gates on the video
 /// presence flag so we don't fire purely on the side-channel.
 #[must_use]
-pub fn video_channel_active(
-    presence: &ModalityPresence,
-    video_channel_enabled: bool,
-) -> bool {
+pub fn video_channel_active(presence: &ModalityPresence, video_channel_enabled: bool) -> bool {
     presence.has_video_content && video_channel_enabled
 }
 
@@ -185,6 +176,6 @@ mod tests {
         };
         assert!(image_channel_active(&p, true));
         assert!(!image_channel_active(&p, false)); // toggle gates it off
-        assert!(!audio_channel_active(&p, true));   // presence gates it off
+        assert!(!audio_channel_active(&p, true)); // presence gates it off
     }
 }

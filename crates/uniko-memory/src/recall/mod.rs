@@ -882,14 +882,12 @@ pub async fn phase2_expand(
     // in non-text-only corpora running with an explicit opt-in.
     let presence = kb.read_modality_presence().await.unwrap_or_default();
     let qm = &intent.query_modalities;
-    let fire_image = crate::recall::modality::image_channel_active(
-        &presence,
-        config.enable_image_channel,
-    ) && qm.image_vec.is_some();
-    let fire_audio = crate::recall::modality::audio_channel_active(
-        &presence,
-        config.enable_audio_channel,
-    ) && qm.audio_vec.is_some();
+    let fire_image =
+        crate::recall::modality::image_channel_active(&presence, config.enable_image_channel)
+            && qm.image_vec.is_some();
+    let fire_audio =
+        crate::recall::modality::audio_channel_active(&presence, config.enable_audio_channel)
+            && qm.audio_vec.is_some();
     let fire_multimodal = crate::recall::modality::multimodal_channel_active(
         &presence,
         config.enable_multimodal_channel,
@@ -946,9 +944,7 @@ pub async fn phase2_expand(
     // surfaces the artifact kind into the RecallItem.content slot (so
     // an image artifact reads as e.g. `"image"`); downstream consumers
     // can resolve URI via the parent edge if needed.
-    if fire_image
-        && let Some(v) = qm.image_vec.as_deref()
-    {
+    if fire_image && let Some(v) = qm.image_vec.as_deref() {
         if let Some(c) = counters.as_ref() {
             c.bump_image();
         }
@@ -963,9 +959,7 @@ pub async fn phase2_expand(
             "image_embedding",
         )));
     }
-    if fire_audio
-        && let Some(v) = qm.audio_vec.as_deref()
-    {
+    if fire_audio && let Some(v) = qm.audio_vec.as_deref() {
         if let Some(c) = counters.as_ref() {
             c.bump_audio();
         }
@@ -982,10 +976,7 @@ pub async fn phase2_expand(
     }
     if fire_multimodal {
         // Multimodal joint space: prefer image vec, fall back to audio.
-        let v = qm
-            .image_vec
-            .as_deref()
-            .or(qm.audio_vec.as_deref());
+        let v = qm.image_vec.as_deref().or(qm.audio_vec.as_deref());
         if let Some(v) = v {
             if let Some(c) = counters.as_ref() {
                 c.bump_multimodal();

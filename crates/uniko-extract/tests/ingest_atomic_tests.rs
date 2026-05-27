@@ -343,8 +343,5 @@ async fn test_atomic_matches_legacy_three_step_counts() {
 
     let obs_a = count_label(&kb_a, "Observation").await;
     let obs_b = count_label(&kb_b, "Observation").await;
-    assert_eq!(
-        obs_a, obs_b,
-        "observation counts must match between paths"
-    );
+    assert_eq!(obs_a, obs_b, "observation counts must match between paths");
 }

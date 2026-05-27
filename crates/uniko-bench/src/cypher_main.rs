@@ -224,7 +224,9 @@ async fn run_repl(kb: &KnowledgeBase, format: &str, quiet: bool) -> Result<()> {
 }
 
 fn parse_params_json(s: Option<&str>) -> Result<Vec<(String, uni_db::Value)>> {
-    let Some(s) = s else { return Ok(Vec::new()); };
+    let Some(s) = s else {
+        return Ok(Vec::new());
+    };
     let v: serde_json::Value = serde_json::from_str(s).context("parsing --params-json")?;
     let obj = v
         .as_object()

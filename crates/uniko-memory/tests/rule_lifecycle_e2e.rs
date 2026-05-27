@@ -12,9 +12,9 @@ use uniko_memory::rules::{
     AddRuleParams, RuleLifecycleConfig, add_rule, apply_decay_cycle, record_rule_match,
     register_stdlib_rules,
 };
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::labels;
-use uniko_store::KnowledgeBase;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -76,7 +76,10 @@ async fn add_rule_creates_candidate_with_source() {
                 .fetch_all()
                 .await
                 .expect("query");
-            assert!(rows.rows().is_empty(), "no Rule node should be created on Locy error");
+            assert!(
+                rows.rows().is_empty(),
+                "no Rule node should be created on Locy error"
+            );
         }
         Err(other) => panic!("unexpected error: {other}"),
     }

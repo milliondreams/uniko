@@ -103,7 +103,15 @@ async fn main() -> Result<()> {
         println!("── {op_kind:?} insert ──");
         println!(
             "{:<8} {:<10} {:<5} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10}",
-            "api", "lblmode", "sess", "wall_ms", "per_op_us", "parse_us", "plan_us", "exec_us", "ops/sec"
+            "api",
+            "lblmode",
+            "sess",
+            "wall_ms",
+            "per_op_us",
+            "parse_us",
+            "plan_us",
+            "exec_us",
+            "ops/sec"
         );
         println!("{:-<92}", "");
         for sess in &sess_levels {
@@ -115,15 +123,9 @@ async fn main() -> Result<()> {
                     let mut walls = Vec::with_capacity(cli.reps);
                     let mut metrics_sum = CypherMetrics::default();
                     for _ in 0..cli.reps {
-                        let (wall, metrics) = run_scenario(
-                            op_kind,
-                            api,
-                            lblmode,
-                            *sess,
-                            cli.nodes,
-                            cli.label_pool,
-                        )
-                        .await?;
+                        let (wall, metrics) =
+                            run_scenario(op_kind, api, lblmode, *sess, cli.nodes, cli.label_pool)
+                                .await?;
                         walls.push(wall);
                         metrics_sum.add(&metrics);
                     }
@@ -255,10 +257,7 @@ async fn run_scenario(
             };
             let per_worker_edges = nodes.div_ceil(sess);
             let needed = workers_for_label * per_worker_edges * 2;
-            let tx = session
-                .tx()
-                .await
-                .map_err(|e| anyhow!("setup tx: {e}"))?;
+            let tx = session.tx().await.map_err(|e| anyhow!("setup tx: {e}"))?;
             let props: Vec<HashMap<String, Value>> = (0..needed)
                 .map(|n| {
                     let mut p: HashMap<String, Value> = HashMap::new();
@@ -272,7 +271,9 @@ async fn run_scenario(
                 .bulk_insert_vertices(&label, props)
                 .await
                 .map_err(|e| anyhow!("setup bulk_insert_vertices: {e}"))?;
-            tx.commit().await.map_err(|e| anyhow!("setup commit: {e}"))?;
+            tx.commit()
+                .await
+                .map_err(|e| anyhow!("setup commit: {e}"))?;
             endpoint_vids.push((label.clone(), vids));
         }
     }
@@ -335,10 +336,7 @@ async fn run_worker_nodes(
     let session = db.session();
     let mut metrics = CypherMetrics::default();
     for i in start_id..end_id {
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| anyhow!("session.tx: {e}"))?;
+        let tx = session.tx().await.map_err(|e| anyhow!("session.tx: {e}"))?;
         let id_str = format!("w{worker_id}-{i}");
         let val = i as i64;
         let text = format!("text-{i}");
@@ -399,10 +397,7 @@ async fn run_worker_edges(
         // Pair (2i, 2i+1) endpoints — wrapped to fit available vids.
         let src = vids[(2 * i) % vids.len()];
         let dst = vids[(2 * i + 1) % vids.len()];
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| anyhow!("session.tx: {e}"))?;
+        let tx = session.tx().await.map_err(|e| anyhow!("session.tx: {e}"))?;
         match api {
             Api::Cypher => {
                 // Two-MATCH-then-CREATE: the canonical Cypher edge-create

@@ -51,13 +51,10 @@ async fn main() -> Result<()> {
         return Err(anyhow!("--kb-dir does not exist: {}", cli.kb_dir.display()));
     }
 
-    let kb = KnowledgeBase::open_with_xervo_no_prefetch(
-        &cli.kb_dir,
-        UnikoConfig::default(),
-        Vec::new(),
-    )
-    .await
-    .context("opening KB")?;
+    let kb =
+        KnowledgeBase::open_with_xervo_no_prefetch(&cli.kb_dir, UnikoConfig::default(), Vec::new())
+            .await
+            .context("opening KB")?;
     let db = kb.db();
     let session = db.session();
 
@@ -94,7 +91,15 @@ async fn main() -> Result<()> {
         profile_edge(db, "IN_SESSION", "Message", "Session", &[(msg, s)], &[]).await?;
     }
     if let (Some(msg), Some(p)) = (msg_id, participant_id) {
-        profile_edge(db, "ADDRESSED_TO", "Message", "Participant", &[(msg, p)], &[]).await?;
+        profile_edge(
+            db,
+            "ADDRESSED_TO",
+            "Message",
+            "Participant",
+            &[(msg, p)],
+            &[],
+        )
+        .await?;
     }
     if let Some(msg) = msg_id {
         profile_edge(
@@ -180,10 +185,7 @@ async fn profile_edge(
     );
 
     let session = db.session();
-    let tx = session
-        .tx()
-        .await
-        .map_err(|e| anyhow!("tx open: {e}"))?;
+    let tx = session.tx().await.map_err(|e| anyhow!("tx open: {e}"))?;
     let (exec_result, profile) = tx
         .execute_with(&cypher)
         .param("edges", Value::List(list))
@@ -192,7 +194,10 @@ async fn profile_edge(
         .map_err(|e| anyhow!("profile: {e}"))?;
     drop(tx); // rollback — never commit
 
-    println!("─── {edge_type} ({edges_count} edge(s), {src_label} → {dst_label}) ───", edges_count = edges.len());
+    println!(
+        "─── {edge_type} ({edges_count} edge(s), {src_label} → {dst_label}) ───",
+        edges_count = edges.len()
+    );
     println!(
         "  total_time_ms = {} ms   peak_mem = {} bytes   nodes_created = {}   relationships_created = {}",
         profile.total_time_ms,
@@ -222,9 +227,6 @@ async fn fetch_one_id(session: &uni_db::Session, label: &str) -> Result<Option<i
         .query(&cypher)
         .await
         .map_err(|e| anyhow!("MATCH {label}: {e}"))?;
-    let nid = result
-        .rows()
-        .first()
-        .and_then(|r| r.get::<i64>("nid").ok());
+    let nid = result.rows().first().and_then(|r| r.get::<i64>("nid").ok());
     Ok(nid)
 }

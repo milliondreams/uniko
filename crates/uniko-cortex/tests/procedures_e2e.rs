@@ -89,9 +89,7 @@ async fn promote_procedures_creates_candidate_below_threshold() {
 
     let session = kb.db().session();
     let rows = session
-        .query_with(
-            "MATCH (p:Procedure) WHERE p.name = $n RETURN p.status AS st",
-        )
+        .query_with("MATCH (p:Procedure) WHERE p.name = $n RETURN p.status AS st")
         .param("n", "investigate → implement")
         .fetch_all()
         .await
@@ -124,9 +122,7 @@ async fn promote_procedures_promotes_when_threshold_reached() {
 
     let session = kb.db().session();
     let rows = session
-        .query_with(
-            "MATCH (p:Procedure) WHERE p.name = $n RETURN p.status AS st",
-        )
+        .query_with("MATCH (p:Procedure) WHERE p.name = $n RETURN p.status AS st")
         .param("n", "build → test")
         .fetch_all()
         .await
@@ -209,9 +205,5 @@ async fn read_status(kb: &KnowledgeBase, pid: &str) -> String {
         .fetch_all()
         .await
         .expect("query");
-    rows.rows()
-        .first()
-        .expect("row")
-        .get("st")
-        .expect("status")
+    rows.rows().first().expect("row").get("st").expect("status")
 }

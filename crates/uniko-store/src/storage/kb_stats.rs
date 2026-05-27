@@ -69,16 +69,17 @@ impl KnowledgeBase {
             .await
             .map_err(|e| UnikoError::Storage(e.to_string()))?;
 
-        let persisted_kind: Option<String> = result
-            .rows()
-            .first()
-            .and_then(|r| match r.value("blob_storage") {
-                Some(Value::Map(m)) => match m.get("kind") {
-                    Some(Value::String(s)) => Some(s.clone()),
+        let persisted_kind: Option<String> =
+            result
+                .rows()
+                .first()
+                .and_then(|r| match r.value("blob_storage") {
+                    Some(Value::Map(m)) => match m.get("kind") {
+                        Some(Value::String(s)) => Some(s.clone()),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            });
+                });
 
         let want_kind = self.config.blob_storage.kind();
 
@@ -238,10 +239,7 @@ fn encode_blob_storage(bs: &BlobStorage) -> Value {
     match bs {
         BlobStorage::Lance => {}
         BlobStorage::Fs { root } => {
-            m.insert(
-                "root".into(),
-                Value::String(root.display().to_string()),
-            );
+            m.insert("root".into(), Value::String(root.display().to_string()));
         }
         BlobStorage::S3 {
             bucket,

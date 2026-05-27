@@ -380,11 +380,7 @@ fn parse_relative_weekday(text: &str, reference: DateTime<Utc>) -> Option<DateTi
     // happily matches inside compound nouns.  A weekday that is part of
     // a hyphenated compound is not a temporal anchor.
     let bytes = text.as_bytes();
-    let lhs_hyphen = wd_match
-        .start()
-        .checked_sub(1)
-        .and_then(|i| bytes.get(i))
-        == Some(&b'-');
+    let lhs_hyphen = wd_match.start().checked_sub(1).and_then(|i| bytes.get(i)) == Some(&b'-');
     let rhs_hyphen = bytes.get(wd_match.end()) == Some(&b'-');
     if lhs_hyphen || rhs_hyphen {
         return None;

@@ -93,7 +93,10 @@ const RETIRED_FLAGS: &[(&str, &str)] = &[
     ("--llm-model-id", "models.gen.model_id"),
     ("--llm-provider", "models.gen.provider"),
     ("--llm-base-url", "models.gen.base_url"),
-    ("--llm-use-default-options", "models.gen.use_default_options"),
+    (
+        "--llm-use-default-options",
+        "models.gen.use_default_options",
+    ),
     ("--judge-alias", "models.judge.alias"),
     ("--judge-model-id", "models.judge.model_id"),
     ("--judge-provider", "models.judge.provider"),
@@ -104,7 +107,10 @@ const RETIRED_FLAGS: &[(&str, &str)] = &[
         "--extract-triples-llm-alias",
         "models.extract_triples.alias (set models.extract_triples to an LlmAlias object)",
     ),
-    ("--no-phase2-graph", "recall.phase2_graph_enabled (set false)"),
+    (
+        "--no-phase2-graph",
+        "recall.phase2_graph_enabled (set false)",
+    ),
     (
         "--no-phase2-temporal",
         "recall.phase2_temporal_enabled (set false)",
@@ -223,12 +229,11 @@ async fn main() -> Result<()> {
         Some(bench_cfg.models.generator.alias.as_str())
     };
     let llm_use_default_options = bench_cfg.gen_use_default_options();
-    let judge_alias: Option<&str> =
-        if !bench_cfg.judge_enabled || bench_cfg.retrieval_only {
-            None
-        } else {
-            Some(bench_cfg.models.judge.alias.as_str())
-        };
+    let judge_alias: Option<&str> = if !bench_cfg.judge_enabled || bench_cfg.retrieval_only {
+        None
+    } else {
+        Some(bench_cfg.models.judge.alias.as_str())
+    };
     let gen_model_id = bench_cfg.models.generator.model_id.clone();
     let judge_model_id = bench_cfg.models.judge.model_id.clone();
 
@@ -480,8 +485,7 @@ async fn main() -> Result<()> {
                 "sample_id": qr.sample_id.clone(),
                 "question_index": qr.question_index,
             });
-            let recall_ids: Vec<i64> =
-                qr.recall_bundle.iter().map(|item| item.node_id).collect();
+            let recall_ids: Vec<i64> = qr.recall_bundle.iter().map(|item| item.node_id).collect();
             let params = uniko_memory::RecordQueryEpisodeParams {
                 question: &qr.question,
                 answer: &qr.predicted_answer,

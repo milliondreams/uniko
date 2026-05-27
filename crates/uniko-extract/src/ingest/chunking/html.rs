@@ -189,15 +189,7 @@ fn extract_sections(html: &str, lead_heading: Option<String>) -> Vec<Section> {
         // TextChunker can split on `\n\n`.
         if matches!(
             tag_name.as_str(),
-            "p" | "div"
-                | "section"
-                | "article"
-                | "li"
-                | "br"
-                | "tr"
-                | "td"
-                | "th"
-                | "blockquote"
+            "p" | "div" | "section" | "article" | "li" | "br" | "tr" | "td" | "th" | "blockquote"
         ) && !buf.ends_with("\n\n")
         {
             buf.push_str("\n\n");
@@ -340,9 +332,9 @@ fn decode_entities(s: &str) -> String {
             "copy" => Some('©'),
             "reg" => Some('®'),
             "trade" => Some('™'),
-            e if e.starts_with("#x") || e.starts_with("#X") => {
-                u32::from_str_radix(&e[2..], 16).ok().and_then(char::from_u32)
-            }
+            e if e.starts_with("#x") || e.starts_with("#X") => u32::from_str_radix(&e[2..], 16)
+                .ok()
+                .and_then(char::from_u32),
             e if e.starts_with('#') => e[1..].parse::<u32>().ok().and_then(char::from_u32),
             _ => None,
         };
@@ -389,9 +381,19 @@ mod tests {
         let html = "<html><head><style>.x{color:red}</style><script>alert(1)</script></head>\
                     <body><h1>Title</h1><p>Hello world this is some prose worth keeping</p></body></html>";
         let chunks = HtmlChunker.chunk(html, &ChunkConfig::default());
-        let combined: String = chunks.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join("\n");
-        assert!(!combined.contains("alert"), "script body leaked: {combined}");
-        assert!(!combined.contains("color:red"), "style body leaked: {combined}");
+        let combined: String = chunks
+            .iter()
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !combined.contains("alert"),
+            "script body leaked: {combined}"
+        );
+        assert!(
+            !combined.contains("color:red"),
+            "style body leaked: {combined}"
+        );
         assert!(combined.contains("Hello world"));
     }
 
@@ -427,7 +429,11 @@ mod tests {
         // multi-byte UTF-8 sequence. This test pins the fix in place.
         let html = "<p>café — héllo 你好 🌍 — Olá!</p>";
         let chunks = HtmlChunker.chunk(html, &ChunkConfig::default());
-        let combined: String = chunks.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" ");
+        let combined: String = chunks
+            .iter()
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
         for needle in ["café", "héllo", "你好", "🌍", "Olá"] {
             assert!(
                 combined.contains(needle),
@@ -440,10 +446,17 @@ mod tests {
     fn test_html_comments_stripped() {
         let html = "<p>before <!-- secret > leak --> after</p>";
         let chunks = HtmlChunker.chunk(html, &ChunkConfig::default());
-        let combined: String = chunks.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" ");
+        let combined: String = chunks
+            .iter()
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(combined.contains("before"));
         assert!(combined.contains("after"));
-        assert!(!combined.contains("secret"), "comment body leaked: {combined:?}");
+        assert!(
+            !combined.contains("secret"),
+            "comment body leaked: {combined:?}"
+        );
     }
 
     #[test]
@@ -451,9 +464,19 @@ mod tests {
         // &#8217; is the right single quote (’), &#x2014; is em-dash (—).
         let html = "<p>It&#8217;s a test &#x2014; with entities.</p>";
         let chunks = HtmlChunker.chunk(html, &ChunkConfig::default());
-        let combined: String = chunks.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" ");
-        assert!(combined.contains("It’s"), "numeric entity not decoded: {combined:?}");
-        assert!(combined.contains("—"), "hex entity not decoded: {combined:?}");
+        let combined: String = chunks
+            .iter()
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            combined.contains("It’s"),
+            "numeric entity not decoded: {combined:?}"
+        );
+        assert!(
+            combined.contains("—"),
+            "hex entity not decoded: {combined:?}"
+        );
     }
 
     #[test]
@@ -471,9 +494,16 @@ mod tests {
             <footer>Copyright 2026 Example Corp. All rights reserved. <a href="/privacy">Privacy</a></footer>
             </body></html>"#;
         let chunks = HtmlChunker.chunk(html, &ChunkConfig::default());
-        let combined: String = chunks.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" ");
+        let combined: String = chunks
+            .iter()
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
         // Article body must survive.
-        assert!(combined.contains("Vector databases"), "article missing: {combined:?}");
+        assert!(
+            combined.contains("Vector databases"),
+            "article missing: {combined:?}"
+        );
         // Boilerplate should be gone (Readability scores nav/footer below threshold).
         assert!(
             !combined.contains("Copyright 2026"),

@@ -6,9 +6,9 @@ use uni_db::Value;
 
 use uniko_memory::policy::{Viewer, filter_bundle, visibility_admits};
 use uniko_memory::recall::{ContextBundle, RecallItem, RecallTier};
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
-use uniko_store::KnowledgeBase;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())

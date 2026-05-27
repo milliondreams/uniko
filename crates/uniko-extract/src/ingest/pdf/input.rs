@@ -46,7 +46,10 @@ impl std::fmt::Debug for PdfIngestOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PdfIngestOptions")
             .field("artifact_id", &self.artifact_id)
-            .field("extractor", &self.extractor.as_ref().map(|_| "<dyn PdfTextExtractor>"))
+            .field(
+                "extractor",
+                &self.extractor.as_ref().map(|_| "<dyn PdfTextExtractor>"),
+            )
             .field("source_path", &self.source_path)
             .finish()
     }

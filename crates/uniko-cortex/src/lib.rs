@@ -12,8 +12,8 @@ pub mod topics;
 
 #[doc(inline)]
 pub use procedures::{
-    LifecycleConfig, MatchedProcedure, PromotionReport, match_procedures,
-    promote_procedures_once, record_procedure_use,
+    LifecycleConfig, MatchedProcedure, PromotionReport, match_procedures, promote_procedures_once,
+    record_procedure_use,
 };
 #[doc(inline)]
 pub use topics::{TopicConfig, TopicReport, detect_topics_once, detect_topics_once_with_llm};

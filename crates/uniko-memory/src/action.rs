@@ -180,7 +180,8 @@ pub async fn record_action(
             }
             None => {
                 tracing::debug!(
-                    msg_id, "record_action: triggered_by Message not found — TRIGGERED_BY skipped"
+                    msg_id,
+                    "record_action: triggered_by Message not found — TRIGGERED_BY skipped"
                 );
             }
         }
@@ -217,7 +218,8 @@ pub async fn record_action(
             }
             None => {
                 tracing::debug!(
-                    prev_id, "record_action: previous Action not found — NEXT_ACTION skipped"
+                    prev_id,
+                    "record_action: previous Action not found — NEXT_ACTION skipped"
                 );
             }
         }
@@ -231,7 +233,11 @@ pub async fn record_action(
     }
 
     // ── Embedding ──
-    let embed_text = build_embed_text(&params.action_type, params.input.as_ref(), params.output.as_ref());
+    let embed_text = build_embed_text(
+        &params.action_type,
+        params.input.as_ref(),
+        params.output.as_ref(),
+    );
     let vec = embed_document(kb, &embed_text).await?;
     let mut emb_props = HashMap::new();
     emb_props.insert("embedding".into(), Value::Vector(vec));
@@ -361,10 +367,7 @@ fn split_overflow(
             if count_tokens(s) > threshold_tokens {
                 // Replace the inlined output with a short stub so the
                 // Action still records the kind of payload it produced.
-                let stub = format!(
-                    "<overflow: {} tokens spilled to Artifact>",
-                    count_tokens(s)
-                );
+                let stub = format!("<overflow: {} tokens spilled to Artifact>", count_tokens(s));
                 (Some(Value::String(stub)), Some(s.clone()))
             } else {
                 (Some(Value::String(s.clone())), None)

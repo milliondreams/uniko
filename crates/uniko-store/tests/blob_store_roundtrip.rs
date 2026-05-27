@@ -31,10 +31,7 @@ async fn roundtrip_backend(backend: Box<dyn uniko_store::blob_store::BlobStore>)
     // so `get` is intentionally an error there.
     let backend_persists = outcome.bytes_inline.is_none();
     if backend_persists {
-        let got = backend
-            .get(HEX, outcome.uri.as_deref())
-            .await
-            .expect("get");
+        let got = backend.get(HEX, outcome.uri.as_deref()).await.expect("get");
         assert_eq!(got, payload);
     }
 

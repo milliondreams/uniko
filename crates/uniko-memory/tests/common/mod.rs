@@ -14,8 +14,8 @@
 // Rust guideline compliant
 
 use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
-use uniko_store::config::UnikoConfig;
 use uniko_store::KnowledgeBase;
+use uniko_store::config::UnikoConfig;
 
 /// Alias the NL→Cypher translator (and other generative paths) use
 /// for the chat model.  Matches the default in

@@ -169,13 +169,7 @@ impl Accum {
         }
     }
 
-    fn observe(
-        &mut self,
-        qr: &QueryResult,
-        f1: f64,
-        judge: Option<f64>,
-        pricing: &Pricing,
-    ) {
+    fn observe(&mut self, qr: &QueryResult, f1: f64, judge: Option<f64>, pricing: &Pricing) {
         self.observe_inner(qr, f1, judge, pricing);
         let cat = self
             .by_category
@@ -184,13 +178,7 @@ impl Accum {
         cat.observe_inner(qr, f1, judge, pricing);
     }
 
-    fn observe_inner(
-        &mut self,
-        qr: &QueryResult,
-        f1: f64,
-        judge: Option<f64>,
-        pricing: &Pricing,
-    ) {
+    fn observe_inner(&mut self, qr: &QueryResult, f1: f64, judge: Option<f64>, pricing: &Pricing) {
         self.f1_sum += f1;
         if let Some(j) = judge {
             self.judge_scores.push(j);

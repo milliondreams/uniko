@@ -76,7 +76,10 @@ impl Pricing {
         let cols: Vec<&str> = header.split(',').map(str::trim).collect();
         let idx = |name: &str| {
             cols.iter().position(|c| *c == name).with_context(|| {
-                format!("pricing CSV {} missing required column {name:?}", path.display())
+                format!(
+                    "pricing CSV {} missing required column {name:?}",
+                    path.display()
+                )
             })
         };
         let i_model = idx("model_id")?;
@@ -87,7 +90,9 @@ impl Pricing {
         let mut rates: HashMap<String, Rates> = HashMap::new();
         for (lineno, line) in lines.enumerate() {
             let row: Vec<&str> = line.split(',').map(str::trim).collect();
-            let Some(model) = row.get(i_model) else { continue };
+            let Some(model) = row.get(i_model) else {
+                continue;
+            };
             if model.is_empty() {
                 continue;
             }
@@ -191,14 +196,22 @@ mod tests {
         let p = Pricing::load(f.path()).expect("load");
         let cost_in = p.cost_input("gpt-4o-mini", 1_000_000).expect("priced");
         let cost_out = p.cost_output("gpt-4o-mini", 500_000).expect("priced");
-        assert!((cost_in - 0.15).abs() < 1e-9, "expected 0.15, got {cost_in}");
-        assert!((cost_out - 0.30).abs() < 1e-9, "expected 0.30, got {cost_out}");
+        assert!(
+            (cost_in - 0.15).abs() < 1e-9,
+            "expected 0.15, got {cost_in}"
+        );
+        assert!(
+            (cost_out - 0.30).abs() < 1e-9,
+            "expected 0.30, got {cost_out}"
+        );
         assert!(p.cost_input("gpt-5", 100).is_none(), "blank rate -> None");
     }
 
     #[test]
     fn unknown_model_returns_none() {
-        let f = write_csv("model_id,provider,input_per_million_usd,output_per_million_usd,embedding_per_million_usd,notes\n");
+        let f = write_csv(
+            "model_id,provider,input_per_million_usd,output_per_million_usd,embedding_per_million_usd,notes\n",
+        );
         let p = Pricing::load(f.path()).expect("load");
         assert!(p.cost_input("nonexistent", 1000).is_none());
     }

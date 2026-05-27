@@ -41,10 +41,16 @@ async fn assert_post_migration(kb: &KnowledgeBase, vid: i64, body: &str) {
         .fetch_all()
         .await
         .unwrap();
-    let row = r.rows().first().expect("HAS_CONTENT row should exist post-migration");
+    let row = r
+        .rows()
+        .first()
+        .expect("HAS_CONTENT row should exist post-migration");
     let cid: String = row.get("cid").unwrap();
     let sz: i64 = row.get("sz").unwrap();
-    assert_eq!(cid, expected_hash, "ArtifactContent.content_id must match SHA-256");
+    assert_eq!(
+        cid, expected_hash,
+        "ArtifactContent.content_id must match SHA-256"
+    );
     assert_eq!(sz, body.len() as i64);
 
     // a.content stripped.

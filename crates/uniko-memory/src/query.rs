@@ -116,12 +116,18 @@ pub async fn record_query_episode(
     let mut state = JsonMap::new();
 
     // Required fields — always present.
-    state.insert("topic".into(), JsonValue::String(params.question.to_string()));
+    state.insert(
+        "topic".into(),
+        JsonValue::String(params.question.to_string()),
+    );
     state.insert(
         "question".into(),
         JsonValue::String(params.question.to_string()),
     );
-    state.insert("answer".into(), JsonValue::String(params.answer.to_string()));
+    state.insert(
+        "answer".into(),
+        JsonValue::String(params.answer.to_string()),
+    );
     state.insert(
         "recall_node_ids".into(),
         JsonValue::Array(
@@ -326,4 +332,3 @@ where
         episode_id,
     })
 }
-

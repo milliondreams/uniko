@@ -6,10 +6,10 @@ use chrono::Utc;
 use uni_db::Value;
 
 use uniko_cortex::topics::{TopicConfig, detect_topics_once};
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::types::datetime_value;
-use uniko_store::KnowledgeBase;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -104,7 +104,11 @@ async fn detect_topics_groups_co_occurring_entities() {
     }
     let mut sizes: Vec<usize> = groups.values().map(Vec::len).collect();
     sizes.sort_unstable();
-    assert_eq!(sizes, vec![2, 3], "expected one 2-cluster and one 3-cluster");
+    assert_eq!(
+        sizes,
+        vec![2, 3],
+        "expected one 2-cluster and one 3-cluster"
+    );
 }
 
 #[tokio::test]

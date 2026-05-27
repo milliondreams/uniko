@@ -107,10 +107,7 @@ pub struct AddRuleParams {
 ///
 /// - [`UnikoError::Storage`] when the node merge fails.
 /// - [`UnikoError::Locy`] when the source has syntax errors.
-pub async fn add_rule(
-    kb: &KnowledgeBase,
-    params: AddRuleParams,
-) -> Result<NodeId, UnikoError> {
+pub async fn add_rule(kb: &KnowledgeBase, params: AddRuleParams) -> Result<NodeId, UnikoError> {
     if params.source_type == "stdlib" {
         return Err(UnikoError::Storage(
             "add_rule: source_type='stdlib' is reserved for stdlib registration".into(),
@@ -139,7 +136,8 @@ pub async fn add_rule(
     props.insert("created_at".into(), now);
     props.insert("missed_cycles".into(), Value::Int(0));
 
-    kb.merge_node(labels::RULE, "rule_id", &rule_id, &props).await
+    kb.merge_node(labels::RULE, "rule_id", &rule_id, &props)
+        .await
 }
 
 /// Apply one decay-cycle pass to every non-stdlib Rule.
@@ -294,7 +292,9 @@ async fn fetch_lifecycle_rules(kb: &KnowledgeBase) -> Result<Vec<RuleSnapshot>, 
         };
         let name: String = row.get("name").unwrap_or_default();
         let source_type: String = row.get("st").unwrap_or_else(|_| "authored".into());
-        let status: String = row.get("status").unwrap_or_else(|_| STATUS_CANDIDATE.into());
+        let status: String = row
+            .get("status")
+            .unwrap_or_else(|_| STATUS_CANDIDATE.into());
         let confidence: f64 = row.get("conf").unwrap_or(0.5);
         let missed_cycles: i64 = row.get("mc").unwrap_or(0);
         let last_scored_at = extract_optional_dt(row, "lsa");
@@ -311,10 +311,7 @@ async fn fetch_lifecycle_rules(kb: &KnowledgeBase) -> Result<Vec<RuleSnapshot>, 
     Ok(out)
 }
 
-async fn fetch_rule_by_name(
-    kb: &KnowledgeBase,
-    name: &str,
-) -> Result<RuleSnapshot, UnikoError> {
+async fn fetch_rule_by_name(kb: &KnowledgeBase, name: &str) -> Result<RuleSnapshot, UnikoError> {
     let session = kb.db().session();
     let cypher = "MATCH (r:Rule) WHERE r.name = $n \
                   RETURN id(r) AS nid, r.name AS name, \
@@ -335,10 +332,14 @@ async fn fetch_rule_by_name(
         .first()
         .ok_or_else(|| UnikoError::Storage(format!("rule '{name}' not found")))?;
     Ok(RuleSnapshot {
-        node_id: row.get("nid").map_err(|e| UnikoError::Storage(e.to_string()))?,
+        node_id: row
+            .get("nid")
+            .map_err(|e| UnikoError::Storage(e.to_string()))?,
         name: row.get("name").unwrap_or_default(),
         source_type: row.get("st").unwrap_or_else(|_| "authored".into()),
-        status: row.get("status").unwrap_or_else(|_| STATUS_CANDIDATE.into()),
+        status: row
+            .get("status")
+            .unwrap_or_else(|_| STATUS_CANDIDATE.into()),
         confidence: row.get("conf").unwrap_or(0.5),
         missed_cycles: row.get("mc").unwrap_or(0),
         last_scored_at: extract_optional_dt(row, "lsa"),

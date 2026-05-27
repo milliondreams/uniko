@@ -195,7 +195,10 @@ mod tests {
         })
         .expect("write");
         let body = std::fs::read_to_string(&path).expect("read");
-        assert!(body.contains("\"kind\":\"query\""), "expected tag, got {body}");
+        assert!(
+            body.contains("\"kind\":\"query\""),
+            "expected tag, got {body}"
+        );
         assert!(body.contains("\"sample_id\":\"conv-26\""));
         assert!(body.ends_with('\n'), "trailing newline");
     }
