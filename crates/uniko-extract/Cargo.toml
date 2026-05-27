@@ -20,6 +20,7 @@ tiktoken-rs = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 regex = { workspace = true }
+dom_smoothie = "0.17"
 
 # Optional dependencies for feature-gated functionality
 tree-sitter = { workspace = true, optional = true }
