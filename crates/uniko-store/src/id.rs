@@ -2,7 +2,9 @@
 ///
 /// **ADR-1:** All `*_id` fields use UUID v7 (time-sortable, monotonically increasing)
 /// when not caller-provided. Exception: `chunk_id` uses deterministic `{parent_id}:{index}`
-/// to enable idempotent re-chunking.
+/// to enable idempotent re-chunking. Deterministic IDs derived from content
+/// (procedure / topic / entity) use [`stable_hex64`].
+use sha2::Digest;
 use uuid::Uuid;
 
 /// Generate a new UUID v7 (time-sortable, monotonically increasing).
@@ -28,6 +30,56 @@ pub fn is_valid_id(id: &str) -> bool {
     Uuid::parse_str(id)
         .map(|u| u.get_version_num() == 7)
         .unwrap_or(false)
+}
+
+/// Streaming SHA-256 hasher wrapper used by [`stable_hex64`].
+///
+/// Exists so callers can feed bytes without importing the `sha2` crate
+/// or the [`Digest`] trait. Internal hashing primitive is fixed at
+/// SHA-256; the stable-id contract is that the first 64 bits of the
+/// digest form the hex-encoded suffix.
+pub struct StableHasher(sha2::Sha256);
+
+impl StableHasher {
+    /// Feed `data` into the hasher.
+    pub fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+}
+
+/// Build a deterministic, persistence-safe ID of the form `"{prefix}_{u64:016x}"`.
+///
+/// The closure controls exactly which bytes are fed (including any
+/// separators) so distinct call sites can preserve their own framing
+/// rules without colliding. The first 8 bytes of the SHA-256 digest
+/// are interpreted as a big-endian `u64` and rendered as 16 hex digits.
+///
+/// SHA-256 was chosen over [`std::collections::hash_map::DefaultHasher`]
+/// because the latter is not guaranteed stable across rustc versions,
+/// and these IDs end up persisted on graph nodes.
+///
+/// # Examples
+///
+/// ```
+/// use uniko_store::id::stable_hex64;
+/// let id = stable_hex64("ent", |h| {
+///     h.update(b"alice");
+///     h.update(b"\x00");
+///     h.update(b"person");
+/// });
+/// assert!(id.starts_with("ent_"));
+/// assert_eq!(id.len(), "ent_".len() + 16);
+/// ```
+pub fn stable_hex64(prefix: &str, feed: impl FnOnce(&mut StableHasher)) -> String {
+    let mut h = StableHasher(sha2::Sha256::new());
+    feed(&mut h);
+    let digest = h.0.finalize();
+    let lead = u64::from_be_bytes(
+        digest[..8]
+            .try_into()
+            .expect("SHA-256 digest is always >= 8 bytes"),
+    );
+    format!("{prefix}_{lead:016x}")
 }
 
 #[cfg(test)]
@@ -73,6 +125,55 @@ mod tests {
         let a = chunk_id("parent", 5);
         let b = chunk_id("parent", 5);
         assert_eq!(a, b, "same inputs must produce same output");
+    }
+
+    #[test]
+    fn test_stable_hex64_format() {
+        let id = stable_hex64("proc", |h| {
+            h.update(b"agent\x00a\x00b");
+        });
+        assert!(id.starts_with("proc_"), "expected proc_ prefix, got {id}");
+        assert_eq!(id.len(), "proc_".len() + 16, "expected 16 hex chars");
+        assert!(
+            id[5..].chars().all(|c| c.is_ascii_hexdigit()),
+            "expected lowercase hex suffix"
+        );
+    }
+
+    #[test]
+    fn test_stable_hex64_deterministic() {
+        let feed = |h: &mut StableHasher| {
+            h.update(b"alice");
+            h.update(b"\x00");
+            h.update(b"person");
+        };
+        let a = stable_hex64("ent", feed);
+        let b = stable_hex64("ent", feed);
+        assert_eq!(a, b, "same input must yield same id");
+    }
+
+    #[test]
+    fn test_stable_hex64_distinct_inputs() {
+        let a = stable_hex64("ent", |h| h.update(b"alice"));
+        let b = stable_hex64("ent", |h| h.update(b"bob"));
+        assert_ne!(a, b, "distinct inputs must (almost certainly) differ");
+    }
+
+    #[test]
+    fn test_stable_hex64_separator_matters() {
+        // Two-part hash with vs. without separator must differ —
+        // otherwise call sites that rely on separators (procedures,
+        // entities) could alias on inputs like ("ab", "c") vs ("a", "bc").
+        let with_sep = stable_hex64("x", |h| {
+            h.update(b"ab");
+            h.update(b"\x00");
+            h.update(b"c");
+        });
+        let without_sep = stable_hex64("x", |h| {
+            h.update(b"ab");
+            h.update(b"c");
+        });
+        assert_ne!(with_sep, without_sep);
     }
 
     #[test]

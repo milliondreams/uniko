@@ -40,3 +40,17 @@ pub use query::{
 };
 #[doc(inline)]
 pub use working_memory::{WorkingMemoryParams, working_memory};
+
+/// Sort `items` in descending order by the `f64` key returned by `score`.
+///
+/// `NaN` scores are treated as `Equal` so the sort is total. Used across
+/// the recall cascade and working-memory ranking; centralised here so
+/// the `partial_cmp(...).unwrap_or(Equal)` boilerplate lives in exactly
+/// one place.
+pub(crate) fn sort_by_score_desc<T>(items: &mut [T], score: impl Fn(&T) -> f64) {
+    items.sort_by(|a, b| {
+        score(b)
+            .partial_cmp(&score(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}

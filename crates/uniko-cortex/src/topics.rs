@@ -282,22 +282,18 @@ fn group_by_label(labels_out: &[u32], entities: &[EntityRow]) -> HashMap<u32, Ve
 
 /// Deterministic Topic id derived from the sorted member entity_ids.
 ///
-/// Uses truncated SHA-256 (first 64 bits as big-endian hex) rather than
-/// [`std::collections::hash_map::DefaultHasher`] because the latter is not
-/// guaranteed stable across rustc versions, and these IDs are persisted to
-/// the store as `Topic.topic_id`.
+/// Wraps [`uniko_store::id::stable_hex64`] and feeds each sorted
+/// `entity_id` followed by a `|` terminator (including after the last
+/// element — preserves the byte-stream shape of legacy persisted IDs).
 fn stable_topic_id(community: &[EntityRow]) -> String {
-    use sha2::{Digest, Sha256};
     let mut ids: Vec<&str> = community.iter().map(|e| e.entity_id.as_str()).collect();
     ids.sort_unstable();
-    let mut h = Sha256::new();
-    for id in ids {
-        h.update(id.as_bytes());
-        h.update(b"|");
-    }
-    let digest = h.finalize();
-    let lead = u64::from_be_bytes(digest[..8].try_into().expect("Sha256 yields >= 8 bytes"));
-    format!("topic_{lead:016x}")
+    uniko_store::id::stable_hex64("topic", |h| {
+        for id in ids {
+            h.update(id.as_bytes());
+            h.update(b"|");
+        }
+    })
 }
 
 async fn upsert_topic(

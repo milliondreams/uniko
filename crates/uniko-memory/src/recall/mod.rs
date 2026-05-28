@@ -361,11 +361,7 @@ fn finalize_bundle(
     limit: usize,
     token_budget: usize,
 ) -> (Vec<RecallItem>, usize) {
-    items.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    crate::sort_by_score_desc(&mut items, |x| x.score);
     items.truncate(limit);
     let mut total_tokens = 0usize;
     let mut final_items = Vec::with_capacity(items.len());
@@ -462,11 +458,7 @@ pub async fn recall(
         let mut combined: Vec<RecallItem> = phase2_items;
         if matches!(config.phase1_strategy, Phase1Strategy::Merge) {
             let mut p1 = phase1_items;
-            p1.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            crate::sort_by_score_desc(&mut p1, |x| x.score);
             p1.truncate(PHASE1_MERGE_CAP);
             combined.extend(p1);
         }
@@ -560,11 +552,7 @@ pub async fn recall(
         })
         .collect();
 
-    items.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    crate::sort_by_score_desc(&mut items, |x| x.score);
 
     // ── Optional cross-encoder reranker stage ──────────────────────
     // Re-score the top RRF candidates with a cross-encoder before
@@ -596,11 +584,7 @@ pub async fn recall(
                 let tail = items.split_off(top_n);
                 head.extend(tail);
                 items = head;
-                items.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                crate::sort_by_score_desc(&mut items, |x| x.score);
             }
             Err(e) => tracing::warn!(error = %e, "reranker call failed, falling back to RRF order"),
         }
@@ -624,11 +608,7 @@ pub async fn recall(
             }
         }
         if matched > 0 {
-            items.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            crate::sort_by_score_desc(&mut items, |x| x.score);
         }
         tracing::info!(
             target_type,
@@ -652,11 +632,7 @@ pub async fn recall(
         Phase1Strategy::Merge => {
             const PHASE1_FALLBACK_CAP: usize = 3;
             let mut phase1_top = phase1_items;
-            phase1_top.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            crate::sort_by_score_desc(&mut phase1_top, |x| x.score);
             phase1_top.truncate(PHASE1_FALLBACK_CAP);
 
             let mut merged: HashMap<NodeId, RecallItem> = HashMap::new();
@@ -671,11 +647,7 @@ pub async fn recall(
                     .or_insert(item);
             }
             items = merged.into_values().collect();
-            items.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            crate::sort_by_score_desc(&mut items, |x| x.score);
         }
         Phase1Strategy::Boost => {
             let boost_map =
@@ -688,11 +660,7 @@ pub async fn recall(
                 }
             }
             if boosted > 0 {
-                items.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                crate::sort_by_score_desc(&mut items, |x| x.score);
             }
             tracing::info!(
                 phase1_facts = phase1_items.len(),
@@ -1045,11 +1013,7 @@ fn fuse_and_score_phase2(
         })
         .filter(|item| item.score >= config.min_score)
         .collect();
-    items.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    crate::sort_by_score_desc(&mut items, |x| x.score);
     items
 }
 
@@ -1381,11 +1345,7 @@ async fn phase2_graph_activation(
     }
     // PPR's natural ordering is already top-down by score, but the
     // UNWIND/MATCH round-trip doesn't preserve order — re-sort here.
-    ranked.sort_by(|a, b| {
-        b.raw_score
-            .partial_cmp(&a.raw_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    crate::sort_by_score_desc(&mut ranked, |x| x.raw_score);
     normalize_scores_in_place(&mut ranked);
     tracing::debug!(
         seeds = seeds.len(),
@@ -1717,11 +1677,7 @@ async fn run_recall_for_variant(
             raw_score,
         })
         .collect();
-    hits.sort_by(|a, b| {
-        b.raw_score
-            .partial_cmp(&a.raw_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    crate::sort_by_score_desc(&mut hits, |x| x.raw_score);
     hits
 }
 
@@ -1796,7 +1752,7 @@ mod rrf_tests {
             .into_iter()
             .map(|(nid, (_, _, s))| (nid, s))
             .collect();
-        pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        crate::sort_by_score_desc(&mut pairs, |x| x.1);
         pairs
     }
 

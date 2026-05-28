@@ -54,55 +54,33 @@ impl KnowledgeBase {
         properties: &HashMap<String, Value>,
     ) -> Result<NodeId> {
         let t_total = std::time::Instant::now();
-
-        let t = std::time::Instant::now();
         validate_label(label)?;
-        let validate_us = t.elapsed().as_micros() as u64;
 
         // Properties must be inline in CREATE to satisfy NOT NULL constraints.
-        let t = std::time::Instant::now();
         let (inline_props, params) = build_inline_props(properties, 0)?;
         let cypher = format!("CREATE (n:{label} {{{inline_props}}}) RETURN id(n) AS vid");
-        let build_us = t.elapsed().as_micros() as u64;
 
-        let t = std::time::Instant::now();
         let mut qb = tx.query_with(&cypher);
         for (k, v) in &params {
             qb = qb.param(k.as_str(), v.clone());
         }
-        let bind_us = t.elapsed().as_micros() as u64;
-
-        let t = std::time::Instant::now();
         let result = qb.fetch_all().await?;
-        let fetch_us = t.elapsed().as_micros() as u64;
-
-        let t = std::time::Instant::now();
         let row = result
             .rows()
             .first()
             .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
         let vid: i64 = row.get("vid")?;
-        let extract_us = t.elapsed().as_micros() as u64;
 
-        // uni-db reports its own internal split via QueryMetrics on the
-        // result. parse_time / plan_time are the Cypher-side cost; exec_time
-        // is from plan-handoff to results returned (snapshot lookup, L0
-        // write, VID allocation, schema lookup all live in here).
-        let m = result.metrics();
+        // uni-db's own `QueryMetrics` already splits parse/plan/exec —
+        // re-emitting per-Rust-stage timers (validate / build / bind /
+        // fetch / extract) duplicates info and inflates per-write
+        // overhead. Keep only the wall-clock total + label.
         tracing::info!(
             target: "query_metrics",
             site = "create_node_in_tx",
             label,
-            validate_us,
-            build_us,
-            bind_us,
-            fetch_us,
-            extract_us,
-            parse_us = m.parse_time.as_micros() as u64,
-            plan_us = m.plan_time.as_micros() as u64,
-            exec_us = m.exec_time.as_micros() as u64,
             total_us = t_total.elapsed().as_micros() as u64,
-            cache_hit = m.plan_cache_hit,
+            cache_hit = result.metrics().plan_cache_hit,
             "query metrics",
         );
         Ok(vid)

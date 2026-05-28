@@ -316,22 +316,15 @@ async fn link_action_entities(kb: &KnowledgeBase, action_node: NodeId, text: &st
 ///
 /// Two Actions mentioning the same entity converge on the same
 /// Entity node.  Matches the convention used by the P2 ingest path
-/// when it deduplicates entities across messages.
-///
-/// Uses truncated SHA-256 (first 64 bits as big-endian hex) rather than
-/// [`std::collections::hash_map::DefaultHasher`] because the latter is not
-/// guaranteed stable across rustc versions, and these IDs are persisted to
-/// the store as `Entity.entity_id`.
+/// when it deduplicates entities across messages. Wraps
+/// [`uniko_store::id::stable_hex64`] with a NUL separator.
 #[cfg(feature = "onnx")]
 fn stable_entity_id(name: &str, entity_type: NerEntityType) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(name.to_lowercase().as_bytes());
-    h.update(b"\x00");
-    h.update(entity_type_str(entity_type).as_bytes());
-    let digest = h.finalize();
-    let lead = u64::from_be_bytes(digest[..8].try_into().expect("Sha256 yields >= 8 bytes"));
-    format!("ent_{lead:016x}")
+    uniko_store::id::stable_hex64("ent", |h| {
+        h.update(name.to_lowercase().as_bytes());
+        h.update(b"\x00");
+        h.update(entity_type_str(entity_type).as_bytes());
+    })
 }
 
 /// Stable string representation of [`NerEntityType`] for storage on

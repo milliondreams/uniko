@@ -223,14 +223,17 @@ impl KnowledgeBase {
         // row, since the VIDs are already known at the call site.
         if !return_ids {
             let t_start = std::time::Instant::now();
+            // uni-db's `bulk_insert_edges` takes property names as-is,
+            // so validate every key up front and propagate failures
+            // before the bulk write commits.
+            for (_, _, props) in edges {
+                for k in props.keys() {
+                    validate_property_name(k)?;
+                }
+            }
             let bulk_edges: Vec<(Vid, Vid, HashMap<String, Value>)> = edges
                 .iter()
                 .map(|(s, d, props)| {
-                    // Property names still need validation; uni-db's
-                    // bulk_insert_edges takes them as-is.
-                    for k in props.keys() {
-                        let _ = validate_property_name(k);
-                    }
                     (Vid::new(*s as u64), Vid::new(*d as u64), props.clone())
                 })
                 .collect();

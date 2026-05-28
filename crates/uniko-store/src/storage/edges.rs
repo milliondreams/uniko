@@ -204,7 +204,6 @@ impl KnowledgeBase {
         let t_start = std::time::Instant::now();
 
         // SENT_BY — always one edge, with `role` property.
-        let sent_by_start = std::time::Instant::now();
         let mut sent_props: HashMap<String, Value> = HashMap::with_capacity(1);
         sent_props.insert("role".into(), Value::String(sender_role.to_string()));
         tx.bulk_insert_edges(
@@ -216,10 +215,8 @@ impl KnowledgeBase {
             )],
         )
         .await?;
-        let sent_by_ms = sent_by_start.elapsed().as_micros() as u64;
 
         // IN_SESSION — always one edge, no properties.
-        let in_session_start = std::time::Instant::now();
         tx.bulk_insert_edges(
             "IN_SESSION",
             vec![(
@@ -229,10 +226,8 @@ impl KnowledgeBase {
             )],
         )
         .await?;
-        let in_session_ms = in_session_start.elapsed().as_micros() as u64;
 
         // ADDRESSED_TO — 0..N edges, batched in one call.
-        let addressed_to_start = std::time::Instant::now();
         if !recipient_nids.is_empty() {
             let edges: Vec<(Vid, Vid, HashMap<String, Value>)> = recipient_nids
                 .iter()
@@ -240,10 +235,8 @@ impl KnowledgeBase {
                 .collect();
             tx.bulk_insert_edges("ADDRESSED_TO", edges).await?;
         }
-        let addressed_to_ms = addressed_to_start.elapsed().as_micros() as u64;
 
         // NEXT — 0 or 1 edge, with gap_ms=0 (Phase 3 will populate).
-        let next_start = std::time::Instant::now();
         if let Some(prev_nid) = prev_msg_nid {
             let mut next_props: HashMap<String, Value> = HashMap::with_capacity(1);
             next_props.insert("gap_ms".into(), Value::Int(0));
@@ -257,28 +250,14 @@ impl KnowledgeBase {
             )
             .await?;
         }
-        let next_ms = next_start.elapsed().as_micros() as u64;
 
-        let t_query = t_start.elapsed().as_micros() as u64;
-        tracing::info!(
-            target: "msg_edges_breakdown",
-            sent_by_us = sent_by_ms,
-            in_session_us = in_session_ms,
-            addressed_to_us = addressed_to_ms,
-            next_us = next_ms,
-            total_us = t_query,
-            recipients = recipient_nids.len() as u64,
-            has_prev = prev_msg_nid.is_some(),
-            "msg_edges breakdown",
-        );
+        // Single emission per call. Per-sub-bulk timers and the
+        // synthetic `parse_us/plan_us = 0` fields added no information
+        // — these are pure bulk writes with no Cypher pipeline.
         tracing::info!(
             target: "query_metrics",
             site = "create_message_edges_in_tx",
-            parse_us = 0u64,
-            plan_us = 0u64,
-            exec_us = t_query,
-            total_us = t_query,
-            cache_hit = false,
+            total_us = t_start.elapsed().as_micros() as u64,
             recipients = recipient_nids.len() as u64,
             has_prev = prev_msg_nid.is_some(),
             bulk = true,

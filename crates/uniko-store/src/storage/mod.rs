@@ -77,6 +77,15 @@ pub use filter::Filter;
 pub struct KnowledgeBase {
     pub(crate) db: Arc<Uni>,
     pub(crate) config: UnikoConfig,
+    /// Serializes the read-modify-write inside
+    /// [`KnowledgeBase::bump_modality_presence`].
+    ///
+    /// uni-db's commit is last-writer-wins on a row, so without an
+    /// in-process lock two concurrent bumps can each read the same
+    /// pre-image and clobber one another. Bumps are rare (once per
+    /// modality on first occurrence), so a single shared mutex is the
+    /// simplest correct choice.
+    pub(crate) kb_stats_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl KnowledgeBase {
@@ -115,6 +124,7 @@ impl KnowledgeBase {
         Self {
             db: Arc::new(db),
             config,
+            kb_stats_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
         .finalize_init()
         .await
@@ -183,6 +193,7 @@ impl KnowledgeBase {
         Self {
             db: Arc::new(db),
             config,
+            kb_stats_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
         .finalize_init()
         .await
@@ -264,6 +275,7 @@ impl KnowledgeBase {
         Self {
             db: Arc::new(db),
             config,
+            kb_stats_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
         .finalize_init()
         .await

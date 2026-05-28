@@ -162,11 +162,7 @@ pub async fn working_memory(
     push_results(&mut items, entities_res?, per_tier_limit);
 
     // ── Step 3: Rank, dedup, and budget-trim ──
-    items.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    crate::sort_by_score_desc(&mut items, |x| x.score);
     items.dedup_by(|a, b| a.node_id == b.node_id);
 
     let max_items = budget / APPROX_TOKENS_PER_ITEM;

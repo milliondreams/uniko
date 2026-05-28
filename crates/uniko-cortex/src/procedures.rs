@@ -427,21 +427,17 @@ fn pick_i64(rec: &HashMap<String, Value>, keys: &[&str]) -> Option<i64> {
 
 /// Build a deterministic procedure_id for the (agent, action_a, action_b) triple.
 ///
-/// Uses truncated SHA-256 (first 64 bits as big-endian hex) rather than
-/// [`std::collections::hash_map::DefaultHasher`] because the latter is not
-/// guaranteed stable across rustc versions, and these IDs are persisted to
-/// the store as `Procedure.procedure_id`.
+/// Wraps [`uniko_store::id::stable_hex64`] with NUL separators between
+/// the three components so distinct triples cannot alias.  IDs are
+/// persisted as `Procedure.procedure_id`.
 fn stable_procedure_id(agent_id: &str, a: &str, b: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(agent_id.as_bytes());
-    h.update(b"\x00");
-    h.update(a.as_bytes());
-    h.update(b"\x00");
-    h.update(b.as_bytes());
-    let digest = h.finalize();
-    let lead = u64::from_be_bytes(digest[..8].try_into().expect("Sha256 yields >= 8 bytes"));
-    format!("proc_{lead:016x}")
+    uniko_store::id::stable_hex64("proc", |h| {
+        h.update(agent_id.as_bytes());
+        h.update(b"\x00");
+        h.update(a.as_bytes());
+        h.update(b"\x00");
+        h.update(b.as_bytes());
+    })
 }
 
 /// MVP precondition matcher: each clause is `key=value`, multiple

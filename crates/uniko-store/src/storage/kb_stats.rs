@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use uni_db::Value;
+use uni_db::{Row, Transaction, Value};
 
 use crate::blob_store::BlobStorage;
 use crate::error::{Result, UnikoError};
@@ -22,6 +22,12 @@ use crate::types::datetime_value;
 
 /// Singleton primary key. Every KB has exactly one stats row.
 const STATS_ID: &str = "singleton";
+
+/// All modality keys persisted in the `modality_presence` map.
+///
+/// Centralised so writers (`bump_modality_presence`) and the initial
+/// `empty_modality_presence` map agree on the key set.
+const MODALITIES: &[&str] = &["image", "audio", "video", "multimodal"];
 
 /// Stub view of the singleton row consumed by recall and ingest paths.
 ///
@@ -132,17 +138,29 @@ impl KnowledgeBase {
             .param("sid", Value::String(STATS_ID.to_string()))
             .fetch_all()
             .await?;
+        Ok(extract_modality_presence(result.rows().first()))
+    }
 
-        let mut p = ModalityPresence::default();
-        if let Some(row) = result.rows().first()
-            && let Some(Value::Map(m)) = row.value("mp")
-        {
-            p.has_image_content = bool_flag(m, "image");
-            p.has_audio_content = bool_flag(m, "audio");
-            p.has_video_content = bool_flag(m, "video");
-            p.has_multimodal_indexed = bool_flag(m, "multimodal");
-        }
-        Ok(p)
+    /// In-transaction read of `modality_presence`.
+    ///
+    /// Variant of [`KnowledgeBase::read_modality_presence`] that reuses
+    /// an open transaction so a read-modify-write sequence (see
+    /// [`KnowledgeBase::bump_modality_presence`]) observes a consistent
+    /// snapshot rather than racing a concurrent writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    async fn read_modality_presence_in_tx(&self, tx: &Transaction) -> Result<ModalityPresence> {
+        let result = tx
+            .query_with(
+                "MATCH (s:KnowledgeBaseStats {stats_id: $sid}) \
+                 RETURN s.modality_presence AS mp",
+            )
+            .param("sid", Value::String(STATS_ID.to_string()))
+            .fetch_all()
+            .await?;
+        Ok(extract_modality_presence(result.rows().first()))
     }
 
     /// Flip a single modality flag to `true` in the singleton's
@@ -158,6 +176,12 @@ impl KnowledgeBase {
     ///
     /// Returns [`UnikoError::Storage`] on database failure.
     pub async fn bump_modality_presence(&self, modality: &str) -> Result<()> {
+        // Serialize concurrent bumps. uni-db's transaction commit is
+        // last-writer-wins on a row, so without this guard two parallel
+        // bumps can each observe the same pre-image and clobber each
+        // other's flip. Bumps are rare (first-occurrence per modality),
+        // so the lock cost is negligible.
+        let _guard = self.kb_stats_lock.lock().await;
         let session = self.db.session();
         let tx = session.tx().await?;
 
@@ -178,12 +202,15 @@ impl KnowledgeBase {
         // Update the single flag by recomputing the map. uni-db's Map
         // properties are atomic — there's no per-key SET, so we round-
         // trip the full map. Cost is negligible (4-entry map).
+        //
+        // The read MUST share `tx` with the write below — otherwise
+        // two concurrent `bump_modality_presence` calls can read the
+        // same pre-image and produce a lost update.
+        let cur = self.read_modality_presence_in_tx(&tx).await?;
         let mut m: HashMap<String, Value> = HashMap::new();
-        for k in ["image", "audio", "video", "multimodal"] {
-            m.insert(k.to_string(), Value::Bool(false));
+        for k in MODALITIES {
+            m.insert((*k).to_string(), Value::Bool(false));
         }
-        // Preserve already-true flags so we don't clobber.
-        let cur = self.read_modality_presence().await?;
         if cur.has_image_content {
             m.insert("image".into(), Value::Bool(true));
         }
@@ -247,12 +274,30 @@ fn encode_blob_storage(bs: &BlobStorage) -> Value {
 
 fn empty_modality_presence() -> Value {
     let mut m: HashMap<String, Value> = HashMap::new();
-    for k in ["image", "audio", "video", "multimodal"] {
-        m.insert(k.to_string(), Value::Bool(false));
+    for k in MODALITIES {
+        m.insert((*k).to_string(), Value::Bool(false));
     }
     Value::Map(m)
 }
 
 fn bool_flag(m: &HashMap<String, Value>, key: &str) -> bool {
     matches!(m.get(key), Some(Value::Bool(true)))
+}
+
+/// Convert an optional `:KnowledgeBaseStats` row into a
+/// [`ModalityPresence`].
+///
+/// Returns [`ModalityPresence::default`] (all-false) when the row is
+/// missing or its `mp` column is not a map.
+fn extract_modality_presence(row: Option<&Row>) -> ModalityPresence {
+    let mut p = ModalityPresence::default();
+    if let Some(row) = row
+        && let Some(Value::Map(m)) = row.value("mp")
+    {
+        p.has_image_content = bool_flag(m, "image");
+        p.has_audio_content = bool_flag(m, "audio");
+        p.has_video_content = bool_flag(m, "video");
+        p.has_multimodal_indexed = bool_flag(m, "multimodal");
+    }
+    p
 }

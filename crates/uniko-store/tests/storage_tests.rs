@@ -516,3 +516,65 @@ async fn test_batch_create_nodes_and_edges() {
 
     kb.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn test_bump_modality_presence_concurrent_no_lost_update() {
+    // Regression: `bump_modality_presence` used to read the current
+    // map via a fresh session outside its own transaction, so two
+    // concurrent bumps could race and clobber each other. Both flips
+    // must persist after the dust settles.
+    let kb = test_kb().await;
+    kb.init_kb_stats().await.unwrap();
+
+    let kb_a = kb.clone();
+    let kb_b = kb.clone();
+    let a = tokio::spawn(async move { kb_a.bump_modality_presence("image").await });
+    let b = tokio::spawn(async move { kb_b.bump_modality_presence("audio").await });
+    a.await.unwrap().unwrap();
+    b.await.unwrap().unwrap();
+
+    let presence = kb.read_modality_presence().await.unwrap();
+    assert!(
+        presence.has_image_content,
+        "image flag was lost: {presence:?}"
+    );
+    assert!(
+        presence.has_audio_content,
+        "audio flag was lost: {presence:?}"
+    );
+
+    kb.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_batch_create_edges_fast_rejects_invalid_property_name() {
+    // Regression: the fast/bulk path used to silently discard the
+    // result of `validate_property_name`, letting invalid keys reach
+    // uni-db's `bulk_insert_edges`. It must now surface a Schema error.
+    let kb = test_kb().await;
+
+    let mut props_a = HashMap::new();
+    props_a.insert("artifact_id".into(), Value::String("art-bad".into()));
+    props_a.insert("kind".into(), Value::String("file".into()));
+    let art_id = kb.create_node("Artifact", &props_a).await.unwrap();
+
+    let mut props_c = HashMap::new();
+    props_c.insert("chunk_id".into(), Value::String("cx-bad".into()));
+    props_c.insert("text".into(), Value::String("c".into()));
+    let chunk_id = kb.create_node("Chunk", &props_c).await.unwrap();
+
+    let mut bad_edge_props = HashMap::new();
+    bad_edge_props.insert("".into(), Value::Int(1));
+    let edge_specs = vec![(art_id, chunk_id, bad_edge_props)];
+
+    let err = kb
+        .batch_create_edges_fast("HAS_CHUNK", Some("Artifact"), Some("Chunk"), &edge_specs)
+        .await
+        .expect_err("empty property name must be rejected");
+    assert!(
+        matches!(err, uniko_store::UnikoError::Schema(_)),
+        "expected Schema error, got {err:?}"
+    );
+
+    kb.shutdown().await.unwrap();
+}
