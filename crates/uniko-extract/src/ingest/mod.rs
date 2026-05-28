@@ -25,7 +25,7 @@ pub use pdf::{
 use async_trait::async_trait;
 
 use uniko_pipes::step::PipelineContext;
-use uniko_pipes::types::{IngestMessage, StepErrorPolicy, StepOutcome};
+use uniko_pipes::types::{IngestMessage, StepOutcome};
 use uniko_store::UnikoError;
 
 /// Pipeline step that ingests messages and artifacts into the graph.
@@ -92,11 +92,6 @@ impl uniko_pipes::Step for IngestStep {
                 reason: format!("unknown ingest type: {other}"),
             }),
         }
-    }
-
-    fn error_policy(&self) -> StepErrorPolicy {
-        // Ingest failure is critical — dead-letter for later retry.
-        StepErrorPolicy::DeadLetter
     }
 }
 

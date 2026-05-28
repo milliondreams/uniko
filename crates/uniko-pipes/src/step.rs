@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use crate::circuit_breaker::CircuitBreaker;
-use crate::types::{StepErrorPolicy, StepOutcome};
+use crate::types::StepOutcome;
 
 /// A single processing step in a pipeline.
 ///
@@ -42,9 +42,6 @@ pub trait Step: Send + Sync {
     /// failures, prefer returning [`StepOutcome::Failed`] with the
     /// appropriate policy instead.
     async fn execute(&self, ctx: &mut PipelineContext) -> Result<StepOutcome, UnikoError>;
-
-    /// How to handle a failure from this step.
-    fn error_policy(&self) -> StepErrorPolicy;
 }
 
 /// Mutable context passed through the step chain for a single item.

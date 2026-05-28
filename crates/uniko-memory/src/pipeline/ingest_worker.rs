@@ -11,7 +11,7 @@ use uniko_pipes::dead_letter::DeadLetterQueue;
 use uniko_pipes::health::HealthTracker;
 use uniko_pipes::metrics;
 use uniko_pipes::step::{PipelineContext, Step};
-use uniko_pipes::types::{ConsolidationTask, IngestTask, ItemResult, StepErrorPolicy, StepOutcome};
+use uniko_pipes::types::{IngestTask, ItemResult, StepErrorPolicy, StepOutcome};
 use uniko_store::KnowledgeBase;
 
 /// Long-running ingest worker receiving tasks via a bounded channel.
@@ -24,11 +24,6 @@ pub(crate) struct IngestWorker {
     llm_breaker: Arc<CircuitBreaker>,
     dlq: Arc<DeadLetterQueue>,
     health: Arc<Mutex<HealthTracker>>,
-    #[expect(
-        dead_code,
-        reason = "used when P3 notifies consolidation of new observations"
-    )]
-    consolidation_tx: mpsc::Sender<ConsolidationTask>,
     dlq_max_retries: u32,
 }
 
@@ -46,7 +41,6 @@ impl IngestWorker {
         llm_breaker: Arc<CircuitBreaker>,
         dlq: Arc<DeadLetterQueue>,
         health: Arc<Mutex<HealthTracker>>,
-        consolidation_tx: mpsc::Sender<ConsolidationTask>,
         dlq_max_retries: u32,
     ) -> Self {
         Self {
@@ -58,7 +52,6 @@ impl IngestWorker {
             llm_breaker,
             dlq,
             health,
-            consolidation_tx,
             dlq_max_retries,
         }
     }
@@ -198,11 +191,13 @@ pub(crate) async fn run_step_chain(
                 }
             }
             Err(e) => {
-                let policy = step.error_policy();
+                // Transport-level failure (Step::execute returned Err).
+                // No StepOutcome to consult — default to DeadLetter so the
+                // item is preserved for inspection / retry.
                 if handle_failure(
                     step.name(),
                     &e.to_string(),
-                    policy,
+                    StepErrorPolicy::DeadLetter,
                     ctx,
                     dlq,
                     dlq_max_retries,

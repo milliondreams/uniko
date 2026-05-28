@@ -9,7 +9,7 @@ use chrono::Utc;
 use uniko_pipes::config::PipelineConfig;
 use uniko_pipes::step::{PipelineContext, Step};
 use uniko_pipes::types::{
-    ConsolidationTask, IngestMessage, IngestTask, StepErrorPolicy, StepOutcome,
+    ConsolidationTask, IngestMessage, IngestTask, StepOutcome,
 };
 use uniko_store::config::UnikoConfig;
 use uniko_store::{KnowledgeBase, UnikoError};
@@ -44,10 +44,6 @@ impl Step for MockStep {
 
     async fn execute(&self, _ctx: &mut PipelineContext) -> Result<StepOutcome, UnikoError> {
         Ok(self.outcome.clone())
-    }
-
-    fn error_policy(&self) -> StepErrorPolicy {
-        StepErrorPolicy::Skip
     }
 }
 

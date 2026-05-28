@@ -95,7 +95,6 @@ impl PipelineSystem {
             llm_breaker.clone(),
             dlq.clone(),
             ingest_health.clone(),
-            consolidation_tx.clone(),
             config.dead_letter_max_retries,
         );
         let ingest_handle = tokio::spawn(ingest_worker.run());
@@ -103,7 +102,6 @@ impl PipelineSystem {
         // Spawn consolidation worker.
         let consolidation_worker = ConsolidationWorker::new(
             consolidation_rx,
-            config.consolidation_concurrency,
             shutdown.consolidation_token(),
             kb,
             consolidation_health.clone(),

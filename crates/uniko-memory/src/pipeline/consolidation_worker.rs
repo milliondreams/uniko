@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use uniko_cortex::procedures::{LifecycleConfig, promote_procedures_once};
@@ -19,11 +19,6 @@ use uniko_store::KnowledgeBase;
 /// counters and multi-trigger consolidation logic.
 pub(crate) struct ConsolidationWorker {
     rx: mpsc::Receiver<ConsolidationTask>,
-    #[expect(
-        dead_code,
-        reason = "concurrency limiting not yet wired to cycle execution"
-    )]
-    semaphore: Arc<Semaphore>,
     cancel: CancellationToken,
     kb: Arc<KnowledgeBase>,
     health: Arc<Mutex<HealthTracker>>,
@@ -55,7 +50,6 @@ pub(crate) struct ConsolidationWorker {
 impl ConsolidationWorker {
     pub(crate) fn new(
         rx: mpsc::Receiver<ConsolidationTask>,
-        concurrency: usize,
         cancel: CancellationToken,
         kb: Arc<KnowledgeBase>,
         health: Arc<Mutex<HealthTracker>>,
@@ -63,7 +57,6 @@ impl ConsolidationWorker {
     ) -> Self {
         Self {
             rx,
-            semaphore: Arc::new(Semaphore::new(concurrency)),
             cancel,
             kb,
             health,
