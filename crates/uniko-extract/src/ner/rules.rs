@@ -4,7 +4,7 @@
 //! URLs, emails, dates, measurements, preferences, proper nouns, and
 //! quoted strings.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -22,32 +22,28 @@ struct Patterns {
     proper_noun: Regex,
 }
 
-static PATTERNS: OnceLock<Patterns> = OnceLock::new();
-
-fn patterns() -> &'static Patterns {
-    PATTERNS.get_or_init(|| Patterns {
-        url: Regex::new(r"https?://[^\s<>\[\]()]+").unwrap(),
-        email: Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").unwrap(),
-        date_iso: Regex::new(
-            r"\b\d{4}[-/]\d{2}[-/]\d{2}(?:T\d{2}:\d{2}(?::\d{2})?(?:Z|[+\-]\d{2}:?\d{2})?)?\b",
-        )
-        .unwrap(),
-        date_informal: Regex::new(
-            r"(?i)\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?,?\s*\d{4}\b",
-        )
-        .unwrap(),
-        measurement: Regex::new(
-            r"\b\d+(?:\.\d+)?\s*(?:kg|g|mg|lb|oz|km|m|cm|mm|mi|ft|in|MB|GB|TB|KB|ms|s|min|hrs?|%|px)\b",
-        )
-        .unwrap(),
-        preference: Regex::new(
-            r"(?i)\bI\s+(?:prefer|like|love|hate|dislike|enjoy)\s+(.{2,40}?)(?:[.,;!?\n]|$)",
-        )
-        .unwrap(),
-        quoted: Regex::new(r#""([^"]{2,60})""#).unwrap(),
-        proper_noun: Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b").unwrap(),
-    })
-}
+static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| Patterns {
+    url: Regex::new(r"https?://[^\s<>\[\]()]+").unwrap(),
+    email: Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").unwrap(),
+    date_iso: Regex::new(
+        r"\b\d{4}[-/]\d{2}[-/]\d{2}(?:T\d{2}:\d{2}(?::\d{2})?(?:Z|[+\-]\d{2}:?\d{2})?)?\b",
+    )
+    .unwrap(),
+    date_informal: Regex::new(
+        r"(?i)\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?,?\s*\d{4}\b",
+    )
+    .unwrap(),
+    measurement: Regex::new(
+        r"\b\d+(?:\.\d+)?\s*(?:kg|g|mg|lb|oz|km|m|cm|mm|mi|ft|in|MB|GB|TB|KB|ms|s|min|hrs?|%|px)\b",
+    )
+    .unwrap(),
+    preference: Regex::new(
+        r"(?i)\bI\s+(?:prefer|like|love|hate|dislike|enjoy)\s+(.{2,40}?)(?:[.,;!?\n]|$)",
+    )
+    .unwrap(),
+    quoted: Regex::new(r#""([^"]{2,60})""#).unwrap(),
+    proper_noun: Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b").unwrap(),
+});
 
 /// Extract entities from text using rule-based regex patterns.
 ///
@@ -57,7 +53,7 @@ pub fn extract_entities_rule_based(text: &str) -> Vec<RawEntity> {
         return Vec::new();
     }
 
-    let p = patterns();
+    let p = &*PATTERNS;
     let mut entities = Vec::new();
 
     // URLs

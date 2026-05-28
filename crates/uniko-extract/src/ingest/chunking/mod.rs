@@ -103,7 +103,10 @@ pub fn count_tokens(text: &str) -> usize {
 }
 
 /// Select the appropriate chunker for a content type and optional language.
-pub fn select_chunker(content_type: &str, language: Option<&str>) -> Box<dyn Chunker> {
+pub fn select_chunker(
+    content_type: &str,
+    #[cfg_attr(not(feature = "code-parse"), allow(unused_variables))] language: Option<&str>,
+) -> Box<dyn Chunker> {
     match content_type {
         "code" => {
             #[cfg(feature = "code-parse")]

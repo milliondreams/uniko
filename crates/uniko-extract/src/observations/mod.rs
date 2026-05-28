@@ -48,7 +48,10 @@ fn load_observation_rules_from_path(
     if let Some(path) = cfg_path {
         let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let map = EXTERNAL.get_or_init(|| Mutex::new(HashMap::new()));
-        let mut guard = map.lock().expect("observation rules cache poisoned");
+        // Recover from a poisoned lock: the cache only holds
+        // path → &'static Rules pointers, so a panic during prior
+        // insert can't have left it in an inconsistent shape.
+        let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(r) = guard.get(&key) {
             return r;
         }
@@ -228,7 +231,9 @@ pub async fn prepare_observations(
     };
     let sender_ms = step_start.elapsed().as_millis();
 
-    #[allow(unused_variables)]
+    // `sender_name` is consumed only inside the `onnx` feature branch
+    // below; suppress the unused warning on builds that exclude it.
+    #[cfg_attr(not(feature = "onnx"), allow(unused_variables))]
     let sender_name = sender_ref.as_ref().map(|(_, name)| name.as_str());
 
     // 1. CLS gate (only when no per-sentence NLP results — those

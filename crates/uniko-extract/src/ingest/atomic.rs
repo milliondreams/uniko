@@ -278,8 +278,12 @@ async fn extract_entities_and_nlp(
     }
 
     // 3. ONNX NER + per-sentence NLP cascade.
-    #[allow(unused_assignments)]
+    // `nlp_ms` is rebound inside the `onnx` block below; without the
+    // feature it stays at 0. `mut` is only required on `onnx` builds.
+    #[cfg(feature = "onnx")]
     let mut nlp_ms: u128 = 0;
+    #[cfg(not(feature = "onnx"))]
+    let nlp_ms: u128 = 0;
     #[cfg(feature = "onnx")]
     let nlp_results = {
         let nlp_start = std::time::Instant::now();
