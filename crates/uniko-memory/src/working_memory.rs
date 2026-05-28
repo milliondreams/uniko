@@ -343,7 +343,7 @@ async fn fetch_session_items(
         };
         let content: String = row.get("content").unwrap_or_default();
         // 1.0 for the newest, decaying linearly toward 0.4 for the oldest.
-        let recency = 1.0 - 0.6 * (idx as f64 / n);
+        let recency = ordinal_recency(idx, n);
         items.push(RecallItem {
             node_id: nid,
             node_type: labels::SESSION.to_string(),
@@ -383,7 +383,7 @@ async fn fetch_message_items(
             continue;
         };
         let content: String = row.get("content").unwrap_or_default();
-        let recency = 1.0 - 0.6 * (idx as f64 / n);
+        let recency = ordinal_recency(idx, n);
         items.push(RecallItem {
             node_id: nid,
             node_type: labels::MESSAGE.to_string(),
@@ -473,7 +473,7 @@ async fn fetch_entity_items(
         let content: String = row.get("content").unwrap_or_default();
         // Rank by frequency ordinal: highest-freq entity gets full
         // weight, tapering off to 0.4 at the bottom of the list.
-        let salience = 1.0 - 0.6 * (idx as f64 / n);
+        let salience = ordinal_recency(idx, n);
         items.push(RecallItem {
             node_id: nid,
             node_type: labels::ENTITY.to_string(),
@@ -483,6 +483,14 @@ async fn fetch_entity_items(
         });
     }
     Ok(items)
+}
+
+/// Linear ordinal-recency boost in `[0.4, 1.0]`: newest row scores 1.0,
+/// last row scores 0.4. Shared by the three time-ordered fetchers
+/// (sessions, messages, entities) — keeps their relative ranking
+/// identical when the underlying list lengths differ.
+fn ordinal_recency(idx: usize, n: f64) -> f64 {
+    1.0 - 0.6 * (idx as f64 / n)
 }
 
 /// Truncate a per-tier result list to the configured limit before

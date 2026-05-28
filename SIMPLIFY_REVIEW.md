@@ -75,6 +75,11 @@ returned concrete simplification opportunities with `file:line` citations.
 
 ## uniko-bench
 
+**Status (2026-05-28 tier-2 sweep):** the high-leverage LME → `bench_config.rs` port has already landed (`build_catalog_specs` replaces `build_llm_catalog`, LME `Cli` is 8 invocation flags). This pass addressed `main.rs` + `longmemeval_main.rs` boilerplate and `report.rs` accumulator shape:
+
+- `lib.rs`: added `shutdown_kb(Arc<KB>, tag)` and `ensure_bench_agent(&kb, tag)` helpers. `main.rs` shutdown ladder (L511-523) and Participant block (L342-359) collapse to one call each; `longmemeval_main.rs` Participant block (L304-319) reuses the same helper.
+- `report.rs`: `#[derive(Default)] Accum` replaces the 18-field `Accum::new()`; `Accum::default()` at call sites; the `by_category` and `by_sample` entries use `.or_default()`. Eight of nine `avg_*` helpers collapse to one-liners via a shared `mean(sum, count)` helper. `avg_judge` keeps its `Option<f64>` shape.
+
 **Crate summary.** `uniko-bench` (~10.2 kLOC across 39 .rs files) hosts the LoCoMo + LongMemEval harnesses plus microbenches, examples, and standalone uni-db bug repros. The biggest wins are (a) collapsing the legacy `build_llm_catalog` flag surface in `lib.rs` that has been superseded by `bench_config.rs`, (b) deduping the four KB-counts probe binaries into one parameterised tool, (c) shedding the no-judge-only `llm_judge` wrapper plus `aggregate` / `write_json` zero-pricing trampolines kept "for compat" with no real callers, and (d) dropping the unused `_breaker` / `_cancel` and never-populated atomic counters in `longmemeval/ingest.rs`. The harness binaries (`main.rs`, `longmemeval_main.rs`) share substantial post-ingest-sweep + Participant-creation + checkpoint-write boilerplate that `lib.rs::run_post_ingest_sweep` already factors out for one but not the other.
 
 ### `src/lib.rs`
@@ -238,6 +243,29 @@ returned concrete simplification opportunities with `file:line` citations.
 ---
 
 ## uniko-extract
+
+**Status (2026-05-28 follow-up):** the large concentrated wins from this section have all landed since 2026-05-27 — stubs deleted, legacy `EntityExtractionStep`/`ObservationExtractionStep`/`ingest_message` removed, and the six `extract_f32_*` tensor extractors collapsed (commits `8cc7e0e`, `7c6802b`, `9638012`). The residual smaller items addressed in the follow-up pass:
+
+- `ingest/mod.rs`: collapsed twin `deserialize_message` + `deserialize_artifact` into a generic `deserialize_payload<T>`.
+- `ingest/chunking/structured.rs`: merged `format_header_row` + `format_data_row` into one `format_row(with_separator: bool)`.
+- `ingest/chunking/text.rs::split_paragraphs`: dropped the O(n²) `content[offset..].find(trimmed)` rescan; offsets now advance with the split.
+- `ingest/pdf/mod.rs`: collapsed the two by-hash / by-artifact_id dedup early-returns into one loop.
+- `ingest/pdf/chunker.rs`: factored the duplicate `ChunkData{…}` literal into a `page_chunk(…)` helper.
+- `observations/temporal.rs`: shared `parse_n_unit_with_re` core for `parse_n_ago_with_gran` + `parse_in_n_with_gran`; rewrote `parse_in_month` as one regex scan replacing 24 `contains(format!("in {name}"))` sweeps.
+- `ner/onnx.rs`: extracted the inline whitespace title-casing into a `title_case` helper.
+
+Deliberately deferred (with reason):
+- "Move large literal tables (SVO verbs, irregular verbs, HTML named entities, REJECT_OBJECT_PHRASES) to assets" — those tables are already behind `LazyLock`/`OnceLock` and their inline form keeps related code colocated; moving to assets adds loader machinery without a behavior win.
+- `nlp/decode.rs::resolve_subject` vs `rules_engine::resolver::resolve_subject` — verified to operate on different inputs (decode-side dep tree vs. rules-engine match), not redundant.
+- `nlp/mod.rs::analyze` single-row `pop().unwrap_or_default()` — current shape mirrors the batched API and the cost is one Vec pop; net negative to specialise.
+- `ingest/session_chunk.rs` collapse of `chunk_session` + `chunk_session_observations` — structurally similar but the aggregation semantics differ (transcript concatenation vs. obs aggregation); refactor would coupling-cost more than it saves.
+- `ingest/atomic.rs::AtomicTimings` and `extract_entities_and_nlp` shape — telemetry is load-bearing for the bench (`project_entity_update_cypher_hot`); not touching without bench coverage.
+- `observations/rules_engine/matcher.rs::collect_children` closure allocations — the `Box<dyn Fn>` indirection is the dispatch mechanism for collector strategies; flattening removes the polymorphism rather than the cost.
+- `observations/rules_engine/matcher.rs` `modifier`/`modifiers` (and `object`/`obj`/`target`/`complement`, `time`/`temporal`/`when`) capture-name normalization — this requires editing the YAML rule files; out of scope for a code-only pass.
+- `temporal.rs L137-237` literal anchor if-ladder → table — would alter parse order semantics; not a free refactor.
+- `ingest/chunking/code.rs` vs `ner/code.rs` shared `parser_for_language` / kind→type tables — cross-module API design needed (different return types); deferred pending a coherent shared `tree_sitter` helper module.
+
+Original review below for reference.
 
 **Crate summary.** The crate is well-organised but carries substantial scaffolding for unbuilt futures (LLM stubs, contradiction detection, action-output overflow), legacy code paths that duplicate the atomic ingest flow, and a fan-out of near-identical tensor-shape extractors in `nlp/mod.rs`. The biggest concentrated wins are in `nlp/mod.rs` (six near-duplicate `extract_f32_*` helpers), the parallel legacy/atomic ingest paths (`message.rs::ingest_message` vs `atomic.rs::ingest_message_atomic`), and the legacy `ObservationExtractionStep`/`EntityExtractionStep` that exist only because the legacy `IngestStep` is still wired. Many module-level docstrings restate "what the code does" rather than "why."
 
@@ -424,6 +452,12 @@ Either remove `uniko-mcp` from the workspace (and re-add when Phase 4 lands), or
 
 ## uniko-memory
 
+**Status (2026-05-28 tier-2 sweep):** the high-leverage `finalize_bundle()` extraction is already shipped (recall/mod.rs L359-380, 4 call sites). This pass made a small targeted improvement in `working_memory.rs`:
+
+- Extracted `ordinal_recency(idx, n)` helper for the `1.0 - 0.6 * (idx as f64 / n)` boost shared by `fetch_session_items`, `fetch_message_items`, and `fetch_entity_items`.
+
+Deliberately not done: the plan called for a `fetch_goal_scoped` generic + `goal_scope_clause` const, but on close reading of the 6 fetchers the per-fetcher row-mapping variation (scoring by ordinal index vs. by row field, differing tier weights) made the generic helper cost more in argument plumbing than it saved. `SESSION_IN_GOAL_SCOPE` (already a const at L57) covers the only meaningful clause-duplication case.
+
 **Crate summary.** ~8.4k LoC source, ~3.5k LoC tests. Largest hotspots: `recall/mod.rs` (1866 LoC) and `consolidation.rs` (1150) — both repeat the same sort/truncate/budget-cap dance multiple times. Strongest recurring smell: the `sort_by(|a,b| b.score.partial_cmp(&a.score).unwrap_or(Equal))` idiom appears ~12× across recall + working-memory; same with "iterate items, sum tokens, break on budget". Two dead-code `#[expect(dead_code)]` fields still wired through constructors (`IngestWorker.consolidation_tx`, `ConsolidationWorker.semaphore`) — scaffolding for not-yet-implemented features. Two near-identical `json_to_value` helpers (episode.rs, action.rs). `RecallCounters::bump_video` + `video_channel_active` exist but no recall code actually fires the video channel.
 
 ### `src/pipeline/mod.rs`
@@ -522,6 +556,11 @@ Either remove `uniko-mcp` from the workspace (and re-add when Phase 4 lands), or
 
 ## uniko-pipes
 
+**Status (2026-05-28 tier-2 sweep):** the `retry.rs` deletion + `Step::error_policy` collapse are already shipped. This pass cleared two more dead-surface items:
+
+- `metrics.rs`: deleted 5 zero-caller emit helpers (`emit_ingest_queue_depth`, `emit_llm_call`, `emit_llm_error`, `emit_circuit_state`, `emit_deadletter_pending`) and their `describe_*` registrations. `register_pipeline_metrics` is now tighter; `gauge` import dropped; the `CircuitState` import in metrics.rs went with `emit_circuit_state`.
+- `config.rs`: deleted dead `PipelineConfig.consolidation_concurrency` field (zero workspace readers).
+
 **Crate summary.** Small, mostly-thin pipeline scaffolding crate (~1.5k LOC across 9 modules). Most code is reasonable, but several public items are unused outside the crate (DLQ retry/list/clear surface, `RetryPolicy` + `retry_with_policy`, `MetricsSnapshot`, parts of `ShutdownCoordinator`, several `PipelineConfig` knobs). Biggest wins: deleting the unused DLQ query/retry methods and the entire `retry` module, plus dropping `item_token`/`Default` plumbing that no caller exercises.
 
 ### `Cargo.toml`
@@ -604,6 +643,12 @@ Either remove `uniko-mcp` from the workspace (and re-add when Phase 4 lands), or
 ---
 
 ## uniko-store
+
+**Status (2026-05-28 tier-2 sweep):** the high-leverage `map_err(Storage)` collapse, KB-constructor merge, and serde default helpers are already shipped. This pass:
+
+- `operations/facts.rs::count_recent_invalidations`: dropped the unused `_now: DateTime<Utc>` parameter; updated the single caller in `mark_unstable_drift_check` to drop the corresponding `now` arg.
+- `operations/facts.rs::write_consolidation_cycle`: folded the 5 sequential `if !x.is_empty() { batch_create_edges_fast(...) }` blocks (L550-594) into a single loop over a `[(edge_type, target_label, &targets); 5]` array.
+- `locy/rules.rs::execute_rule` + `locy/assume.rs::AssumeBuilder::run`: collapsed the 5-line `if let Some(rs) = result.rows() { for r in rs { records.push(r.clone()); } }` boilerplate to one-liner `result.rows().map(|rs| rs.to_vec()).unwrap_or_default()`. `abduce.rs` left alone — its row mapping extracts `vid` into a tuple and is structurally distinct.
 
 **Crate summary.** ~13.7K LOC, 36 src files + 21 test files. The crate is generally well-structured but suffers from three pervasive patterns: (1) `.map_err(|e| UnikoError::Storage(e.to_string()))` boilerplate appearing ~100+ times that could collapse to `?` via the `From` impl; (2) heavy per-call tracing/instrumentation in hot paths (notably `nodes.rs::create_node_in_tx` and `edges.rs::create_message_edges_in_tx`); (3) several near-duplicate helpers (`build_inline_props` vs `build_set_clause`, vector/fulltext search bodies, multi-type/multi-field search). A few dead-code items, dormant scaffolding, and over-eager presets in `config.rs` round out the list.
 
