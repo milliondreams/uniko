@@ -77,6 +77,12 @@ pub async fn refine_triples(
     Ok(results.into_iter().flatten().collect())
 }
 
+/// Refine a single observation's triple via LLM.
+///
+/// Returns `None` when the LLM call fails, when the model emits `SKIP`,
+/// or when the response is malformed.  LLM transport errors are logged
+/// at `WARN` before being dropped so the batch can continue with the
+/// original SRL/DEP triple for that row.
 async fn extract_one(
     kb: &KnowledgeBase,
     llm_alias: &str,
@@ -95,12 +101,23 @@ async fn extract_one(
         ..Default::default()
     };
 
-    let result = kb
+    let result = match kb
         .db()
         .xervo()
         .generate(llm_alias, &messages, options)
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                target: "llm_triples",
+                error = %e,
+                node_id = input.node_id,
+                "LLM triple extraction failed; keeping original triple"
+            );
+            return None;
+        }
+    };
 
     parse_triple(&result.text, input.node_id)
 }

@@ -30,6 +30,8 @@ use uniko_store::schema::{edges, labels};
 use uniko_store::types::datetime_value;
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
+use crate::value_convert::json_to_value;
+
 /// Inputs for [`record_action`].
 ///
 /// Most fields are optional; only `action_type` and the agent id (via
@@ -311,17 +313,25 @@ async fn link_action_entities(kb: &KnowledgeBase, action_node: NodeId, text: &st
 }
 
 /// Stable `entity_id` derived from `(name, entity_type)`.
-#[cfg(feature = "onnx")]
 ///
 /// Two Actions mentioning the same entity converge on the same
 /// Entity node.  Matches the convention used by the P2 ingest path
 /// when it deduplicates entities across messages.
+///
+/// Uses truncated SHA-256 (first 64 bits as big-endian hex) rather than
+/// [`std::collections::hash_map::DefaultHasher`] because the latter is not
+/// guaranteed stable across rustc versions, and these IDs are persisted to
+/// the store as `Entity.entity_id`.
+#[cfg(feature = "onnx")]
 fn stable_entity_id(name: &str, entity_type: NerEntityType) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    name.to_lowercase().hash(&mut h);
-    entity_type_str(entity_type).hash(&mut h);
-    format!("ent_{:016x}", h.finish())
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(name.to_lowercase().as_bytes());
+    h.update(b"\x00");
+    h.update(entity_type_str(entity_type).as_bytes());
+    let digest = h.finalize();
+    let lead = u64::from_be_bytes(digest[..8].try_into().expect("Sha256 yields >= 8 bytes"));
+    format!("ent_{lead:016x}")
 }
 
 /// Stable string representation of [`NerEntityType`] for storage on
@@ -446,40 +456,16 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// Compact 64-bit hash used as a content fingerprint on overflowed
 /// Artifacts.  Not cryptographic — collision-resistance is "good
 /// enough" to dedupe identical outputs from the same action.
-fn simple_hash(s: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    format!("{:016x}", h.finish())
-}
-
-/// Convert a `serde_json::Value` tree to `uni_db::Value`.
 ///
-/// Mirrors the helper in `episode.rs`; copied rather than re-exported
-/// to keep that module free of public conversion helpers.
-fn json_to_value(json: &JsonValue) -> Value {
-    match json {
-        JsonValue::Null => Value::Null,
-        JsonValue::Bool(b) => Value::Bool(*b),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::String(n.to_string())
-            }
-        }
-        JsonValue::String(s) => Value::String(s.clone()),
-        JsonValue::Array(arr) => Value::List(arr.iter().map(json_to_value).collect()),
-        JsonValue::Object(obj) => {
-            let mut m = HashMap::new();
-            for (k, v) in obj {
-                m.insert(k.clone(), json_to_value(v));
-            }
-            Value::Map(m)
-        }
-    }
+/// Uses truncated SHA-256 (first 64 bits as big-endian hex) rather than
+/// [`std::collections::hash_map::DefaultHasher`] because the latter is not
+/// guaranteed stable across rustc versions, and this fingerprint is
+/// persisted to the store as `Artifact.hash`.
+fn simple_hash(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(s.as_bytes());
+    let lead = u64::from_be_bytes(digest[..8].try_into().expect("Sha256 yields >= 8 bytes"));
+    format!("{lead:016x}")
 }
 
 #[cfg(test)]

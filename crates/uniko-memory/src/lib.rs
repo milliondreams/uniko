@@ -24,6 +24,7 @@ pub mod policy;
 pub mod query;
 pub mod recall;
 pub mod rules;
+pub(crate) mod value_convert;
 pub mod working_memory;
 
 #[doc(inline)]

@@ -22,6 +22,8 @@ use uniko_store::schema::{edges, labels};
 use uniko_store::types::datetime_value;
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
+use crate::value_convert::json_to_value;
+
 /// Inputs for [`record_episode`].
 ///
 /// All fields except `action_type` and `outcome` are optional.  Callers
@@ -225,87 +227,3 @@ async fn find_previous_episode(
     Ok(Some((vid, ts)))
 }
 
-/// Convert a `serde_json::Value` tree to `uni_db::Value`.
-///
-/// Maps are preserved as `Value::Map`; arrays as `Value::List`.  Null
-/// becomes `Value::Null` per uni-db conventions.
-fn json_to_value(json: &JsonValue) -> Value {
-    match json {
-        JsonValue::Null => Value::Null,
-        JsonValue::Bool(b) => Value::Bool(*b),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::String(n.to_string())
-            }
-        }
-        JsonValue::String(s) => Value::String(s.clone()),
-        JsonValue::Array(arr) => Value::List(arr.iter().map(json_to_value).collect()),
-        JsonValue::Object(obj) => {
-            let mut m = HashMap::new();
-            for (k, v) in obj {
-                m.insert(k.clone(), json_to_value(v));
-            }
-            Value::Map(m)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn json_to_value_handles_scalars() {
-        assert!(matches!(json_to_value(&JsonValue::Null), Value::Null));
-        assert!(matches!(json_to_value(&json!(true)), Value::Bool(true)));
-        assert!(matches!(json_to_value(&json!(42)), Value::Int(42)));
-        let f = json_to_value(&json!(2.5));
-        match f {
-            Value::Float(x) => assert!((x - 2.5).abs() < 1e-9),
-            other => panic!("expected Float, got {other:?}"),
-        }
-        let s = json_to_value(&json!("hi"));
-        match s {
-            Value::String(x) => assert_eq!(x, "hi"),
-            other => panic!("expected String, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn json_to_value_recurses_into_objects() {
-        let v = json_to_value(&json!({
-            "topic": "career plans",
-            "nested": {"depth": 1}
-        }));
-        match v {
-            Value::Map(m) => {
-                match m.get("topic") {
-                    Some(Value::String(s)) => assert_eq!(s, "career plans"),
-                    other => panic!("expected String, got {other:?}"),
-                }
-                match m.get("nested") {
-                    Some(Value::Map(_)) => {}
-                    other => panic!("expected nested Map, got {other:?}"),
-                }
-            }
-            other => panic!("expected Map, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn json_to_value_handles_arrays() {
-        let v = json_to_value(&json!([1, 2, 3]));
-        match v {
-            Value::List(items) => {
-                assert_eq!(items.len(), 3);
-                assert!(matches!(items[0], Value::Int(1)));
-            }
-            other => panic!("expected List, got {other:?}"),
-        }
-    }
-}
