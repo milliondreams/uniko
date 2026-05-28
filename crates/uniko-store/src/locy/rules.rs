@@ -46,14 +46,8 @@ impl KnowledgeBase {
             .await
             .map_err(|e| UnikoError::Locy(e.to_string()))?;
 
-        // rows() returns Option<&Vec<HashMap>>; flatten to records.
-        let mut records = Vec::new();
-        if let Some(command_results) = result.rows() {
-            for record in command_results {
-                records.push(record.clone());
-            }
-        }
-        Ok(records)
+        // rows() returns Option<&Vec<Record>>; clone-collect or empty.
+        Ok(result.rows().map(|rs| rs.to_vec()).unwrap_or_default())
     }
 
     /// List all registered Locy rules.

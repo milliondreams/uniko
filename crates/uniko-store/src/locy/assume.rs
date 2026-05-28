@@ -77,13 +77,7 @@ impl<'a> AssumeBuilder<'a> {
             .await
             .map_err(|e| UnikoError::Locy(e.to_string()))?;
 
-        let mut records = Vec::new();
-        if let Some(command_results) = result.rows() {
-            for record in command_results {
-                records.push(record.clone());
-            }
-        }
-        Ok(records)
+        Ok(result.rows().map(|rs| rs.to_vec()).unwrap_or_default())
     }
 }
 

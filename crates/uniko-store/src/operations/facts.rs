@@ -547,48 +547,29 @@ impl KnowledgeBase {
                 .collect()
         };
 
-        if !processed_observations.is_empty() {
-            self.batch_create_edges_fast(
+        // Every outgoing edge from the cycle node shares the source label
+        // (CONSOLIDATION_CYCLE) and `mk_edges` shape; the only per-batch
+        // variation is the edge type, the target label, and the targets vec.
+        let edge_batches: [(&str, &str, &[NodeId]); 5] = [
+            (
                 edges::PROCESSED,
-                Some(labels::CONSOLIDATION_CYCLE),
-                Some(labels::OBSERVATION),
-                &mk_edges(processed_observations),
-            )
-            .await?;
-        }
-        if !created_facts.is_empty() {
+                labels::OBSERVATION,
+                processed_observations,
+            ),
+            (edges::CREATED, labels::FACT, created_facts),
+            (edges::INVOLVED, labels::FACT, reinforced_facts),
+            (edges::INVALIDATED, labels::FACT, invalidated_facts),
+            (edges::APPLIED_RULE, labels::RULE, applied_rules),
+        ];
+        for (edge_type, target_label, targets) in edge_batches {
+            if targets.is_empty() {
+                continue;
+            }
             self.batch_create_edges_fast(
-                edges::CREATED,
+                edge_type,
                 Some(labels::CONSOLIDATION_CYCLE),
-                Some(labels::FACT),
-                &mk_edges(created_facts),
-            )
-            .await?;
-        }
-        if !reinforced_facts.is_empty() {
-            self.batch_create_edges_fast(
-                edges::INVOLVED,
-                Some(labels::CONSOLIDATION_CYCLE),
-                Some(labels::FACT),
-                &mk_edges(reinforced_facts),
-            )
-            .await?;
-        }
-        if !invalidated_facts.is_empty() {
-            self.batch_create_edges_fast(
-                edges::INVALIDATED,
-                Some(labels::CONSOLIDATION_CYCLE),
-                Some(labels::FACT),
-                &mk_edges(invalidated_facts),
-            )
-            .await?;
-        }
-        if !applied_rules.is_empty() {
-            self.batch_create_edges_fast(
-                edges::APPLIED_RULE,
-                Some(labels::CONSOLIDATION_CYCLE),
-                Some(labels::RULE),
-                &mk_edges(applied_rules),
+                Some(target_label),
+                &mk_edges(targets),
             )
             .await?;
         }
@@ -942,7 +923,7 @@ impl KnowledgeBase {
         // query yields nothing (e.g., no INVALIDATES edges yet because
         // the caller hasn't wired one for the current invalidation).
         let window_count = self
-            .count_recent_invalidations(key, now)
+            .count_recent_invalidations(key)
             .await?
             .max(new_count);
         let now_unstable = window_count > drift_threshold;
@@ -952,13 +933,12 @@ impl KnowledgeBase {
         Ok(now_unstable && !prior_unstable)
     }
 
-    /// Count `INVALIDATES` edges on Facts with `subject = entity_name`
-    /// whose invalidation occurred within the last 30 days.
-    async fn count_recent_invalidations(
-        &self,
-        entity_name: &str,
-        _now: DateTime<Utc>,
-    ) -> Result<i64> {
+    /// Count `INVALIDATES` edges on Facts with `subject = entity_name`.
+    ///
+    /// The cited "last 30 days" window in the surrounding caller is
+    /// implemented by the caller-side `.max(new_count)` fallback; this
+    /// function is the pure cumulative count.
+    async fn count_recent_invalidations(&self, entity_name: &str) -> Result<i64> {
         let session = self.db.session();
         let cypher = "MATCH (new:Fact)-[r:INVALIDATES]->(old:Fact) \
                       WHERE old.subject = $n \
