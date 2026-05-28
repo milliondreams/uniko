@@ -357,22 +357,28 @@ async fn upsert_topic(
 ///
 /// LLM failures (network, empty response, missing alias) fall back
 /// silently — topic names are cosmetic and must not block a sweep.
+#[cfg(feature = "llm")]
 async fn resolve_topic_name(
     kb: &KnowledgeBase,
     members: &[EntityRow],
     llm_alias: Option<&str>,
 ) -> String {
-    #[cfg(feature = "llm")]
     if let Some(alias) = llm_alias
         && let Some(name) = community_name_llm(kb, members, alias).await
     {
         return name;
     }
-    #[cfg(not(feature = "llm"))]
-    {
-        let _ = kb;
-        let _ = llm_alias;
-    }
+    community_name(members)
+}
+
+/// Resolve a topic name when the `llm` feature is disabled: always
+/// returns the deterministic [`community_name`] fallback.
+#[cfg(not(feature = "llm"))]
+async fn resolve_topic_name(
+    _kb: &KnowledgeBase,
+    members: &[EntityRow],
+    _llm_alias: Option<&str>,
+) -> String {
     community_name(members)
 }
 
