@@ -207,7 +207,7 @@ async fn test_ingest_and_recall() {
     eprintln!("  intent_vec len: {}", intent_vec.len());
     if !intent_vec.is_empty() {
         match kb
-            .vector_search(&intent_vec, "Message", "embedding", 5, None)
+            .vector_search(&intent_vec, "Message", "embedding", 5)
             .await
         {
             Ok(results) => {

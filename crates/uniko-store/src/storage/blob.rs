@@ -55,7 +55,7 @@ impl KnowledgeBase {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         let digest = hasher.finalize();
-        hex_encode(&digest)
+        hex::encode(digest)
     }
 
     /// Run the configured blob backend's `put` for `bytes` keyed by
@@ -190,19 +190,6 @@ impl KnowledgeBase {
     }
 }
 
-/// Lowercase hex encoding without depending on the `hex` crate at this
-/// site. Equivalent to `hex::encode` but kept inline because we already
-/// have a direct dep elsewhere and want zero new imports here.
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,8 +203,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_hex_encode() {
-        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
-    }
 }

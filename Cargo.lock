@@ -11129,6 +11129,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "uni-db",
@@ -11179,6 +11180,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-util",
  "tracing",
@@ -11222,6 +11224,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "hex",
  "object_store 0.11.2",
  "proptest",
  "serde",

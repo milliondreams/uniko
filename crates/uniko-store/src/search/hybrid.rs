@@ -12,16 +12,48 @@ use crate::types::NodeId;
 /// Higher values decrease the influence of rank position.
 pub const RRF_K: f64 = 60.0;
 
+/// Hybrid-search tier classification.  Each tier carries a fixed
+/// weight that scales fused RRF scores so semantically richer nodes
+/// (Facts) outrank low-signal provenance hits (raw Messages) at
+/// equivalent retrieval rank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// Facts — distilled semantic knowledge.
+    Semantic,
+    /// Procedures — promoted procedural patterns.
+    Procedural,
+    /// Episodes, Observations — first-person experiential records.
+    Episodic,
+    /// Chunks, Artifacts — knowledge-base content.
+    Kb,
+    /// Actions, Messages — raw provenance.
+    Provenance,
+}
+
+impl Tier {
+    /// Weight multiplier applied to a hit's fused score.
+    #[must_use]
+    pub const fn weight(self) -> f64 {
+        match self {
+            Self::Semantic => 1.0,
+            Self::Procedural => 0.9,
+            Self::Episodic => 0.7,
+            Self::Kb => 0.5,
+            Self::Provenance => 0.4,
+        }
+    }
+}
+
 /// Tier weight for Semantic nodes (Facts).
-pub const TIER_WEIGHT_SEMANTIC: f64 = 1.0;
+pub const TIER_WEIGHT_SEMANTIC: f64 = Tier::Semantic.weight();
 /// Tier weight for Procedural nodes (Procedures).
-pub const TIER_WEIGHT_PROCEDURAL: f64 = 0.9;
+pub const TIER_WEIGHT_PROCEDURAL: f64 = Tier::Procedural.weight();
 /// Tier weight for Episodic nodes (Episodes, Observations).
-pub const TIER_WEIGHT_EPISODIC: f64 = 0.7;
+pub const TIER_WEIGHT_EPISODIC: f64 = Tier::Episodic.weight();
 /// Tier weight for KnowledgeBase nodes (Chunks, Artifacts).
-pub const TIER_WEIGHT_KB: f64 = 0.5;
+pub const TIER_WEIGHT_KB: f64 = Tier::Kb.weight();
 /// Tier weight for Provenance nodes (Actions, Messages).
-pub const TIER_WEIGHT_PROVENANCE: f64 = 0.4;
+pub const TIER_WEIGHT_PROVENANCE: f64 = Tier::Provenance.weight();
 
 /// A search target specifying what to search and how to weight results.
 #[derive(Debug, Clone)]
@@ -55,7 +87,7 @@ impl KnowledgeBase {
         let fetch_k = top_k * 2;
 
         let vector_hits = self
-            .vector_search(embedding, node_type, "embedding", fetch_k, None)
+            .vector_search(embedding, node_type, "embedding", fetch_k)
             .await?;
 
         // Determine the best fulltext field for this node type.
@@ -102,7 +134,6 @@ impl KnowledgeBase {
                     &target.node_type,
                     &target.embedding_field,
                     fetch_k,
-                    None,
                 )
                 .await?;
             all_lists.push(vector_hits);

@@ -4,8 +4,7 @@
 //! optional property filtering.
 
 use crate::error::{Result, UnikoError};
-use crate::search::SearchResult;
-use crate::storage::filter::Filter;
+use crate::search::{SearchResult, rows_to_search_hits};
 use crate::storage::{KnowledgeBase, validate_label};
 
 impl KnowledgeBase {
@@ -26,7 +25,6 @@ impl KnowledgeBase {
         node_type: &str,
         field: &str,
         top_k: usize,
-        _filter: Option<&Filter>,
     ) -> Result<Vec<SearchResult>> {
         if embedding.is_empty() {
             return Ok(Vec::new());
@@ -49,26 +47,7 @@ impl KnowledgeBase {
             .await
             .map_err(|e| UnikoError::Search(e.to_string()))?;
 
-        let mut hits = Vec::with_capacity(result.len());
-        for row in result.rows() {
-            let node: uni_db::Node = row
-                .get("node")
-                .map_err(|e| UnikoError::Search(e.to_string()))?;
-            let score: f64 = row
-                .get("score")
-                .map_err(|e| UnikoError::Search(e.to_string()))?;
-            let vid: i64 = row
-                .get("vid")
-                .map_err(|e| UnikoError::Search(e.to_string()))?;
-            let label = node.labels.into_iter().next().unwrap_or_default();
-            hits.push(SearchResult {
-                node_id: vid,
-                node_type: label,
-                score,
-                properties: node.properties,
-            });
-        }
-        Ok(hits)
+        rows_to_search_hits(&result)
     }
 
     /// Search across multiple node types simultaneously.
@@ -92,7 +71,7 @@ impl KnowledgeBase {
         let mut all_hits = Vec::new();
         for &(node_type, field) in targets {
             let hits = self
-                .vector_search(embedding, node_type, field, top_k, None)
+                .vector_search(embedding, node_type, field, top_k)
                 .await?;
             all_hits.extend(hits);
         }

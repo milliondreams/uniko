@@ -21,7 +21,7 @@ async fn test_kb() -> KnowledgeBase {
 async fn test_vector_search_empty_embedding() {
     let kb = test_kb().await;
     let results = kb
-        .vector_search(&[], "Message", "embedding", 10, None)
+        .vector_search(&[], "Message", "embedding", 10)
         .await
         .unwrap();
     assert!(
@@ -60,7 +60,7 @@ async fn test_vector_search_basic() {
 
     // The API should not error even if the index hasn't been built yet.
     let results = kb
-        .vector_search(&query_vec, "Message", "embedding", 3, None)
+        .vector_search(&query_vec, "Message", "embedding", 3)
         .await
         .unwrap();
 
