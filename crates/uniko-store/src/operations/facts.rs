@@ -301,22 +301,15 @@ impl KnowledgeBase {
             .query_with(match_cypher)
             .param("fids", Value::List(fid_list))
             .fetch_all()
-            .await
-            .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         // Build fact_id → (nid, prior_count, prior_btic) map.
         let mut existing: HashMap<String, (NodeId, i64, Option<Btic>)> =
             HashMap::with_capacity(match_result.rows().len());
         for row in match_result.rows() {
-            let fid: String = row
-                .get("fact_id")
-                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
-            let nid: i64 = row
-                .get("nid")
-                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
-            let prior_count: i64 = row
-                .get("observation_count")
-                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            let fid: String = row.get("fact_id")?;
+            let nid: i64 = row.get("nid")?;
+            let prior_count: i64 = row.get("observation_count")?;
             // valid_at comes back as the BTIC Temporal Value; extract
             // structurally rather than going through a string roundtrip.
             // `Row::value` returns the raw `&Value`; `Row::get<T>` would
@@ -431,18 +424,12 @@ impl KnowledgeBase {
                 SET n.observation_count = u.new_count, \
                     n.confidence = u.new_confidence, \
                     n.valid_at = COALESCE(u.valid_at, n.valid_at)";
-            let tx = session
-                .tx()
-                .await
-                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+            let tx = session.tx().await?;
             tx.execute_with(update_cypher)
                 .param("updates", Value::List(updates_list))
                 .run()
-                .await
-                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
-            tx.commit()
-                .await
-                .map_err(|e| crate::error::UnikoError::Storage(e.to_string()))?;
+                .await?;
+            tx.commit().await?;
         }
 
         // Fan resolved (fact_id → node_id) back out across every
@@ -671,8 +658,7 @@ impl KnowledgeBase {
             .param("s", subject)
             .param("p", predicate)
             .fetch_all()
-            .await
-            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let current = current_object.unwrap_or("").to_ascii_lowercase();
         let mut out = Vec::new();
@@ -766,8 +752,7 @@ impl KnowledgeBase {
             .query_with(cypher)
             .param("keys", Value::List(list))
             .fetch_all()
-            .await
-            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         type FactRow = (NodeId, Btic, String);
         let mut out: HashMap<(String, String), Vec<FactRow>> = HashMap::new();
@@ -890,7 +875,7 @@ impl KnowledgeBase {
             .param("n", key)
             .fetch_all()
             .await
-            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
+            ?;
 
         let (nid, prior_count, prior_unstable) = match lookup.rows().first() {
             Some(row) => {
@@ -922,10 +907,7 @@ impl KnowledgeBase {
         // entity.  Falls back to the cumulative count when the windowed
         // query yields nothing (e.g., no INVALIDATES edges yet because
         // the caller hasn't wired one for the current invalidation).
-        let window_count = self
-            .count_recent_invalidations(key)
-            .await?
-            .max(new_count);
+        let window_count = self.count_recent_invalidations(key).await?.max(new_count);
         let now_unstable = window_count > drift_threshold;
         updates.insert("unstable".into(), Value::Bool(now_unstable));
         self.update_node(nid, &updates).await?;

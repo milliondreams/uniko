@@ -825,7 +825,10 @@ mod tests {
         assert_eq!(parsed.rrf_k, expected.rrf_k);
         assert_eq!(parsed.phase2_mmr_lambda, expected.phase2_mmr_lambda);
         assert_eq!(parsed.nlp_srl_enabled, expected.nlp_srl_enabled);
-        assert_eq!(parsed.phase2_temporal_enabled, expected.phase2_temporal_enabled);
+        assert_eq!(
+            parsed.phase2_temporal_enabled,
+            expected.phase2_temporal_enabled
+        );
         assert_eq!(parsed.phase2_graph_enabled, expected.phase2_graph_enabled);
         assert_eq!(parsed.phase2_graph_damping, expected.phase2_graph_damping);
         assert_eq!(parsed.phase2_graph_max_iter, expected.phase2_graph_max_iter);

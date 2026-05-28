@@ -2,64 +2,22 @@
 //!
 //! Run: cargo nextest run -p uniko-bench --test graph_debug --nocapture --run-ignored all
 
-use std::sync::Arc;
+mod common;
 
-use uni_db::ModelAliasSpec;
+use common::{load_kb, load_kb_no_schema};
 use uniko_store::KnowledgeBase;
-use uniko_store::config::UnikoConfig;
-
-async fn load_kb() -> Arc<KnowledgeBase> {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let ws = manifest_dir.parent().unwrap().parent().unwrap();
-    std::env::set_current_dir(ws).expect("cd");
-    let config = UnikoConfig {
-        catalog_path: Some(ws.join("config/catalog.json")),
-        schema_path: Some(ws.join("config/schema.json")),
-        ..Default::default()
-    };
-    Arc::new(
-        KnowledgeBase::open_with_xervo(
-            ws.join("data/kb/conv-30"),
-            config,
-            Vec::<ModelAliasSpec>::new(),
-        )
-        .await
-        .expect("open KB"),
-    )
-}
-
-/// Same KB but WITHOUT schema.json override — uses register_schema() instead.
-async fn load_kb_no_schema_json() -> Arc<KnowledgeBase> {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let ws = manifest_dir.parent().unwrap().parent().unwrap();
-    std::env::set_current_dir(ws).expect("cd");
-    let config = UnikoConfig {
-        catalog_path: Some(ws.join("config/catalog.json")),
-        // No schema_path — will use register_schema() programmatically
-        ..Default::default()
-    };
-    Arc::new(
-        KnowledgeBase::open_with_xervo(
-            ws.join("data/kb/conv-30"),
-            config,
-            Vec::<ModelAliasSpec>::new(),
-        )
-        .await
-        .expect("open KB without schema.json"),
-    )
-}
 
 #[tokio::test]
 #[ignore]
 async fn diagnose_session_nodes() {
     eprintln!("\n=== With schema.json ===");
-    let kb = load_kb().await;
+    let kb = load_kb("data/kb/conv-30").await;
     run_diagnostics(&kb).await;
 
     drop(kb);
 
     eprintln!("\n=== Without schema.json (programmatic schema) ===");
-    let kb2 = load_kb_no_schema_json().await;
+    let kb2 = load_kb_no_schema("data/kb/conv-30").await;
     run_diagnostics(&kb2).await;
 }
 

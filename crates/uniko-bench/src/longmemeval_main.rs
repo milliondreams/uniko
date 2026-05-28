@@ -267,39 +267,14 @@ async fn main() -> Result<()> {
                     }
                 };
 
-                // P4 Consolidation: see longmemeval_main rationale.
-                let cycle_start = Instant::now();
+                // P4 Consolidation + P5 procedure sweep + P6 topic sweep.
                 let triple_source = match bench.models.extract_triples.as_ref() {
                     Some(alias) => uniko_memory::consolidation::TripleSource::Llm {
                         alias: alias.alias.clone(),
                     },
                     None => uniko_memory::consolidation::TripleSource::SrlDep,
                 };
-                match uniko_memory::consolidation::run_cycle_with(
-                    &kb,
-                    &item.question_id,
-                    Some(10_000),
-                    &triple_source,
-                )
-                .await
-                {
-                    Ok(stats) => tracing::info!(
-                        question_id = %item.question_id,
-                        processed = stats.observations_processed,
-                        facts_created = stats.facts_created,
-                        facts_reinforced = stats.facts_reinforced,
-                        duration_ms = cycle_start.elapsed().as_millis(),
-                        "consolidation cycle complete",
-                    ),
-                    Err(e) => tracing::warn!(
-                        question_id = %item.question_id,
-                        error = %e,
-                        "consolidation cycle failed (continuing without Facts)",
-                    ),
-                }
-
-                // P5 + P6 — explicit cortex sweep per question.
-                run_cortex_sweep(&kb, &item.question_id).await;
+                uniko_bench::run_post_ingest_sweep(&kb, &item.question_id, &triple_source).await;
 
                 let bench_agent_id =
                     uniko_bench::ensure_bench_agent(&kb, &item.question_id).await;
@@ -431,41 +406,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Run P5 (procedure promotion) + P6 (topic detection) for one bench
-/// item.  Failures are logged and dropped.
-async fn run_cortex_sweep(kb: &Arc<uniko_store::KnowledgeBase>, question_id: &str) {
-    use std::time::Instant;
-    let proc_start = Instant::now();
-    match uniko_cortex::promote_procedures_once(
-        kb,
-        question_id,
-        uniko_cortex::LifecycleConfig::default(),
-    )
-    .await
-    {
-        Ok(r) => tracing::info!(
-            question_id,
-            created = r.created,
-            reinforced = r.reinforced,
-            promoted = r.promoted,
-            duration_ms = proc_start.elapsed().as_millis(),
-            "P5 procedure sweep complete",
-        ),
-        Err(e) => tracing::warn!(question_id, error = %e, "P5 procedure sweep failed"),
-    }
-
-    let topic_start = Instant::now();
-    match uniko_cortex::detect_topics_once(kb, uniko_cortex::TopicConfig::default()).await {
-        Ok(r) => tracing::info!(
-            question_id,
-            created = r.created,
-            updated = r.updated,
-            entities_assigned = r.entities_assigned,
-            duration_ms = topic_start.elapsed().as_millis(),
-            "P6 topic sweep complete",
-        ),
-        Err(e) => tracing::warn!(question_id, error = %e, "P6 topic sweep failed"),
-    }
 }

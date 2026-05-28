@@ -13,10 +13,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use futures::stream::{self, StreamExt};
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
 use uniko_extract::ingest::atomic::ingest_message_atomic;
-use uniko_pipes::circuit_breaker::CircuitBreaker;
 use uniko_pipes::types::IngestMessage;
 use uniko_store::config::UnikoConfig;
 use uniko_store::{KnowledgeBase, ModelRuntime};
@@ -64,14 +62,6 @@ pub async fn ingest_item(
         .context("creating KB")?;
     let kb = Arc::new(kb);
 
-    // CircuitBreaker + CancellationToken were used by the legacy
-    // step-based ingest path; the atomic path doesn't currently take
-    // either. Kept here unused so the wrapping types stay imported for
-    // when we plumb cancellation/breaker through the atomic
-    // orchestrator.
-    let _breaker = Arc::new(CircuitBreaker::new(5, 60_000));
-    let _cancel = CancellationToken::new();
-
     // Shared mutable state.  evidence_map lives behind a Mutex because
     // sessions complete out of order; the merged map is consistent at
     // the end regardless.
@@ -94,21 +84,11 @@ pub async fn ingest_item(
     let t_obs_ms = Arc::new(AtomicU64::new(0));
     let t_session_chunk_ms = Arc::new(AtomicU64::new(0));
     let t_obs_chunk_ms = Arc::new(AtomicU64::new(0));
-    let t_ctx_setup_ms = Arc::new(AtomicU64::new(0));
 
-    // Sub-counters for legacy log-line compatibility. The atomic
-    // path doesn't surface ner-rules / ner-onnx / obs-sender /
-    // obs-entity-ref splits, so those stay at zero; ner-nlp,
-    // ner-upsert, obs-dep-extract, obs-graph-nodes get populated
-    // from AtomicTimings inside the worker loop.
-    let t_ner_rules_ms = Arc::new(AtomicU64::new(0));
+    // Sub-counters populated from AtomicTimings inside the worker loop.
     let t_ner_nlp_ms = Arc::new(AtomicU64::new(0));
-    let t_ner_onnx_total_ms = Arc::new(AtomicU64::new(0));
     let t_ner_upsert_ms = Arc::new(AtomicU64::new(0));
-
-    let t_obs_sender_ms = Arc::new(AtomicU64::new(0));
     let t_obs_extract_ms = Arc::new(AtomicU64::new(0));
-    let t_obs_entity_ref_ms = Arc::new(AtomicU64::new(0));
     let t_obs_nodes_ms = Arc::new(AtomicU64::new(0));
 
     // Build the per-session work items up front so the stream owns
@@ -139,7 +119,6 @@ pub async fn ingest_item(
             let t_obs_ms = t_obs_ms.clone();
             let t_session_chunk_ms = t_session_chunk_ms.clone();
             let t_obs_chunk_ms = t_obs_chunk_ms.clone();
-            let t_ctx_setup_ms = t_ctx_setup_ms.clone();
             let t_ner_nlp_ms = t_ner_nlp_ms.clone();
             let t_ner_upsert_ms = t_ner_upsert_ms.clone();
             let t_obs_extract_ms = t_obs_extract_ms.clone();
@@ -196,12 +175,7 @@ pub async fn ingest_item(
                     total_observations
                         .fetch_add(result.extracted_observations.len(), Ordering::Relaxed);
 
-                    // Map atomic timings → bench counters. The legacy
-                    // counters are preserved so post-hoc log analysis
-                    // tools keep working; sub-counters that don't map
-                    // 1:1 to atomic phases (ner_rules_ms,
-                    // ner_onnx_total_ms, obs_sender_ms, obs_entity_ref_ms)
-                    // stay at zero.
+                    // Map atomic timings → bench counters.
                     let t = &result.timings;
                     let ingest_msg_chunk =
                         (t.setup_ms + t.create_ms + t.edges_ms + t.chunk_ms + t.commit_ms) as u64;
@@ -219,7 +193,6 @@ pub async fn ingest_item(
                     t_ner_upsert_ms.fetch_add(t.apply_entity_ms as u64, Ordering::Relaxed);
                     t_obs_extract_ms.fetch_add(t.extract_ms as u64, Ordering::Relaxed);
                     t_obs_nodes_ms.fetch_add(t.apply_obs_ms as u64, Ordering::Relaxed);
-                    t_ctx_setup_ms.fetch_add(0, Ordering::Relaxed);
 
                     if turn.has_answer {
                         local_evidence_msg_ids.push(message_id.clone());
@@ -291,8 +264,7 @@ pub async fn ingest_item(
         + load(&t_entity_ms)
         + load(&t_obs_ms)
         + load(&t_session_chunk_ms)
-        + load(&t_obs_chunk_ms)
-        + load(&t_ctx_setup_ms);
+        + load(&t_obs_chunk_ms);
     tracing::info!(
         question_id = %item.question_id,
         sessions = item.haystack_sessions.len(),
@@ -311,23 +283,18 @@ pub async fn ingest_item(
         obs_ms = load(&t_obs_ms),
         session_chunk_ms = load(&t_session_chunk_ms),
         obs_chunk_ms = load(&t_obs_chunk_ms),
-        ctx_setup_ms = load(&t_ctx_setup_ms),
         total_ms = total_ms,
         "ingestion timing breakdown (cpu-time across workers)",
     );
     tracing::info!(
         question_id = %item.question_id,
-        ner_rules_ms = load(&t_ner_rules_ms),
         ner_nlp_ms = load(&t_ner_nlp_ms),
-        ner_onnx_total_ms = load(&t_ner_onnx_total_ms),
         ner_upsert_ms = load(&t_ner_upsert_ms),
         "entity extraction sub-timings",
     );
     tracing::info!(
         question_id = %item.question_id,
-        obs_sender_ms = load(&t_obs_sender_ms),
         obs_dep_extract_ms = load(&t_obs_extract_ms),
-        obs_entity_ref_ms = load(&t_obs_entity_ref_ms),
         obs_graph_nodes_ms = load(&t_obs_nodes_ms),
         "observation extraction sub-timings",
     );

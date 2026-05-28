@@ -2,34 +2,15 @@
 //!
 //! Run: cargo nextest run -p uniko-bench --test recall_debug --nocapture --run-ignored all
 
-use std::sync::Arc;
+mod common;
 
-use uni_db::ModelAliasSpec;
+use common::load_kb;
 use uniko_memory::recall::{RecallConfig, recall};
-use uniko_store::KnowledgeBase;
-use uniko_store::config::UnikoConfig;
-
-async fn load_kb() -> Arc<KnowledgeBase> {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
-    std::env::set_current_dir(workspace_root).expect("cd to workspace root");
-
-    let config = UnikoConfig {
-        catalog_path: Some(workspace_root.join("config/catalog.json")),
-        schema_path: Some(workspace_root.join("config/schema.json")),
-        ..Default::default()
-    };
-    let kb_path = workspace_root.join("data/kb/conv-30");
-    let kb = KnowledgeBase::open_with_xervo(&kb_path, config, Vec::<ModelAliasSpec>::new())
-        .await
-        .expect("open KB");
-    Arc::new(kb)
-}
 
 #[tokio::test]
 #[ignore]
 async fn debug_chunk_existence() {
-    let kb = load_kb().await;
+    let kb = load_kb("data/kb/conv-30").await;
     let session = kb.db().session();
 
     // Count nodes by type

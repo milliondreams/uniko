@@ -3,39 +3,14 @@
 //! Run: cargo nextest run -p uniko-bench --test review_observations \
 //!   --no-capture --run-ignored all
 
-use std::sync::Arc;
-use uni_db::ModelAliasSpec;
-use uniko_store::KnowledgeBase;
-use uniko_store::config::UnikoConfig;
+mod common;
 
-async fn load_kb() -> Arc<KnowledgeBase> {
-    let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    std::env::set_current_dir(&ws).expect("cd");
-    let config = UnikoConfig {
-        catalog_path: Some(ws.join("config/catalog.json")),
-        schema_path: Some(ws.join("config/schema.json")),
-        ..Default::default()
-    };
-    Arc::new(
-        KnowledgeBase::open_with_xervo(
-            ws.join("data/kb_llm/conv-26"),
-            config,
-            Vec::<ModelAliasSpec>::new(),
-        )
-        .await
-        .expect("open KB"),
-    )
-}
+use common::load_kb;
 
 #[tokio::test]
 #[ignore]
 async fn review_observations_quality() {
-    let kb = load_kb().await;
+    let kb = load_kb("data/kb_llm/conv-26").await;
     let session = kb.db().session();
 
     // 1. Counts.
