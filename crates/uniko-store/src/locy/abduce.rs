@@ -74,6 +74,10 @@ impl KnowledgeBase {
         }
 
         let count = supporting.len();
+        // TODO(abduction): MVP placeholder. Real abduction will score
+        // the explanation by support strength + rule-derived priors;
+        // until that lands we surface the unconditional 1.0 so the
+        // shape matches what downstream callers eventually want.
         Ok(AbductionResult {
             supporting_facts: supporting,
             confidence: 1.0,

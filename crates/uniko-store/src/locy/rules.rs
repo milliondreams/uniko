@@ -76,7 +76,9 @@ impl KnowledgeBase {
 
     /// Explain how a rule derives its results.
     ///
-    /// Returns the raw explanation text.
+    /// Returns the raw `Debug` rendering of the runtime stats — this
+    /// is a developer-facing diagnostic, not a user-stable string, so
+    /// the shape may change when the stats struct evolves.
     ///
     /// # Errors
     ///
@@ -89,7 +91,6 @@ impl KnowledgeBase {
             .await
             .map_err(|e| UnikoError::Locy(e.to_string()))?;
 
-        // Return the debug representation of stats as explanation.
         Ok(format!("{:?}", result.stats()))
     }
 }
