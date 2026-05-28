@@ -4,7 +4,7 @@ Read-only review produced by 10 parallel `code-simplifier` subagents, one per
 crate. Each agent surveyed its full crate (src/ + tests/ + examples/) and
 returned concrete simplification opportunities with `file:line` citations.
 
-**Date:** 2026-05-27
+**Date:** 2026-05-27 (original); cross-crate roll-up refreshed 2026-05-28
 **Mode:** report-only (no edits)
 **Scope per agent:** entire crate
 
@@ -28,28 +28,40 @@ returned concrete simplification opportunities with `file:line` citations.
 
 ## Cross-crate roll-up
 
-**Stub crates (recommend deletion or workspace removal until their phase lands):**
-- `uniko-fs` — 3 TODO modules + 3 unused deps; zero code
-- `uniko-mcp` — 2 TODO modules + 4 unused deps; zero code
-- `uniko-shell` — `todo!()` main + 2 unused deps
-- `uniko-api` — thin facade, only nit is the `pub use uniko_cortex::*;` wildcard
-- `uniko-cortex/src/reasoning.rs` — single TODO line
+**Status (2026-05-28):** essentially every Tier-1 item from the original 2026-05-27 roll-up has shipped — including all three stub crates being removed from the workspace entirely. What remained in the per-crate sections has been actioned across the commit series `8949fd8` → `d2e32eb`. The body of each per-crate section below still reads as originally written; refer to each section's "Status (...)" block for what's landed.
 
-**Dormant scaffolding to delete (real crates):**
-- `uniko-memory`: `IngestWorker.consolidation_tx`, `ConsolidationWorker.semaphore`, video-channel methods on `RecallCounters`
-- `uniko-extract`: `observations/llm.rs`, `observations/contradiction.rs`, `ner/llm.rs`, `ingest/overflow.rs`, embedding-dedup block in `ner/dedup.rs`
-- `uniko-pipes`: entire `retry.rs` module + `rand` dep, most of `dead_letter.rs` (list/retry/clear), `MetricsSnapshot`, several `PipelineConfig` fields
-- `uniko-store`: `vid_to_node_id`/`node_id_to_vid`/`eid_to_edge_id`, `_ensure_default_used_via_kbconfig`, dead `earliest_ms` in `facts.rs`
+**Stub crates — removed from workspace entirely (2026-05-28):**
+- `uniko-fs` — crate deleted
+- `uniko-mcp` — crate deleted
+- `uniko-shell` — crate deleted
+- `uniko-cortex/src/reasoning.rs` — file deleted (`9963d0a`)
 
-**Highest-leverage refactors:**
-- `uniko-store`: ~100+ sites of `.map_err(|e| UnikoError::Storage(e.to_string()))` collapse to `?` via the existing `From` impl
-- `uniko-extract/nlp/mod.rs`: 6 near-identical `extract_f32_*` tensor extractors → 1 generic
-- `uniko-memory/recall/mod.rs`: 4 copies of sort-desc/truncate/token-budget → one `finalize_bundle()` helper (~80 LOC)
-- `uniko-bench`: port LongMemEval to `bench_config.rs` (kills `build_llm_catalog` + ~120 lines of duplicated CLI flags); consolidate the 5 ad-hoc `Arc::try_unwrap(kb).shutdown()` copies and the 5 `load_kb()` test helpers
-- `uniko-extract`: remove the legacy `ingest_message` / `EntityExtractionStep` / `ObservationExtractionStep` paths now that atomic ingest is the supported one
-- `uniko-cortex`: replace `DefaultHasher` in `stable_procedure_id`/`stable_topic_id` (correctness — not stable across rustc versions)
+The retained `uniko-api` crate is unchanged; its only nit was the `pub use uniko_cortex::*;` wildcard, which is a one-line cosmetic call, not deletion-worthy.
+
+**Dormant scaffolding — all shipped:**
+- `uniko-memory`: `IngestWorker.consolidation_tx`, `ConsolidationWorker.semaphore` removed (`c438d7b`); `RecallCounters` video-channel surface removed (`94acfb8`).
+- `uniko-extract`: `observations/llm.rs`, `observations/contradiction.rs`, `ner/llm.rs`, `ingest/overflow.rs` all deleted (`8cc7e0e` and follow-ups); embedding-dedup block in `ner/dedup.rs` removed.
+- `uniko-pipes`: `retry.rs` + `rand` dep removed; dead `DeadLetterQueue` methods (`list_pending`/`increment_retry`/`clear`/`clear_all`) + `DeadLetterInfo` removed (file is now 46 LOC); `MetricsSnapshot` + dead `PipelineConfig` fields removed (`9c49634`, `c438d7b`).
+- `uniko-store`: `vid_to_node_id`/`node_id_to_vid`/`eid_to_edge_id` removed; `_ensure_default_used_via_kbconfig` removed; dead `earliest_ms` in `facts.rs` removed (`1f674f1`).
+
+**Highest-leverage refactors — all shipped:**
+- `uniko-store` `.map_err(|e| UnikoError::Storage(e.to_string()))` sweep — done in `d2e32eb`. Workspace has 23 `UnikoError::Storage(` sites remaining, all in `blob_store/{fs,s3,lance}.rs` and intentionally retained — they add real context (paths, content_id, operation name) via `format!`. Per the existing `impl From<uni_db::UniError> for UnikoError`, no further sites need collapse.
+- `uniko-extract/nlp/mod.rs` 6 `extract_f32_*` extractors → 1 generic (`8cc7e0e`, `7c6802b`, `9638012`).
+- `uniko-memory/recall/mod.rs` `finalize_bundle()` extraction — see memory section status note.
+- `uniko-bench` LongMemEval → `bench_config.rs` port complete. `build_llm_catalog` + `provider_options` no longer exist in `lib.rs`; LME `Cli` is 8 invocation flags; `LmeSettings` lives on `BenchConfig`. `shutdown_kb` + `load_kb` consolidations also done (`2732faf`, `d2e32eb`).
+- `uniko-extract` legacy `ingest_message` / `EntityExtractionStep` / `ObservationExtractionStep` removed.
+- `uniko-cortex` + `uniko-memory::action` `DefaultHasher` → SHA-256 stable IDs (`9963d0a`, `8ce9e95`).
 
 **Note:** The cross-cutting "`// Rust guideline compliant` marker comment" item from the original roll-up has already been actioned (commit `823311a`).
+
+**Remaining backlog (small, per-crate — see sections below for detail):**
+- `uniko-api`: collapse three `pub use uniko_memory::...` blocks; wildcard re-export review.
+- `uniko-cortex`: assorted small items in `procedures.rs`/`topics.rs` (`UpsertOutcome` collapse, dedupe `bucket_by_type`, comment trims, test helpers).
+- `uniko-extract`: smaller cleanups noted in its section's deferred list; most concentrated wins already shipped.
+- `uniko-memory`: ~12 medium-size items (split large recall functions, `Transition` enum for decay, `CortexSchedule` grouping, smaller dedupes); none in the Tier-1 category.
+- `uniko-pipes`: `Step::error_policy` collapse done; remaining is doc-style trimming + `PipelineHealth` relocation question + `Step::should_run` default.
+- `uniko-store`: per-section status note enumerates remaining smaller items (tracing gating, `ConsolidationCycleInput`, `Tier::weight()`, test repro audit, etc.).
+- `uniko-bench`: residuals after the LME port (microbench duplication, examples consolidation, `RETIRED_FLAGS` time-boxing).
 
 ---
 
@@ -74,6 +86,8 @@ returned concrete simplification opportunities with `file:line` citations.
 ---
 
 ## uniko-bench
+
+**Status (2026-05-28 follow-up):** confirmed against current source — `build_llm_catalog` and the legacy `provider_options` no longer exist in `lib.rs`; `longmemeval_main.rs` already reads `BenchConfig::load` → `apply_to_uniko_config` → `build_catalog_specs` and consumes `LmeSettings.{question_concurrency,session_concurrency,token_budget,question_types}`. The body's per-line citations under `lib.rs` L46–177 and `longmemeval_main.rs` L156–242 are historical; verify against current source before acting on any specific bullet. Remaining backlog is mostly microbench duplication, examples consolidation, and `RETIRED_FLAGS` time-boxing.
 
 **Status (2026-05-28 tier-2 sweep):** the high-leverage LME → `bench_config.rs` port has already landed (`build_catalog_specs` replaces `build_llm_catalog`, LME `Cli` is 8 invocation flags). This pass addressed `main.rs` + `longmemeval_main.rs` boilerplate and `report.rs` accumulator shape:
 
@@ -194,6 +208,8 @@ returned concrete simplification opportunities with `file:line` citations.
 ---
 
 ## uniko-cortex
+
+**Status (2026-05-28):** `reasoning.rs` deleted; `ProcedureNodeId` alias removed; `DefaultHasher` replaced with SHA-256 in `stable_*_id` (`9963d0a`, commit msg also notes `Result<Option>` reads + dead-scaffolding drops). Body below predates these edits — audit against current source before acting on any specific line citation.
 
 **Crate summary.** Small crate (~1.5K LoC) with two real modules (`procedures`, `topics`) and one stub. Both are reasonably tight but carry some scaffolding-for-the-future (multi-key fallback decoders, a Locy→Cypher fallback, a thin `UpsertOutcome` wrapper struct), a few comments that restate code, and one piece of dead test scaffolding. `reasoning.rs` and the `ProcedureNodeId` alias are dead. The `llm` feature path in `topics.rs` is the densest area: name-resolution flow has cfg-gate gymnastics that can collapse.
 
@@ -411,6 +427,8 @@ Original review below for reference.
 
 ## uniko-fs
 
+**Status (2026-05-28):** Crate removed from the workspace entirely. The rest of this section is preserved for historical reference only.
+
 **Crate summary.** The entire `uniko-fs` crate is a placeholder: 3 source modules each contain only `// TODO: implementation in Phase 5`, plus a 7-line `lib.rs` re-exporting them. It declares dependencies (`uniko-api`, `tokio`, `tracing`) that are not used. There is no `tests/` directory. The crate itself is dead scaffolding.
 
 ### `crates/uniko-fs/Cargo.toml`
@@ -434,6 +452,8 @@ Either:
 
 ## uniko-mcp
 
+**Status (2026-05-28):** Crate removed from the workspace entirely. The rest of this section is preserved for historical reference only.
+
 **Crate summary.** The entire `uniko-mcp` crate is scaffolding. `src/server.rs` and `src/tools.rs` each contain a single `// TODO: implementation in Phase 4` line, and `src/lib.rs` only re-exports the empty modules. There are no `tests/` and no real code (8 LOC total). Meanwhile `Cargo.toml` declares non-trivial dependencies (`uniko-api`, `tokio`, `serde_json`, `tracing`) that are unused.
 
 ### `crates/uniko-mcp/Cargo.toml`
@@ -451,6 +471,8 @@ Either remove `uniko-mcp` from the workspace (and re-add when Phase 4 lands), or
 ---
 
 ## uniko-memory
+
+**Status (2026-05-28 follow-up):** additional shipped items beyond the tier-2 note below — video-channel surface removed (`94acfb8`); pipeline scaffolding (`IngestWorker.consolidation_tx`, `ConsolidationWorker.semaphore`) removed and `Step::error_policy` collapsed (`c438d7b`); `nl_to_cypher` hand-LRU replaced with `lru` crate + `min_or` helper (`03aea54`); `SESSION_IN_GOAL_SCOPE` const + regex-based `is_safe_read_only` + `clean_response` chain collapse (`bc22fd8`); shared row decoders + `embed_or_warn` helper + `json!` macro for query state (`8d5f153`); recall `from_label` arm collapse + `mmr` single-pass + `intent.rs` embed-error logging (`02c5b86`); SHA-256 stable IDs + dedup `json_to_value` + LLM error logging (`8ce9e95`).
 
 **Status (2026-05-28 tier-2 sweep):** the high-leverage `finalize_bundle()` extraction is already shipped (recall/mod.rs L359-380, 4 call sites). This pass made a small targeted improvement in `working_memory.rs`:
 
@@ -556,6 +578,8 @@ Deliberately not done: the plan called for a `fetch_goal_scoped` generic + `goal
 
 ## uniko-pipes
 
+**Status (2026-05-28 follow-up):** the `dead_letter.rs` dead-method block called out in the body (`list_pending`, `increment_retry`, `clear`, `clear_all`, `DeadLetterInfo`) has also shipped — the file is now 46 LOC. Combined with the tier-2 note below, the remaining body items are doc-style cleanups (`should_run` default, `PipelineHealth` relocation question, `cancel.rs` cleanup of dead `item_token`/`Default`; `is_cancelled` is still used).
+
 **Status (2026-05-28 tier-2 sweep):** the `retry.rs` deletion + `Step::error_policy` collapse are already shipped. This pass cleared two more dead-surface items:
 
 - `metrics.rs`: deleted 5 zero-caller emit helpers (`emit_ingest_queue_depth`, `emit_llm_call`, `emit_llm_error`, `emit_circuit_state`, `emit_deadletter_pending`) and their `describe_*` registrations. `register_pipeline_metrics` is now tighter; `gauge` import dropped; the `CircuitState` import in metrics.rs went with `emit_circuit_state`.
@@ -629,6 +653,8 @@ Deliberately not done: the plan called for a `fetch_goal_scoped` generic + `goal
 
 ## uniko-shell
 
+**Status (2026-05-28):** Crate removed from the workspace entirely. The rest of this section is preserved for historical reference only.
+
 **Crate summary.** Effectively empty — a single `main.rs` containing `todo!("Semantic shell — Phase 5")` and a `Cargo.toml` with two dependencies (`uniko-api`, `tokio`) that are never used. No `src/lib.rs`, no `tests/`, no integration code.
 
 ### `crates/uniko-shell/Cargo.toml`
@@ -643,6 +669,8 @@ Deliberately not done: the plan called for a `fetch_goal_scoped` generic + `goal
 ---
 
 ## uniko-store
+
+**Status (2026-05-28 follow-up):** the body below is largely historical. Confirmed shipped against current source: `map_err(Storage)` sweep (`d2e32eb`; 23 sites remain workspace-wide, all intentional context-adding `format!` calls in `blob_store/{fs,s3,lance}.rs`); KB-constructor collapse (`75d7fa4`); `default_*` serde helpers → `Default` impl (`3cd3c29`); `get_edges`/`get_all_edges` merge + shared search row-walk (`8a4b486`); `hex_encode` + unused `_filter` (`9c626be`); `shortest_path` / `fs_relative_path` error propagation (`8949fd8`); locy `collect_locy_records` helper + `count_recent_invalidations` dead `_now` drop + batch-edge loop (`1f674f1`); dead `vid_to_node_id` family + `_ensure_default_used_via_kbconfig` removed; shared `build_kv_pairs` for inline-props / set-clause (`75d7fa4`).
 
 **Status (2026-05-28 tier-2 sweep):** the high-leverage `map_err(Storage)` collapse, KB-constructor merge, and serde default helpers are already shipped. This pass:
 
