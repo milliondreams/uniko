@@ -19,9 +19,10 @@
 //! Cypher — that's the caller's responsibility, so this module stays
 //! a thin pure-text bridge.
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Mutex, OnceLock};
 
+use lru::LruCache;
 use uni_db::xervo::{GenerationOptions, Message};
 #[cfg(feature = "onnx")]
 use uniko_extract::nlp::NlpPipeline;
@@ -61,69 +62,15 @@ Constraints:
   RETURN 'cannot_answer' AS reason
 "#;
 
-/// LRU cache entry — value plus insertion ordinal for eviction.
-struct CacheEntry {
-    cypher: String,
-    last_used: u64,
-}
-
-/// Process-global cache + monotonic clock.
-struct Cache {
-    entries: HashMap<String, CacheEntry>,
-    clock: u64,
-    capacity: usize,
-}
-
-impl Cache {
-    fn new(capacity: usize) -> Self {
-        Self {
-            entries: HashMap::with_capacity(capacity.min(256)),
-            clock: 0,
-            capacity,
-        }
-    }
-
-    fn get(&mut self, key: &str) -> Option<String> {
-        self.clock = self.clock.wrapping_add(1);
-        let now = self.clock;
-        let entry = self.entries.get_mut(key)?;
-        entry.last_used = now;
-        Some(entry.cypher.clone())
-    }
-
-    fn put(&mut self, key: String, cypher: String) {
-        if self.entries.len() >= self.capacity
-            && let Some(victim_key) = self.find_lru_key()
-        {
-            self.entries.remove(&victim_key);
-        }
-        self.clock = self.clock.wrapping_add(1);
-        self.entries.insert(
-            key,
-            CacheEntry {
-                cypher,
-                last_used: self.clock,
-            },
-        );
-    }
-
-    fn find_lru_key(&self) -> Option<String> {
-        self.entries
-            .iter()
-            .min_by_key(|(_, e)| e.last_used)
-            .map(|(k, _)| k.clone())
-    }
-
-    /// Visible for tests.
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-}
+/// Process-global query → Cypher cache.
+type Cache = LruCache<String, String>;
 
 fn cache_mutex(capacity: usize) -> &'static Mutex<Cache> {
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(Cache::new(capacity)))
+    CACHE.get_or_init(|| {
+        let cap = NonZeroUsize::new(capacity.max(1)).expect("capacity >= 1");
+        Mutex::new(LruCache::new(cap))
+    })
 }
 
 /// Translate a natural-language query into a read-only Cypher query.
@@ -155,6 +102,7 @@ pub async fn translate(
         .lock()
         .expect("nl_to_cypher cache mutex poisoned — bug")
         .get(&key)
+        .cloned()
     {
         return Ok(cached);
     }
@@ -173,6 +121,11 @@ pub async fn translate(
         .expect("nl_to_cypher cache mutex poisoned — bug")
         .put(key, cypher.clone());
     Ok(cypher)
+}
+
+#[cfg(test)]
+fn new_cache(capacity: usize) -> Cache {
+    LruCache::new(NonZeroUsize::new(capacity).expect("capacity >= 1"))
 }
 
 /// Check whether `cypher` is safe to execute as a read-only query.
@@ -540,16 +493,16 @@ mod tests {
 
     #[test]
     fn cache_evicts_lru_when_full() {
-        let mut cache = Cache::new(2);
+        let mut cache = new_cache(2);
         cache.put("a".into(), "Q1".into());
         cache.put("b".into(), "Q2".into());
         // Touch 'a' so 'b' becomes the LRU.
-        let _ = cache.get("a");
+        let _ = cache.get(&"a".to_string());
         cache.put("c".into(), "Q3".into());
         assert_eq!(cache.len(), 2);
-        assert!(cache.get("b").is_none());
-        assert_eq!(cache.get("a").as_deref(), Some("Q1"));
-        assert_eq!(cache.get("c").as_deref(), Some("Q3"));
+        assert!(cache.get(&"b".to_string()).is_none());
+        assert_eq!(cache.get(&"a".to_string()).map(String::as_str), Some("Q1"));
+        assert_eq!(cache.get(&"c".to_string()).map(String::as_str), Some("Q3"));
     }
 
     #[test]

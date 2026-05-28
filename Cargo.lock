@@ -11177,6 +11177,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "lru 0.12.5",
  "regex",
  "serde",
  "serde_json",

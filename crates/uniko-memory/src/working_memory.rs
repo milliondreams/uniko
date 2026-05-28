@@ -111,7 +111,6 @@ pub enum WorkingMemoryCategory {
 ///
 /// Returns [`UnikoError::Storage`] if any of the traversal queries
 /// fail to execute against the underlying store.
-#[allow(clippy::too_many_lines)]
 pub async fn working_memory(
     kb: &KnowledgeBase,
     params: WorkingMemoryParams,

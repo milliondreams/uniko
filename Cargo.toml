@@ -95,6 +95,9 @@ rust-stemmers = "1"
 # Text processing
 regex = "1"
 
+# Caching
+lru = "0.12"
+
 # Hashing
 sha2 = "0.10"
 hex = "0.4"

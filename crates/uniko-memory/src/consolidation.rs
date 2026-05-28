@@ -229,15 +229,9 @@ pub async fn run_cycle_with(
             .entry((obs.subject.clone(), obs.predicate.clone()))
             .or_default();
         entry.contributing.push(obs.node_id);
-        entry.first_observed_at = Some(match entry.first_observed_at {
-            Some(prev) => prev.min(obs.observed_at),
-            None => obs.observed_at,
-        });
+        entry.first_observed_at = Some(min_or(entry.first_observed_at, obs.observed_at));
         if let Some(anchor) = obs.temporal_anchor {
-            entry.first_temporal_anchor = Some(match entry.first_temporal_anchor {
-                Some(prev) => prev.min(anchor),
-                None => anchor,
-            });
+            entry.first_temporal_anchor = Some(min_or(entry.first_temporal_anchor, anchor));
         }
         entry.object_votes.push(ObjectVote {
             text: obs.object.clone(),
@@ -588,6 +582,15 @@ pub async fn run_cycle_with(
         facts_invalidated: invalidated_facts.len(),
         drift_alerts,
     })
+}
+
+/// `min(prev, new)` when `prev` is set, otherwise `new`.  Tiny helper
+/// for the per-group "earliest seen" reductions in `run_cycle`.
+fn min_or<T: Ord>(prev: Option<T>, new: T) -> T {
+    match prev {
+        Some(p) => std::cmp::min(p, new),
+        None => new,
+    }
 }
 
 /// Canonical normalization for clustering keys: trim + lowercase.
