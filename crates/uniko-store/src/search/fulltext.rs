@@ -1,7 +1,7 @@
 //! BM25-ranked fulltext search via uni-db's fulltext indexes.
 
 use crate::error::{Result, UnikoError};
-use crate::search::SearchResult;
+use crate::search::{SearchResult, rows_to_search_hits};
 use crate::storage::{KnowledgeBase, validate_label};
 
 impl KnowledgeBase {
@@ -38,26 +38,7 @@ impl KnowledgeBase {
             .await
             .map_err(|e| UnikoError::Search(e.to_string()))?;
 
-        let mut hits = Vec::with_capacity(result.len());
-        for row in result.rows() {
-            let node: uni_db::Node = row
-                .get("node")
-                .map_err(|e| UnikoError::Search(e.to_string()))?;
-            let score: f64 = row
-                .get("score")
-                .map_err(|e| UnikoError::Search(e.to_string()))?;
-            let vid: i64 = row
-                .get("vid")
-                .map_err(|e| UnikoError::Search(e.to_string()))?;
-            let label = node.labels.into_iter().next().unwrap_or_default();
-            hits.push(SearchResult {
-                node_id: vid,
-                node_type: label,
-                score,
-                properties: node.properties,
-            });
-        }
-        Ok(hits)
+        rows_to_search_hits(&result)
     }
 
     /// Search across multiple fulltext fields simultaneously.

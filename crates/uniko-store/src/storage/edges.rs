@@ -300,29 +300,8 @@ impl KnowledgeBase {
         direction: Direction,
     ) -> Result<Vec<EdgeRecord>> {
         validate_edge_type(edge_type)?;
-        let cypher = match direction {
-            Direction::Outgoing => format!(
-                "MATCH (a)-[r:{edge_type}]->(b) WHERE id(a) = $nid \
-                 RETURN r, id(r) AS eid, id(a) AS src, id(b) AS dst, type(r) AS rtype"
-            ),
-            Direction::Incoming => format!(
-                "MATCH (a)-[r:{edge_type}]->(b) WHERE id(b) = $nid \
-                 RETURN r, id(r) AS eid, id(a) AS src, id(b) AS dst, type(r) AS rtype"
-            ),
-            Direction::Both => format!(
-                "MATCH (a)-[r:{edge_type}]-(b) WHERE id(a) = $nid \
-                 RETURN r, id(r) AS eid, id(startNode(r)) AS src, id(endNode(r)) AS dst, type(r) AS rtype"
-            ),
-        };
-
-        let session = self.db.session();
-        let result = session
-            .query_with(&cypher)
-            .param("nid", node_id)
-            .fetch_all()
-            .await?;
-
-        rows_to_edge_records(&result)
+        self.get_edges_filtered(node_id, Some(edge_type), direction)
+            .await
     }
 
     /// Retrieve all edges incident to `node_id` regardless of type.
@@ -335,24 +314,34 @@ impl KnowledgeBase {
         node_id: NodeId,
         direction: Direction,
     ) -> Result<Vec<EdgeRecord>> {
+        self.get_edges_filtered(node_id, None, direction).await
+    }
+
+    async fn get_edges_filtered(
+        &self,
+        node_id: NodeId,
+        edge_type: Option<&str>,
+        direction: Direction,
+    ) -> Result<Vec<EdgeRecord>> {
+        let type_filter = edge_type.map(|t| format!(":{t}")).unwrap_or_default();
         let cypher = match direction {
-            Direction::Outgoing => {
-                "MATCH (a)-[r]->(b) WHERE id(a) = $nid \
+            Direction::Outgoing => format!(
+                "MATCH (a)-[r{type_filter}]->(b) WHERE id(a) = $nid \
                  RETURN r, id(r) AS eid, id(a) AS src, id(b) AS dst, type(r) AS rtype"
-            }
-            Direction::Incoming => {
-                "MATCH (a)-[r]->(b) WHERE id(b) = $nid \
+            ),
+            Direction::Incoming => format!(
+                "MATCH (a)-[r{type_filter}]->(b) WHERE id(b) = $nid \
                  RETURN r, id(r) AS eid, id(a) AS src, id(b) AS dst, type(r) AS rtype"
-            }
-            Direction::Both => {
-                "MATCH (a)-[r]-(b) WHERE id(a) = $nid \
+            ),
+            Direction::Both => format!(
+                "MATCH (a)-[r{type_filter}]-(b) WHERE id(a) = $nid \
                  RETURN r, id(r) AS eid, id(startNode(r)) AS src, id(endNode(r)) AS dst, type(r) AS rtype"
-            }
+            ),
         };
 
         let session = self.db.session();
         let result = session
-            .query_with(cypher)
+            .query_with(&cypher)
             .param("nid", node_id)
             .fetch_all()
             .await?;
