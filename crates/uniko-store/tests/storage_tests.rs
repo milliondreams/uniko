@@ -547,6 +547,58 @@ async fn test_bump_modality_presence_concurrent_no_lost_update() {
 }
 
 #[tokio::test]
+async fn test_find_stale_open_facts_preserves_upgraded_certainty() {
+    // Regression: `find_stale_open_facts` used to reconstruct the
+    // returned BTIC from three string-stringified columns (`toString`,
+    // `btic_lo_granularity`, `btic_lo_certainty`) and fell back to
+    // `Granularity::Day` / `Certainty::Approximate` on any parse hiccup.
+    // The fallback could mask a genuine round-trip bug for non-default
+    // meta. After switching to bare `f.valid_at AS valid_at` + typed
+    // `extract_btic`, the stored meta must survive end-to-end.
+    use chrono::Utc;
+    use uni_db::common::uni_btic::Certainty;
+    use uniko_store::schema::btic::CERTAINTY_THRESHOLD;
+
+    let kb = test_kb().await;
+
+    let subject = "alice";
+    let predicate = "likes";
+    let object = "tea";
+    let observed_at = Utc::now();
+
+    // Cross CERTAINTY_THRESHOLD so `upsert_fact_by_triple` promotes
+    // the lo certainty to Definite (default on create is Approximate).
+    for _ in 0..(CERTAINTY_THRESHOLD as i64 + 1) {
+        kb.upsert_fact_by_triple(subject, predicate, Some(object), 1, observed_at, None)
+            .await
+            .unwrap();
+    }
+
+    // Find the (now stale-from-the-perspective-of-a-new-canonical)
+    // fact by asking for "coffee" as the current canonical object.
+    let stale = kb
+        .find_stale_open_facts(subject, predicate, Some("coffee"))
+        .await
+        .unwrap();
+    assert_eq!(stale.len(), 1, "expected one open Fact: {stale:?}");
+
+    let (_nid, btic) = &stale[0];
+    assert_eq!(
+        btic.lo_certainty(),
+        Certainty::Definite,
+        "upgraded certainty did not survive readback: {:?}",
+        btic.lo_certainty(),
+    );
+    assert_eq!(
+        btic.lo(),
+        observed_at.timestamp_millis(),
+        "lo timestamp did not round-trip exactly",
+    );
+
+    kb.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn test_batch_create_edges_fast_rejects_invalid_property_name() {
     // Regression: the fast/bulk path used to silently discard the
     // result of `validate_property_name`, letting invalid keys reach

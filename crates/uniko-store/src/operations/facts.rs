@@ -123,15 +123,29 @@ impl KnowledgeBase {
 
             // Upgrade certainty once the cumulative count crosses the
             // threshold.  Idempotent: a Fact already at Definite stays
-            // there.
+            // there.  `props` comes from `get_node_by_ext_id` which uses
+            // `RETURN n` — Node-wrapped projection stringifies Temporal
+            // columns, so we cannot reuse `props.get("valid_at")`.  Read
+            // the raw BTIC via a bare-column projection.
             if (prior_count as u64) < CERTAINTY_THRESHOLD
                 && (new_count as u64) >= CERTAINTY_THRESHOLD
-                && let Some(current) = extract_btic(props.get("valid_at"))
             {
-                updates.insert(
-                    "valid_at".into(),
-                    btic_to_value(&btic_upgrade_certainty(&current)),
-                );
+                let session = self.db.session();
+                let r = session
+                    .query_with(
+                        "MATCH (f:Fact) WHERE id(f) = $vid RETURN f.valid_at AS valid_at",
+                    )
+                    .param("vid", nid)
+                    .fetch_all()
+                    .await?;
+                if let Some(row) = r.rows().first()
+                    && let Some(current) = extract_btic(row.value("valid_at"))
+                {
+                    updates.insert(
+                        "valid_at".into(),
+                        btic_to_value(&btic_upgrade_certainty(&current)),
+                    );
+                }
             }
 
             self.update_node(nid, &updates).await?;
@@ -586,36 +600,6 @@ fn extract_btic(value: Option<&Value>) -> Option<Btic> {
     }
 }
 
-/// Extract the `lo` bound (epoch millis) from a BTIC display string.
-///
-/// uni-db's `toString(btic)` produces `"[<iso>, <hi>) <grain>/ [<cert>/<cert>]"`.
-/// We isolate the substring between the opening bracket and the first
-/// comma, then parse it as RFC 3339.  Returns `None` on shape mismatch
-/// — callers fall back to skipping the row.
-fn parse_btic_lo_millis(s: &str) -> Option<i64> {
-    let after_bracket = s.strip_prefix('[')?;
-    let (lo_iso, _) = after_bracket.split_once(", ")?;
-    let dt = chrono::DateTime::parse_from_rfc3339(lo_iso.trim()).ok()?;
-    Some(dt.with_timezone(&Utc).timestamp_millis())
-}
-
-/// Parse uni-db's named Granularity strings back into the enum.
-fn parse_granularity(s: &str) -> Option<uni_db::common::uni_btic::Granularity> {
-    uni_db::common::uni_btic::Granularity::from_name(s)
-}
-
-/// Parse uni-db's named Certainty strings back into the enum.
-fn parse_certainty(s: &str) -> Option<uni_db::common::uni_btic::Certainty> {
-    use uni_db::common::uni_btic::Certainty;
-    Some(match s {
-        "definite" => Certainty::Definite,
-        "approximate" => Certainty::Approximate,
-        "uncertain" => Certainty::Uncertain,
-        "unknown" => Certainty::Unknown,
-        _ => return None,
-    })
-}
-
 impl KnowledgeBase {
     /// Find every open-BTIC Fact for `(subject, predicate)` whose
     /// `object` differs from `current_object`.
@@ -637,22 +621,17 @@ impl KnowledgeBase {
         predicate: &str,
         current_object: Option<&str>,
     ) -> Result<Vec<(NodeId, Btic)>> {
-        use uni_db::common::uni_btic::btic::POS_INF;
-
         let session = self.db.session();
-        // `RETURN f` serializes Temporal columns to their display
-        // string when packaged inside a Node, which prevents direct
-        // `extract_btic` extraction.  We use `btic_is_unbounded` to
-        // filter open intervals server-side and `btic_lo_granularity`
-        // / `btic_lo_certainty` to recover meta as named strings; the
-        // BTIC display is parsed for the `lo` timestamp.
+        // Bare property projection (`f.valid_at AS valid_at`) returns the
+        // raw `Value::Temporal(Btic{..})` — see `batch_upsert_facts` for
+        // the same readback pattern.  Avoids the lossy
+        // `toString` → RFC 3339 → granularity/certainty-name roundtrip
+        // that the previous implementation used.
         let cypher = "MATCH (f:Fact) \
                       WHERE f.subject = $s AND f.predicate = $p \
                         AND btic_is_unbounded(f.valid_at) \
                       RETURN id(f) AS nid, f.object AS obj, \
-                             toString(f.valid_at) AS vat_str, \
-                             btic_lo_granularity(f.valid_at) AS lo_g, \
-                             btic_lo_certainty(f.valid_at) AS lo_c";
+                             f.valid_at AS valid_at";
         let result = session
             .query_with(cypher)
             .param("s", subject)
@@ -670,29 +649,7 @@ impl KnowledgeBase {
             if !current.is_empty() && obj.to_ascii_lowercase() == current {
                 continue;
             }
-            let Ok(vat_str) = row.get::<String>("vat_str") else {
-                continue;
-            };
-            let Some(lo_ms) = parse_btic_lo_millis(&vat_str) else {
-                continue;
-            };
-            let lo_g = row
-                .get::<String>("lo_g")
-                .ok()
-                .and_then(|s| parse_granularity(&s))
-                .unwrap_or(uni_db::common::uni_btic::Granularity::Day);
-            let lo_c = row
-                .get::<String>("lo_c")
-                .ok()
-                .and_then(|s| parse_certainty(&s))
-                .unwrap_or(uni_db::common::uni_btic::Certainty::Approximate);
-            let meta = Btic::build_meta(
-                lo_g,
-                uni_db::common::uni_btic::Granularity::Millisecond,
-                lo_c,
-                uni_db::common::uni_btic::Certainty::Definite,
-            );
-            if let Ok(btic) = Btic::new(lo_ms, POS_INF, meta) {
+            if let Some(btic) = extract_btic(row.value("valid_at")) {
                 out.push((nid, btic));
             }
         }
@@ -719,7 +676,6 @@ impl KnowledgeBase {
         keys: &[(String, String)],
     ) -> Result<HashMap<(String, String), Vec<(NodeId, Btic, String)>>> {
         use std::collections::hash_map::Entry;
-        use uni_db::common::uni_btic::btic::POS_INF;
 
         if keys.is_empty() {
             return Ok(HashMap::new());
@@ -736,6 +692,9 @@ impl KnowledgeBase {
             })
             .collect();
 
+        // Bare `f.valid_at AS valid_at` projection returns the raw
+        // `Value::Temporal(Btic{..})` — same readback shape as
+        // `batch_upsert_facts`.
         let cypher = "UNWIND $keys AS k \
                       MATCH (f:Fact) \
                       WHERE f.subject = k.subject \
@@ -743,9 +702,7 @@ impl KnowledgeBase {
                         AND btic_is_unbounded(f.valid_at) \
                       RETURN k.subject AS subject, k.predicate AS predicate, \
                              id(f) AS nid, f.object AS obj, \
-                             toString(f.valid_at) AS vat_str, \
-                             btic_lo_granularity(f.valid_at) AS lo_g, \
-                             btic_lo_certainty(f.valid_at) AS lo_c";
+                             f.valid_at AS valid_at";
 
         let session = self.db.session();
         let result = session
@@ -767,29 +724,7 @@ impl KnowledgeBase {
                 continue;
             };
             let obj: String = row.get::<String>("obj").unwrap_or_default();
-            let Ok(vat_str) = row.get::<String>("vat_str") else {
-                continue;
-            };
-            let Some(lo_ms) = parse_btic_lo_millis(&vat_str) else {
-                continue;
-            };
-            let lo_g = row
-                .get::<String>("lo_g")
-                .ok()
-                .and_then(|s| parse_granularity(&s))
-                .unwrap_or(uni_db::common::uni_btic::Granularity::Day);
-            let lo_c = row
-                .get::<String>("lo_c")
-                .ok()
-                .and_then(|s| parse_certainty(&s))
-                .unwrap_or(uni_db::common::uni_btic::Certainty::Approximate);
-            let meta = Btic::build_meta(
-                lo_g,
-                uni_db::common::uni_btic::Granularity::Millisecond,
-                lo_c,
-                uni_db::common::uni_btic::Certainty::Definite,
-            );
-            let Ok(btic) = Btic::new(lo_ms, POS_INF, meta) else {
+            let Some(btic) = extract_btic(row.value("valid_at")) else {
                 continue;
             };
 
