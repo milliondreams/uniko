@@ -359,6 +359,33 @@ fn parse_phase1_strategy(s: &str) -> Phase1Strategy {
 /// Estimated tokens per recall item.
 const TOKENS_PER_ITEM: usize = 50;
 
+/// Sort `items` by score descending, truncate to `limit`, then walk in
+/// rank order summing [`TOKENS_PER_ITEM`] until the budget would be
+/// exceeded.  Returns `(kept_items, total_tokens)` for the caller to
+/// wrap in a [`ContextBundle`] with phase-specific flags.
+fn finalize_bundle(
+    mut items: Vec<RecallItem>,
+    limit: usize,
+    token_budget: usize,
+) -> (Vec<RecallItem>, usize) {
+    items.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    items.truncate(limit);
+    let mut total_tokens = 0usize;
+    let mut final_items = Vec::with_capacity(items.len());
+    for item in items {
+        total_tokens += TOKENS_PER_ITEM;
+        if total_tokens > token_budget {
+            break;
+        }
+        final_items.push(item);
+    }
+    (final_items, total_tokens)
+}
+
 // ── Main recall function ────────────────────────────────────────────
 
 /// Recall relevant context from the memory graph.
@@ -402,22 +429,8 @@ pub async fn recall(
             coverage = phase1_coverage,
             "phase 1 (compact) sufficient — skipping phase 3"
         );
-        let mut items = phase1_items;
-        items.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        items.truncate(config.limit);
-        let mut total_tokens = 0usize;
-        let mut final_items = Vec::new();
-        for item in items {
-            total_tokens += TOKENS_PER_ITEM;
-            if total_tokens > config.token_budget {
-                break;
-            }
-            final_items.push(item);
-        }
+        let (final_items, total_tokens) =
+            finalize_bundle(phase1_items, config.limit, config.token_budget);
         return Ok(ContextBundle {
             total_tokens,
             items: final_items,
@@ -465,21 +478,8 @@ pub async fn recall(
             combined.extend(p1);
         }
 
-        combined.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        combined.truncate(config.limit);
-        let mut total_tokens = 0usize;
-        let mut final_items = Vec::new();
-        for item in combined {
-            total_tokens += TOKENS_PER_ITEM;
-            if total_tokens > config.token_budget {
-                break;
-            }
-            final_items.push(item);
-        }
+        let (final_items, total_tokens) =
+            finalize_bundle(combined, config.limit, config.token_budget);
         return Ok(ContextBundle {
             total_tokens,
             items: final_items,
@@ -537,22 +537,8 @@ pub async fn recall(
                 phase2_items = phase2_items.len(),
                 "phase 3 empty — returning phase 2 fallback bundle"
             );
-            let mut items = phase2_items;
-            items.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            items.truncate(config.limit);
-            let mut total_tokens = 0usize;
-            let mut final_items = Vec::new();
-            for item in items {
-                total_tokens += TOKENS_PER_ITEM;
-                if total_tokens > config.token_budget {
-                    break;
-                }
-                final_items.push(item);
-            }
+            let (final_items, total_tokens) =
+                finalize_bundle(phase2_items, config.limit, config.token_budget);
             let coverage = compute_coverage(&final_items, intent.facet_count);
             return Ok(ContextBundle {
                 total_tokens,
@@ -728,17 +714,7 @@ pub async fn recall(
         }
     }
 
-    items.truncate(config.limit);
-
-    let mut total_tokens = 0;
-    let mut final_items = Vec::new();
-    for item in items {
-        total_tokens += TOKENS_PER_ITEM;
-        if total_tokens > config.token_budget {
-            break;
-        }
-        final_items.push(item);
-    }
+    let (final_items, total_tokens) = finalize_bundle(items, config.limit, config.token_budget);
 
     let coverage = compute_coverage(&final_items, intent.facet_count);
 
