@@ -154,19 +154,17 @@ pub fn build_backend(cfg: &BlobStorage) -> Result<Box<dyn BlobStore>> {
 /// (`<aa>/<bb>/<content_id>`) for a given hex hash. Exposed so the
 /// migration script can mirror layout without duplicating the rule.
 ///
-/// # Panics
-///
-/// Panics if `content_id` is shorter than 4 characters. SHA-256 hex
-/// is always 64 chars, so any caller passing a valid hash is safe.
+/// Returns `None` when `content_id` is shorter than 4 characters —
+/// the two-level fanout requires at least four hex chars. SHA-256 hex
+/// is always 64 chars, so any caller passing a valid hash gets `Some`.
 #[must_use]
-pub fn fs_relative_path(content_id: &str) -> PathBuf {
-    assert!(
-        content_id.len() >= 4,
-        "content_id must be SHA-256 hex (>= 4 chars)"
-    );
+pub fn fs_relative_path(content_id: &str) -> Option<PathBuf> {
+    if content_id.len() < 4 {
+        return None;
+    }
     let (aa, rest) = content_id.split_at(2);
     let (bb, _) = rest.split_at(2);
-    PathBuf::from(aa).join(bb).join(content_id)
+    Some(PathBuf::from(aa).join(bb).join(content_id))
 }
 
 #[cfg(test)]
@@ -175,8 +173,14 @@ mod tests {
 
     #[test]
     fn test_fs_relative_path_fanout() {
-        let p = fs_relative_path("abcdef1234567890");
+        let p = fs_relative_path("abcdef1234567890").expect("valid 16-char hash");
         assert_eq!(p, PathBuf::from("ab/cd/abcdef1234567890"));
+    }
+
+    #[test]
+    fn test_fs_relative_path_too_short() {
+        assert!(fs_relative_path("abc").is_none());
+        assert!(fs_relative_path("").is_none());
     }
 
     #[test]

@@ -33,20 +33,31 @@ impl FsBlobStore {
     }
 
     /// Resolve the absolute path of a content blob.
-    fn path_for(&self, content_id: &str) -> PathBuf {
-        self.root.join(fs_relative_path(content_id))
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] if `content_id` is not at least
+    /// four characters (the two-level fanout requires that prefix).
+    fn path_for(&self, content_id: &str) -> Result<PathBuf> {
+        let rel = fs_relative_path(content_id).ok_or_else(|| {
+            UnikoError::Storage(format!(
+                "invalid content_id (len {} < 4): {content_id}",
+                content_id.len()
+            ))
+        })?;
+        Ok(self.root.join(rel))
     }
 
     /// Format a `fs://` URI for the resolved absolute path.
-    fn uri_for(&self, content_id: &str) -> String {
-        format!("fs://{}", self.path_for(content_id).display())
+    fn uri_for(&self, content_id: &str) -> Result<String> {
+        Ok(format!("fs://{}", self.path_for(content_id)?.display()))
     }
 }
 
 #[async_trait]
 impl BlobStore for FsBlobStore {
     async fn put(&self, content_id: &str, bytes: &[u8]) -> Result<PutOutcome> {
-        let path = self.path_for(content_id);
+        let path = self.path_for(content_id)?;
 
         // Idempotent: if the file already exists with the same length,
         // skip the write. We trust the hash — equal hash + equal length
@@ -56,7 +67,7 @@ impl BlobStore for FsBlobStore {
         {
             return Ok(PutOutcome {
                 bytes_inline: None,
-                uri: Some(self.uri_for(content_id)),
+                uri: Some(self.uri_for(content_id)?),
             });
         }
 
@@ -78,12 +89,12 @@ impl BlobStore for FsBlobStore {
 
         Ok(PutOutcome {
             bytes_inline: None,
-            uri: Some(self.uri_for(content_id)),
+            uri: Some(self.uri_for(content_id)?),
         })
     }
 
     async fn get(&self, content_id: &str, uri: Option<&str>) -> Result<Vec<u8>> {
-        let path = resolve_path(self.path_for(content_id), uri);
+        let path = resolve_path(self.path_for(content_id)?, uri);
         let mut f = tfs::File::open(&path)
             .await
             .map_err(|e| UnikoError::Storage(format!("failed to open {path:?}: {e}")))?;
@@ -95,12 +106,12 @@ impl BlobStore for FsBlobStore {
     }
 
     async fn exists(&self, content_id: &str, uri: Option<&str>) -> Result<bool> {
-        let path = resolve_path(self.path_for(content_id), uri);
+        let path = resolve_path(self.path_for(content_id)?, uri);
         Ok(tfs::metadata(&path).await.is_ok())
     }
 
     async fn delete(&self, content_id: &str, uri: Option<&str>) -> Result<()> {
-        let path = resolve_path(self.path_for(content_id), uri);
+        let path = resolve_path(self.path_for(content_id)?, uri);
         match tfs::remove_file(&path).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

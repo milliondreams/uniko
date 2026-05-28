@@ -146,29 +146,27 @@ impl KnowledgeBase {
         );
 
         let session = self.db.session();
-        let result = session
+        let qr = session
             .query_with(&cypher)
             .param("src", from)
             .param("dst", to)
             .fetch_all()
-            .await;
+            .await?;
 
-        match result {
-            Err(_) => Ok(None), // No path found (Cypher error on unconnected).
-            Ok(qr) => match qr.rows().first() {
-                None => Ok(None),
-                Some(row) => {
-                    // Length may be NULL if no path exists.
-                    match row.get::<i64>("len") {
-                        Ok(len) => Ok(Some(Path {
-                            steps: Vec::new(),
-                            length: len as usize,
-                        })),
-                        Err(_) => Ok(None),
-                    }
-                }
-            },
-        }
+        // uni-db's `shortestPath` returns one row with a NULL `len` when
+        // no path connects the two endpoints; real Cypher failures
+        // (syntax, missing node id, …) surface as `Err` above and must
+        // not be silently coerced to `Ok(None)`.
+        let Some(row) = qr.rows().first() else {
+            return Ok(None);
+        };
+        let Some(len) = row.get::<Option<i64>>("len")? else {
+            return Ok(None);
+        };
+        Ok(Some(Path {
+            steps: Vec::new(),
+            length: len as usize,
+        }))
     }
 
     /// Personalized PageRank from seed nodes.

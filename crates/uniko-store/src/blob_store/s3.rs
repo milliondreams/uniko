@@ -84,16 +84,26 @@ impl S3BlobStore {
     }
 
     /// Compose the object-store key for `content_id` using the same
-    /// two-level fanout as [`FsBlobStore`].
-    fn key(&self, content_id: &str) -> ObjPath {
-        let rel = fs_relative_path(content_id);
+    /// two-level fanout as [`super::fs::FsBlobStore`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] if `content_id` is too short to
+    /// form the two-level fanout (< 4 chars).
+    fn key(&self, content_id: &str) -> Result<ObjPath> {
+        let rel = fs_relative_path(content_id).ok_or_else(|| {
+            UnikoError::Storage(format!(
+                "invalid content_id (len {} < 4): {content_id}",
+                content_id.len()
+            ))
+        })?;
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         let full = if self.prefix.is_empty() {
             rel_str.to_string()
         } else {
             format!("{}/{rel_str}", self.prefix)
         };
-        ObjPath::from(full)
+        Ok(ObjPath::from(full))
     }
 
     fn uri(&self, key: &ObjPath) -> String {
@@ -104,7 +114,7 @@ impl S3BlobStore {
 #[async_trait]
 impl BlobStore for S3BlobStore {
     async fn put(&self, content_id: &str, bytes: &[u8]) -> Result<PutOutcome> {
-        let key = self.key(content_id);
+        let key = self.key(content_id)?;
         // Idempotency: skip upload if HEAD shows matching size.
         if let Ok(meta) = self.inner.head(&key).await
             && meta.size == bytes.len()
@@ -126,7 +136,7 @@ impl BlobStore for S3BlobStore {
     }
 
     async fn get(&self, content_id: &str, _uri: Option<&str>) -> Result<Vec<u8>> {
-        let key = self.key(content_id);
+        let key = self.key(content_id)?;
         let got = self
             .inner
             .get(&key)
@@ -140,7 +150,7 @@ impl BlobStore for S3BlobStore {
     }
 
     async fn exists(&self, content_id: &str, _uri: Option<&str>) -> Result<bool> {
-        let key = self.key(content_id);
+        let key = self.key(content_id)?;
         match self.inner.head(&key).await {
             Ok(_) => Ok(true),
             Err(object_store::Error::NotFound { .. }) => Ok(false),
@@ -149,7 +159,7 @@ impl BlobStore for S3BlobStore {
     }
 
     async fn delete(&self, content_id: &str, _uri: Option<&str>) -> Result<()> {
-        let key = self.key(content_id);
+        let key = self.key(content_id)?;
         match self.inner.delete(&key).await {
             Ok(()) => Ok(()),
             Err(object_store::Error::NotFound { .. }) => Ok(()),
