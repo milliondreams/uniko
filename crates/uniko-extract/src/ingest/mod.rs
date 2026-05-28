@@ -1,7 +1,7 @@
 //! Pipeline 1 — Ingest for Messages and Artifacts.
 //!
 //! [`IngestStep`] implements the [`Step`](uniko_pipes::Step) trait and
-//! dispatches to [`message::ingest_message`] or
+//! dispatches to [`atomic::ingest_message_atomic`] or
 //! [`artifact::ingest_artifact`] based on the `ingest_type` metadata
 //! key in the [`PipelineContext`](uniko_pipes::PipelineContext).
 
@@ -17,7 +17,6 @@ pub mod session_chunk;
 pub use artifact::ArtifactIngestResult;
 pub use atomic::{AtomicIngestResult, AtomicTimings, ingest_message_atomic};
 pub use chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, select_chunker};
-pub use message::MessageIngestResult;
 pub use pdf::{
     PdfExtractCrate, PdfExtractError, PdfIngestOptions, PdfIngestResult, PdfInput,
     PdfTextExtractor, ingest_pdf,
@@ -33,7 +32,7 @@ use uniko_store::UnikoError;
 ///
 /// Dispatch is based on `ctx.metadata["ingest_type"]`:
 /// - `"message"`: deserializes [`IngestMessage`] from `"ingest_payload"`
-///   and calls [`message::ingest_message`].
+///   and calls [`atomic::ingest_message_atomic`].
 /// - `"artifact"`: deserializes [`IngestArtifact`](uniko_pipes::IngestArtifact)
 ///   and calls [`artifact::ingest_artifact`].
 #[derive(Debug)]
@@ -65,7 +64,7 @@ impl uniko_pipes::Step for IngestStep {
                     .get("session_context")
                     .and_then(|v| serde_json::from_value::<context::SessionContext>(v.clone()).ok())
                     .unwrap_or_else(|| context::SessionContext::new(msg.session_id.clone(), 0));
-                let result = message::ingest_message(&ctx.kb, &msg, &mut session_ctx).await?;
+                let result = atomic::ingest_message_atomic(&ctx.kb, &msg, &mut session_ctx).await?;
                 ctx.node_id = result.message_node_id;
                 // Forward chunk IDs to downstream steps (embedding).
                 ctx.metadata.insert(

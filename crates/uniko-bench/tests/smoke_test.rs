@@ -4,17 +4,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use tokio_util::sync::CancellationToken;
 
 use uni_db::ModelAliasSpec;
+use uniko_extract::ingest::atomic::ingest_message_atomic;
 use uniko_extract::ingest::context::SessionContext;
-use uniko_extract::ingest::message::ingest_message;
-use uniko_extract::ner::EntityExtractionStep;
-use uniko_extract::observations::ObservationExtractionStep;
 use uniko_memory::recall::{RecallConfig, recall};
-use uniko_pipes::Step;
-use uniko_pipes::circuit_breaker::CircuitBreaker;
-use uniko_pipes::step::PipelineContext;
 use uniko_pipes::types::IngestMessage;
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
@@ -32,37 +26,11 @@ async fn ingest_and_extract(
     msg: IngestMessage,
     session_ctx: &mut SessionContext,
 ) {
-    let breaker = Arc::new(CircuitBreaker::new(5, 60_000));
-    let cancel = CancellationToken::new();
-
-    let result = ingest_message(kb, &msg, session_ctx).await.unwrap();
-
-    let mut ctx = PipelineContext::new(
-        result.message_node_id,
-        msg.content.clone(),
-        "text".to_string(),
-        cancel,
-        kb.clone(),
-        breaker,
-    );
-    ctx.metadata.insert(
-        "timestamp".into(),
-        serde_json::Value::String(msg.timestamp.to_rfc3339()),
-    );
-
-    let entity_step = EntityExtractionStep;
-    let _ = entity_step.execute(&mut ctx).await;
+    let result = ingest_message_atomic(kb, &msg, session_ctx).await.unwrap();
     eprintln!(
         "  entities={}, observations={}",
-        ctx.extracted_entities.len(),
-        ctx.extracted_observations.len()
-    );
-
-    let obs_step = ObservationExtractionStep;
-    let _ = obs_step.execute(&mut ctx).await;
-    eprintln!(
-        "  after obs: observations={}",
-        ctx.extracted_observations.len()
+        result.extracted_entities.len(),
+        result.extracted_observations.len()
     );
 }
 

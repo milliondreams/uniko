@@ -1,13 +1,15 @@
 //! Pipeline 3 — Observation extraction.
 //!
-//! [`ObservationExtractionStep`] implements the [`Step`](uniko_pipes::Step)
-//! trait. Extracts clean declarative observations from messages using the
+//! Extracts clean declarative observations from messages using the
 //! NLP model's dependency tree, with CLS-based filtering and speaker
 //! attribution for first-person pronouns.
 //!
 //! **Key principle**: observations are reconstructed from the DEP tree,
 //! not raw text fragments. "I'm starting a dance studio" → "Jon is
 //! starting a dance studio" (clean, declarative, speaker-attributed).
+//!
+//! Drive this via [`prepare_observations`] + [`apply_observations`] from
+//! the atomic ingest path; the standalone Step adapter has been retired.
 
 pub mod cleanup;
 pub mod filter;
@@ -21,134 +23,10 @@ pub use types::{ContradictionFlag, RawObservation};
 
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use uni_db::Value;
 
-use uniko_pipes::step::PipelineContext;
-use uniko_pipes::types::{StepErrorPolicy, StepOutcome};
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::{NodeId, UnikoError};
-
-/// Pipeline step that extracts observations from content.
-///
-/// Orchestration:
-/// 1. CLS gate: only `inform`/`request`/`confirm`/`offer`/`status` proceed.
-/// 2. DEP tree extraction: reconstruct subject-verb-object from the
-///    biaffine parse.
-/// 3. Speaker substitution: "I"/"we" → sender name.
-/// 4. Create Observation nodes + OBSERVED_IN + ABOUT edges.
-/// 5. Fallback to rule-based when NLP unavailable.
-#[derive(Debug)]
-pub struct ObservationExtractionStep;
-
-#[async_trait]
-impl uniko_pipes::Step for ObservationExtractionStep {
-    fn name(&self) -> &str {
-        "observation_extraction"
-    }
-
-    fn should_run(&self, ctx: &PipelineContext) -> bool {
-        ctx.node_id != 0 && !ctx.content.is_empty()
-    }
-
-    async fn execute(&self, ctx: &mut PipelineContext) -> Result<StepOutcome, UnikoError> {
-        let step_start = std::time::Instant::now();
-        let timestamp = resolve_timestamp(ctx);
-
-        // Reconstruct ObservationInputs from the PipelineContext shape
-        // so the prep + apply helpers can be the single source of truth
-        // for both the legacy step path and the new atomic ingest path.
-        #[cfg(feature = "onnx")]
-        let nlp_results_owned: Option<Vec<crate::nlp::types::NlpResult>> = ctx
-            .metadata
-            .get("nlp_results")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-        let seed_sentence_ctx = ctx
-            .metadata
-            .get("session_context")
-            .and_then(|v| v.get("sentence_ctx"))
-            .and_then(|v| {
-                serde_json::from_value::<crate::ingest::context::SentenceContext>(v.clone()).ok()
-            });
-
-        let rules_path = ctx.kb.config().observation_rules_path.clone();
-
-        let inputs = ObservationInputs {
-            kb: &ctx.kb,
-            message_node_id: ctx.node_id,
-            content: &ctx.content,
-            content_type: ctx
-                .metadata
-                .get("content_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or(ctx.content_type.as_str()),
-            sender: ctx.sender.clone(),
-            extracted_entities: &ctx.extracted_entities,
-            #[cfg(feature = "onnx")]
-            nlp_results: nlp_results_owned.as_deref(),
-            seed_sentence_ctx: seed_sentence_ctx.as_ref(),
-            timestamp,
-            observation_rules_path: rules_path.as_deref(),
-        };
-
-        let prep = match prepare_observations(inputs).await? {
-            ObservationPrepOutcome::Skip(reason) => {
-                return Ok(StepOutcome::Skipped { reason });
-            }
-            ObservationPrepOutcome::Ready(p) => p,
-        };
-
-        // Mirror the prep's sentence_ctx_updated into ctx.metadata so
-        // the bench / orchestrator can persist it back into
-        // SessionContext (existing behaviour).
-        if let Some(sc) = &prep.sentence_ctx_updated
-            && let Ok(val) = serde_json::to_value(sc)
-        {
-            ctx.metadata.insert("sentence_ctx_updated".into(), val);
-        }
-
-        let sender_ms = prep.sender_ms;
-        let extract_ms = prep.extract_ms;
-        let used_model = prep.used_model;
-        let obs_count = prep.all_obs.len();
-
-        // Open the tx + apply writes + commit (legacy semantics — own tx).
-        let nodes_start = std::time::Instant::now();
-        let tx = ctx.kb.db().session().tx().await?;
-        let obs_node_ids = apply_observations(&ctx.kb, &tx, ctx.node_id, prep).await?;
-        let commit_start = std::time::Instant::now();
-        tx.commit().await?;
-        let commit_ms = commit_start.elapsed().as_millis() as u64;
-        let nodes_ms = nodes_start.elapsed().as_millis();
-        tracing::info!(commit_ms, "obs commit");
-        tracing::info!(
-            target: "tx_perf",
-            tx_phase = "obs_step",
-            total_ms = nodes_ms as u64,
-            commit_ms,
-            obs_count = obs_node_ids.len() as u64,
-            "tx phase",
-        );
-
-        ctx.extracted_observations = obs_node_ids.clone();
-        tracing::info!(
-            count = obs_node_ids.len(),
-            model = used_model,
-            sender_ms,
-            extract_ms,
-            nodes_ms,
-            total_ms = step_start.elapsed().as_millis(),
-            "observation step",
-        );
-
-        let _ = obs_count;
-        Ok(StepOutcome::Completed)
-    }
-
-    fn error_policy(&self) -> StepErrorPolicy {
-        StepErrorPolicy::Skip
-    }
-}
 
 /// Load the observation rule set, honouring `UnikoConfig.observation_rules_path`.
 ///
@@ -223,16 +101,6 @@ fn cls_gate_admits(
         }
     }
     false
-}
-
-/// Extract the message timestamp from context metadata or use now.
-fn resolve_timestamp(ctx: &PipelineContext) -> chrono::DateTime<chrono::Utc> {
-    ctx.metadata
-        .get("timestamp")
-        .and_then(|v| v.as_str())
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(chrono::Utc::now)
 }
 
 /// Substitute a resolved absolute date for a relative temporal phrase

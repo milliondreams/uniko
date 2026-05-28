@@ -11,120 +11,8 @@ use uniko_store::{KnowledgeBase, NodeId};
 use super::chunking::{ChunkConfig, count_tokens, select_chunker};
 use super::session::{ensure_participant, get_or_create_session, link_participant_to_session};
 
-/// Result of ingesting a single message.
-#[derive(Debug)]
-pub struct MessageIngestResult {
-    /// Internal node ID of the created Message.
-    pub message_node_id: NodeId,
-    /// Node IDs of chunks (empty if the message was not chunked).
-    pub chunk_node_ids: Vec<NodeId>,
-    /// Internal node ID of the session.
-    pub session_node_id: NodeId,
-    /// `(participant_node_id, participant_name)` for the sender —
-    /// `Some` on the create path so downstream pipeline steps can
-    /// skip a `SENT_BY` lookup + Participant property fetch. `None`
-    /// when the idempotency path returned an already-existing
-    /// Message (callers fall back to a DB lookup in that case).
-    pub sender: Option<(NodeId, String)>,
-}
-
-/// Ingest a message into the knowledge graph.
-///
-/// Creates the Message node, SENT_BY, IN_SESSION, and NEXT edges.
-/// Chunks long messages (> `message_chunk_threshold` tokens) into Chunk
-/// nodes with HAS_CHUNK edges.
-///
-/// # Errors
-///
-/// Returns a storage error if any graph operation fails.
-pub async fn ingest_message(
-    kb: &KnowledgeBase,
-    msg: &IngestMessage,
-    session_ctx: &mut super::context::SessionContext,
-) -> uniko_store::Result<MessageIngestResult> {
-    // 1. Idempotency: skip if this message already exists.
-    if let Some((existing_id, _)) = kb
-        .get_node_by_ext_id("Message", "message_id", &msg.message_id)
-        .await?
-    {
-        return Ok(MessageIngestResult {
-            message_node_id: existing_id,
-            chunk_node_ids: Vec::new(),
-            session_node_id: session_ctx.session_nid,
-            // Skipped on idempotency: callers fall back to a SENT_BY
-            // DB lookup if they need the sender for a re-ingest.
-            sender: None,
-        });
-    }
-
-    let ingest_start = std::time::Instant::now();
-
-    // 2 + 3. Ensure Session and sender Participant exist (own commits;
-    // first-sight only).
-    let (session_nid, participant_nid) = ensure_session_and_sender(kb, msg, session_ctx).await?;
-    let setup_ms = ingest_start.elapsed().as_millis();
-
-    // 4 + 5. Resolve recipients (uses the participant cache) and snap
-    // the prev_message_nid BEFORE opening the tx so apply_message_writes_in_tx
-    // sees the value as of this call (we update session_ctx.prev_message_nid
-    // after the write succeeds).
-    let recipient_nids = resolve_recipients(kb, msg, participant_nid, session_ctx).await?;
-    let setup = MessageSetup {
-        session_nid,
-        participant_nid,
-        recipient_nids,
-        prev_msg_nid: session_ctx.prev_message_nid,
-    };
-
-    // 6-10. All per-message writes (Message node, its edges, optional
-    // chunks) run inside ONE transaction.
-    let session = kb.db().session();
-    let tx = session
-        .tx()
-        .await
-        .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
-    let writes = apply_message_writes_in_tx(kb, &tx, msg, &setup).await?;
-
-    let commit_start = std::time::Instant::now();
-    tx.commit()
-        .await
-        .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
-    let commit_ms = commit_start.elapsed().as_millis();
-    session_ctx.prev_message_nid = Some(writes.message_node_id);
-
-    let total_ms = ingest_start.elapsed().as_millis() as u64;
-    tracing::info!(
-        message_id = %msg.message_id,
-        setup_ms,
-        create_ms = writes.create_ms,
-        edges_ms = writes.edges_ms,
-        edge_count = writes.edge_count,
-        chunk_ms = writes.chunk_ms,
-        commit_ms,
-        total_ms,
-        "message ingest",
-    );
-    tracing::info!(
-        target: "tx_perf",
-        tx_phase = "message_ingest",
-        total_ms,
-        commit_ms = commit_ms as u64,
-        "tx phase",
-    );
-
-    Ok(MessageIngestResult {
-        message_node_id: writes.message_node_id,
-        chunk_node_ids: writes.chunk_node_ids,
-        session_node_id: session_nid,
-        // `ensure_participant` stores `Participant.name = sender_id`,
-        // so the in-Rust string matches what the observation step
-        // would otherwise refetch via `get_node(participant_nid)`.
-        sender: Some((participant_nid, msg.sender_id.clone())),
-    })
-}
-
-/// Inputs that the orchestrator (or `ingest_message`) computes in
-/// pre-tx phase and hands to [`apply_message_writes_in_tx`].
+/// Inputs that the atomic ingest orchestrator computes in the pre-tx
+/// phase and hands to [`apply_message_writes_in_tx`].
 #[derive(Debug)]
 pub struct MessageSetup {
     pub session_nid: NodeId,
@@ -137,8 +25,7 @@ pub struct MessageSetup {
 }
 
 /// Per-phase write metrics; useful for callers that want to log a
-/// granular breakdown (the legacy `ingest_message` and the atomic
-/// orchestrator both do).
+/// granular breakdown.
 #[derive(Debug)]
 pub struct MessageWriteResult {
     pub message_node_id: NodeId,
@@ -228,8 +115,7 @@ pub(crate) async fn apply_message_writes_in_tx(
 }
 
 /// First-sight setup for Session + sender Participant (own commits today).
-/// Used by both `ingest_message` and the atomic orchestrator; uses
-/// `SessionContext` caches to skip on repeat invocations.
+/// Uses `SessionContext` caches to skip on repeat invocations.
 pub(crate) async fn ensure_session_and_sender(
     kb: &KnowledgeBase,
     msg: &IngestMessage,
@@ -269,7 +155,7 @@ pub(crate) async fn ensure_session_and_sender(
 /// there during their first message's ingest.
 ///
 /// The cache and the on-disk PARTICIPATED_IN-edge set are populated by
-/// the same code path (only on sender first-sight in `ingest_message`),
+/// the same code path (only on sender first-sight in atomic ingest),
 /// so the cache is exactly equivalent to the previous
 /// `get_edges(... PARTICIPATED_IN ...)` query — without the per-message
 /// DB read that was costing ~30% of `edges_ms` at sess=24.
@@ -348,8 +234,8 @@ pub async fn create_chunks(
 
 /// Same as [`create_chunks`] but defers commit to the caller's tx.
 ///
-/// Used by `ingest_message` to fold Chunk creation under the same
-/// transaction as the Message node and its edges.
+/// Used by [`apply_message_writes_in_tx`] to fold Chunk creation under
+/// the same transaction as the Message node and its edges.
 ///
 /// # Errors
 ///

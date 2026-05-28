@@ -1,77 +1,52 @@
-//! Integration tests for the P2 entity extraction pipeline.
+//! Integration tests for entity extraction via the atomic ingest path.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
+use chrono::Utc;
 
-use uniko_extract::ner::EntityExtractionStep;
-use uniko_pipes::circuit_breaker::CircuitBreaker;
-use uniko_pipes::step::PipelineContext;
-use uniko_pipes::types::StepOutcome;
+use uniko_extract::ingest::atomic::ingest_message_atomic;
+use uniko_extract::ingest::context::SessionContext;
+use uniko_pipes::types::IngestMessage;
 use uniko_store::config::UnikoConfig;
 use uniko_store::storage::KnowledgeBase;
 use uniko_store::storage::edges::Direction;
 
-async fn test_kb() -> Arc<KnowledgeBase> {
-    Arc::new(
-        KnowledgeBase::in_memory(UnikoConfig::default())
-            .await
-            .expect("in-memory KB"),
-    )
+async fn test_kb() -> KnowledgeBase {
+    KnowledgeBase::in_memory(UnikoConfig::default())
+        .await
+        .expect("in-memory KB")
 }
 
-fn make_ctx(
-    kb: Arc<KnowledgeBase>,
-    node_id: i64,
-    content: &str,
-    content_type: &str,
-) -> PipelineContext {
-    PipelineContext::new(
-        node_id,
-        content.to_string(),
-        content_type.to_string(),
-        CancellationToken::new(),
-        kb,
-        Arc::new(CircuitBreaker::new(5, 60_000)),
-    )
+fn ingest_msg(id: &str, content: &str, content_type: &str, session: &str) -> IngestMessage {
+    IngestMessage {
+        message_id: id.into(),
+        content: content.into(),
+        content_type: content_type.into(),
+        sender_id: "tester".into(),
+        session_id: session.into(),
+        addressed_to: None,
+        timestamp: Utc::now(),
+        metadata: HashMap::new(),
+    }
 }
-
-async fn create_message(kb: &KnowledgeBase, content: &str) -> i64 {
-    let mut props = HashMap::new();
-    props.insert(
-        "message_id".into(),
-        uni_db::Value::String(uniko_store::id::new_id()),
-    );
-    props.insert("content".into(), uni_db::Value::String(content.into()));
-    props.insert("content_type".into(), uni_db::Value::String("text".into()));
-    props.insert(
-        "timestamp".into(),
-        uni_db::Value::String(chrono::Utc::now().to_rfc3339()),
-    );
-    kb.create_node("Message", &props).await.unwrap()
-}
-
-// ── Tests ───────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_entity_extraction_prose() {
     let kb = test_kb().await;
     let text = "I met Caroline Smith at https://example.com";
-    let node_id = create_message(&kb, text).await;
+    let msg = ingest_msg("m-prose", text, "text", "s-prose");
+    let mut session_ctx = SessionContext::new(msg.session_id.clone(), 0);
 
-    let step = EntityExtractionStep;
-    let mut ctx = make_ctx(kb.clone(), node_id, text, "text");
-
-    let outcome = uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
-    assert!(matches!(outcome, StepOutcome::Completed));
+    let result = ingest_message_atomic(&kb, &msg, &mut session_ctx)
+        .await
+        .expect("ingest");
     assert!(
-        !ctx.extracted_entities.is_empty(),
+        !result.extracted_entities.is_empty(),
         "should extract entities"
     );
 
     let edges = kb
-        .get_edges(node_id, "MENTIONS", Direction::Outgoing)
+        .get_edges(result.message_node_id, "MENTIONS", Direction::Outgoing)
         .await
         .unwrap();
     assert!(!edges.is_empty(), "MENTIONS edges should exist");
@@ -81,42 +56,46 @@ async fn test_entity_extraction_prose() {
 async fn test_entity_extraction_code() {
     let kb = test_kb().await;
     let code = "def process_order():\n    pass\n\nclass PaymentService:\n    pass\n";
-    let node_id = create_message(&kb, code).await;
-
-    let step = EntityExtractionStep;
-    let mut ctx = make_ctx(kb.clone(), node_id, code, "code");
-    ctx.metadata.insert(
+    let mut msg = ingest_msg("m-code", code, "code", "s-code");
+    msg.metadata.insert(
         "language".into(),
         serde_json::Value::String("python".into()),
     );
+    let mut session_ctx = SessionContext::new(msg.session_id.clone(), 0);
 
-    let outcome = uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
-    assert!(matches!(outcome, StepOutcome::Completed));
+    let result = ingest_message_atomic(&kb, &msg, &mut session_ctx)
+        .await
+        .expect("ingest");
     assert!(
-        ctx.extracted_entities.len() >= 2,
+        result.extracted_entities.len() >= 2,
         "should find process_order and PaymentService, got {}",
-        ctx.extracted_entities.len()
+        result.extracted_entities.len()
     );
 }
 
 #[tokio::test]
 async fn test_entity_dedup_existing() {
     let kb = test_kb().await;
-    let step = EntityExtractionStep;
+    let mut session_ctx = SessionContext::new("s-dedup".into(), 0);
 
-    // First message mentions "Caroline Smith".
-    let nid1 = create_message(&kb, "I met Caroline Smith today.").await;
-    let mut ctx1 = make_ctx(kb.clone(), nid1, "I met Caroline Smith today.", "text");
-    uniko_pipes::Step::execute(&step, &mut ctx1).await.unwrap();
+    let msg1 = ingest_msg(
+        "m-dedup-1",
+        "I met Caroline Smith today.",
+        "text",
+        "s-dedup",
+    );
+    ingest_message_atomic(&kb, &msg1, &mut session_ctx)
+        .await
+        .unwrap();
 
-    // Second message also mentions "Caroline Smith".
-    let nid2 = create_message(&kb, "Caroline Smith called me.").await;
-    let mut ctx2 = make_ctx(kb.clone(), nid2, "Caroline Smith called me.", "text");
-    uniko_pipes::Step::execute(&step, &mut ctx2).await.unwrap();
+    let mut msg2 = ingest_msg("m-dedup-2", "Caroline Smith called me.", "text", "s-dedup");
+    msg2.timestamp = msg1.timestamp + chrono::Duration::seconds(1);
+    let r2 = ingest_message_atomic(&kb, &msg2, &mut session_ctx)
+        .await
+        .unwrap();
 
-    // Both contexts should reference the same entity node IDs for "caroline smith".
-    // Verify via frequency: the Entity should have frequency >= 2.
-    for (eid, _name) in &ctx2.extracted_entities {
+    // Verify dedup: the Entity for "caroline smith" should have frequency >= 2.
+    for (eid, _name) in &r2.extracted_entities {
         let node = kb.get_node(*eid).await.unwrap();
         if let Some((_, props)) = node {
             let name = props.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -126,48 +105,30 @@ async fn test_entity_dedup_existing() {
                     freq >= 2,
                     "caroline smith frequency should be >= 2, got {freq}"
                 );
-                return; // Test passed.
+                return;
             }
         }
     }
-    // If we didn't find "caroline smith", that's OK — the test still passes
-    // as long as entities were extracted (rule-based may extract differently).
+    // If "caroline smith" wasn't extracted, the test still passes — rules
+    // may attribute differently.
 }
 
 #[tokio::test]
-async fn test_entity_extraction_empty_skips() {
-    let kb = test_kb().await;
-    let step = EntityExtractionStep;
-    let ctx = make_ctx(kb, 1, "", "text");
-    assert!(!uniko_pipes::Step::should_run(&step, &ctx));
-}
-
-#[tokio::test]
-async fn test_entity_extraction_node_id_zero_skips() {
-    let kb = test_kb().await;
-    let step = EntityExtractionStep;
-    let ctx = make_ctx(kb, 0, "Some content here.", "text");
-    assert!(!uniko_pipes::Step::should_run(&step, &ctx));
-}
-
-#[tokio::test]
-async fn test_step_populates_context() {
+async fn test_atomic_populates_entities() {
     let kb = test_kb().await;
     let content = "Visit https://rust-lang.org on January 15, 2024.";
-    let node_id = create_message(&kb, content).await;
+    let msg = ingest_msg("m-pop", content, "text", "s-pop");
+    let mut session_ctx = SessionContext::new(msg.session_id.clone(), 0);
 
-    let step = EntityExtractionStep;
-    let mut ctx = make_ctx(kb.clone(), node_id, content, "text");
-
-    uniko_pipes::Step::execute(&step, &mut ctx).await.unwrap();
-
+    let result = ingest_message_atomic(&kb, &msg, &mut session_ctx)
+        .await
+        .expect("ingest");
     assert!(
-        !ctx.extracted_entities.is_empty(),
+        !result.extracted_entities.is_empty(),
         "extracted_entities should be populated"
     );
 
-    // Each entity NodeId should point to a real Entity node.
-    for (eid, _name) in &ctx.extracted_entities {
+    for (eid, _name) in &result.extracted_entities {
         let node = kb.get_node(*eid).await.unwrap();
         assert!(node.is_some(), "entity node {eid} must exist");
         let (label, _) = node.unwrap();

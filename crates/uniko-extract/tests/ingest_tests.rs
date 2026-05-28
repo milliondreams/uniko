@@ -45,7 +45,7 @@ async fn test_ingest_message_creates_node_and_edges() {
     let kb = test_kb().await;
 
     let msg = test_message("m-1", "Hello world", "s-1", "p-1");
-    let result = uniko_extract::ingest::message::ingest_message(
+    let result = uniko_extract::ingest::atomic::ingest_message_atomic(
         &kb,
         &msg,
         &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0),
@@ -92,14 +92,14 @@ async fn test_ingest_message_idempotent() {
     let kb = test_kb().await;
 
     let msg = test_message("m-idem", "Same message", "s-1", "p-1");
-    let r1 = uniko_extract::ingest::message::ingest_message(
+    let r1 = uniko_extract::ingest::atomic::ingest_message_atomic(
         &kb,
         &msg,
         &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0),
     )
     .await
     .unwrap();
-    let r2 = uniko_extract::ingest::message::ingest_message(
+    let r2 = uniko_extract::ingest::atomic::ingest_message_atomic(
         &kb,
         &msg,
         &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0),
@@ -125,9 +125,10 @@ async fn test_ingest_message_next_chain() {
             "p-1",
         );
         msg.timestamp = Utc::now() + chrono::Duration::milliseconds(i * 100);
-        let result = uniko_extract::ingest::message::ingest_message(&kb, &msg, &mut session_ctx)
-            .await
-            .unwrap();
+        let result =
+            uniko_extract::ingest::atomic::ingest_message_atomic(&kb, &msg, &mut session_ctx)
+                .await
+                .unwrap();
         node_ids.push(result.message_node_id);
     }
 
@@ -153,7 +154,7 @@ async fn test_ingest_message_long_content_chunked() {
     // Create content exceeding the 1024-token threshold.
     let long_content = "This is a test sentence for chunking purposes. ".repeat(200);
     let msg = test_message("m-long", &long_content, "s-long", "p-1");
-    let result = uniko_extract::ingest::message::ingest_message(
+    let result = uniko_extract::ingest::atomic::ingest_message_atomic(
         &kb,
         &msg,
         &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0),
@@ -183,7 +184,7 @@ async fn test_ingest_message_short_no_chunks() {
     let kb = test_kb().await;
 
     let msg = test_message("m-short", "Short", "s-short", "p-1");
-    let result = uniko_extract::ingest::message::ingest_message(
+    let result = uniko_extract::ingest::atomic::ingest_message_atomic(
         &kb,
         &msg,
         &mut uniko_extract::ingest::context::SessionContext::new(msg.session_id.clone(), 0),

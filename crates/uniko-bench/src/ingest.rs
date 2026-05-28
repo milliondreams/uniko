@@ -10,16 +10,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use tokio_util::sync::CancellationToken;
-use uniko_pipes::Step;
 
 use uni_db::ModelAliasSpec;
 use uniko_extract::ingest::artifact::ingest_artifact;
-use uniko_extract::ingest::message::ingest_message;
-use uniko_extract::ner::EntityExtractionStep;
-use uniko_extract::observations::ObservationExtractionStep;
-use uniko_pipes::circuit_breaker::CircuitBreaker;
-use uniko_pipes::step::PipelineContext;
+use uniko_extract::ingest::atomic::ingest_message_atomic;
 use uniko_pipes::types::{IngestArtifact, IngestMessage};
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
@@ -102,9 +96,9 @@ pub async fn ingest_conversation_with_observer(
 ///
 /// The KB-lifecycle-free entry point: callers (the bench's
 /// `ingest_conversation` wrapper, or a future HTTP `/memorize`
-/// handler) can share the per-turn pipeline (`ingest_message` →
-/// entity extraction → observation extraction → session chunking)
-/// without re-opening the KB.
+/// handler) can share the per-turn atomic ingest (Message + entities +
+/// observations under one transaction) + session chunking without
+/// re-opening the KB.
 ///
 /// # Errors
 ///
@@ -133,11 +127,6 @@ pub async fn ingest_into_kb_with_observer(
     sessions: &[ParsedSession],
     observer: &IngestObserver<'_>,
 ) -> Result<()> {
-    let breaker = Arc::new(CircuitBreaker::new(5, 60_000));
-    let cancel = CancellationToken::new();
-    let entity_step = EntityExtractionStep;
-    let obs_step = ObservationExtractionStep;
-
     let mut total_turns = 0u32;
     let mut total_entities = 0usize;
     let mut total_observations = 0usize;
@@ -147,7 +136,7 @@ pub async fn ingest_into_kb_with_observer(
         let base_ts = parse_session_datetime(&session.date_time);
 
         // Create session-level context for pronoun resolution.
-        // session_nid is resolved during the first ingest_message call.
+        // session_nid is resolved during the first ingest call.
         let mut session_ctx = uniko_extract::ingest::context::SessionContext::new(
             session.session_id.clone(),
             0, // will be set after first ingest
@@ -197,12 +186,18 @@ pub async fn ingest_into_kb_with_observer(
                 metadata: HashMap::new(),
             };
 
-            let turn_start = std::time::Instant::now();
-
-            // Ingest the message (creates node, edges, chunks).
-            let result = ingest_message(kb, &msg, &mut session_ctx)
+            // Atomic ingest: Message + entities + observations in one tx.
+            // NOTE: extraction now runs on the same enriched `content` as
+            // the Message node (captions + query appended). Pre-migration
+            // this path ran extraction on `turn.text` only — the
+            // "captions confuse ONNX NER" workaround is no longer reachable
+            // with a single-content atomic API.
+            let result = ingest_message_atomic(kb, &msg, &mut session_ctx)
                 .await
                 .with_context(|| format!("ingesting {}", turn.dia_id))?;
+
+            total_entities += result.extracted_entities.len();
+            total_observations += result.extracted_observations.len();
 
             // Create Artifact node for image turns.
             // TODO(uni-db#50): Store actual image bytes in a blob field once
@@ -233,46 +228,20 @@ pub async fn ingest_into_kb_with_observer(
                 }
             }
 
-            let ingest_ms = turn_start.elapsed().as_millis();
-
-            // Run entity/observation extraction on the original text only —
-            // appended captions confuse the ONNX NER model.
-            let mut ctx = PipelineContext::new(
-                result.message_node_id,
-                turn.text.clone(),
-                "text".to_string(),
-                cancel.clone(),
-                kb.clone(),
-                breaker.clone(),
-            );
-            ctx.metadata.insert(
-                "timestamp".into(),
-                serde_json::Value::String(timestamp.to_rfc3339()),
-            );
-            // Pass session context for pronoun resolution.
-            if let Ok(val) = serde_json::to_value(&session_ctx) {
-                ctx.metadata.insert("session_context".into(), val);
-            }
-
-            let ner_start = std::time::Instant::now();
-            let _ = entity_step.execute(&mut ctx).await;
-            let ner_ms = ner_start.elapsed().as_millis();
-            total_entities += ctx.extracted_entities.len();
-
-            // Run observation extraction on the same context.
-            let obs_start = std::time::Instant::now();
-            let _ = obs_step.execute(&mut ctx).await;
-            let obs_ms = obs_start.elapsed().as_millis();
-            total_observations += ctx.extracted_observations.len();
-
-            // Read back updated sentence context for pronoun resolution.
-            if let Some(updated) = ctx.metadata.get("sentence_ctx_updated")
-                && let Ok(sent_ctx) = serde_json::from_value::<
-                    uniko_extract::ingest::context::SentenceContext,
-                >(updated.clone())
-            {
-                session_ctx.sentence_ctx = sent_ctx;
-            }
+            // Derived sub-timings from the atomic timings — preserve the
+            // legacy 3-bucket telemetry shape (ingest / ner / obs) so
+            // downstream dashboards keep working.
+            let timings = result.timings;
+            let ingest_ms = (timings.setup_ms
+                + timings.create_ms
+                + timings.edges_ms
+                + timings.chunk_ms
+                + timings.commit_ms) as u128;
+            let ner_ms = (timings.nlp_ms
+                + timings.extract_ms
+                + timings.prep_read_ms
+                + timings.apply_entity_ms) as u128;
+            let obs_ms = timings.apply_obs_ms;
 
             total_turns += 1;
 
@@ -284,14 +253,14 @@ pub async fn ingest_into_kb_with_observer(
                     ingest_ms,
                     ner_ms,
                     obs_ms,
-                    entities = ctx.extracted_entities.len(),
-                    observations = ctx.extracted_observations.len(),
+                    entities = result.extracted_entities.len(),
+                    observations = result.extracted_observations.len(),
                     "turn processed",
                 );
             }
 
             if let Some(writer) = observer.events {
-                let wall_ms = (ingest_ms + ner_ms + obs_ms) as u64;
+                let wall_ms = timings.total_ms as u64;
                 // Char-count proxy for embedding tokens (chars/4 ≈
                 // tokens).  Real provider usage is unavailable because
                 // uni-db's xervo.embed() does not surface the
