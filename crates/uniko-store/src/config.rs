@@ -218,6 +218,28 @@ impl EmbeddingConfig {
             })),
         }
     }
+
+    /// Look up a preset by short name.  Centralised here so bench /
+    /// CLI tools don't each maintain their own `match` over the
+    /// preset list.  Accepts a few aliases for the longer names.
+    ///
+    /// Returns `None` for unknown names — callers print their own
+    /// "expected: …" error so users see the canonical list.
+    #[must_use]
+    pub fn preset(name: &str) -> Option<Self> {
+        Some(match name {
+            "nomic" => Self::nomic_v15(),
+            "nomic-q" | "nomic-quantized" => Self::nomic_v15_quantized(),
+            "minilm" => Self::minilm_l6_v2(),
+            "bge-small" => Self::bge_small_en_v15(),
+            "bge-large" => Self::bge_large_en_v15(),
+            "embeddinggemma" | "gemma" => Self::embedding_gemma_300m(),
+            "embeddinggemma-mistralrs" | "gemma-mistralrs" => {
+                Self::embedding_gemma_300m_mistralrs()
+            }
+            _ => return None,
+        })
+    }
 }
 
 /// NLP cascade model selection.
@@ -305,62 +327,6 @@ pub struct RerankerConfig {
 
 fn default_reranker_style() -> String {
     "cross-encoder".to_string()
-}
-
-fn default_rrf_k() -> f64 {
-    60.0
-}
-
-fn default_nlp_srl_enabled() -> bool {
-    true
-}
-
-fn default_phase1_strategy() -> String {
-    // `boost` validated 2026-05-14 to beat `merge` by +0.5pts overall
-    // and +0.9pts on Multi-hop on conv-26+conv-30 with reranker on,
-    // `recall_limit=15`, `reranker_top_n=50`.  Boost only takes effect
-    // when `recall_limit < reranker_top_n` so its session-level Fact
-    // boosts can push chunks above the truncation cutoff.
-    "boost".to_string()
-}
-
-fn default_phase2_mmr_lambda() -> f64 {
-    0.7
-}
-
-fn default_phase2_mmr_duplicate_threshold() -> f64 {
-    0.85
-}
-
-fn default_phase2_temporal_enabled() -> bool {
-    true
-}
-
-fn default_phase2_graph_enabled() -> bool {
-    true
-}
-
-fn default_consolidation_cluster_objects() -> bool {
-    true
-}
-
-fn default_consolidation_date_augment_embedding() -> bool {
-    true
-}
-
-fn default_phase2_graph_damping() -> f64 {
-    0.85
-}
-
-fn default_phase2_graph_max_iter() -> usize {
-    30
-}
-
-fn default_phase1_boost_alpha() -> f64 {
-    // Validated 2026-05-14: α=0.6 with `recall_limit=15`,
-    // `reranker_top_n=50`, `phase1_strategy=boost` ties or beats α=0.3
-    // on every category in conv-26+conv-30, no regressions.
-    0.6
 }
 
 impl RerankerConfig {
@@ -528,6 +494,7 @@ impl VectorMetricChoice {
 ///
 /// Default values match the uniko specification v6.0 exactly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UnikoConfig {
     // External configuration files
     /// Path to xervo model catalog JSON. When set, models are loaded from
@@ -613,7 +580,6 @@ pub struct UnikoConfig {
     /// behaves exactly as before. Default `true` so the model's SRL
     /// head is actually used; flip to `false` if profiling shows the
     /// per-verb re-forward cost is unacceptable for a given workload.
-    #[serde(default = "default_nlp_srl_enabled")]
     pub nlp_srl_enabled: bool,
 
     // Recall parameters
@@ -636,7 +602,6 @@ pub struct UnikoConfig {
     pub query_variants: Vec<String>,
     /// `k` constant for reciprocal rank fusion across query variants.
     /// Higher values flatten the weight given to top ranks.
-    #[serde(default = "default_rrf_k")]
     pub rrf_k: f64,
     /// LIMIT applied to each per-variant Cypher query. `None` means
     /// "use `recall_limit`" (the recall layer falls back to it). Set
@@ -648,11 +613,9 @@ pub struct UnikoConfig {
     /// `boost`, or `off`.  See `uniko_memory::recall::Phase1Strategy`.
     /// Stored as a string so deserialised configs stay compatible
     /// across feature flags.
-    #[serde(default = "default_phase1_strategy")]
     pub phase1_strategy: String,
     /// Multiplicative weight for Fact scores when computing the
     /// session-chunk boost under `phase1_strategy = "boost"`.
-    #[serde(default = "default_phase1_boost_alpha")]
     pub phase1_boost_alpha: f64,
 
     // Memory decay
@@ -669,28 +632,22 @@ pub struct UnikoConfig {
     /// MMR lambda (relevance vs diversity) for Phase 2 deduplication.
     /// `1.0` = pure relevance order; `0.0` = pure diversity.  Spec §IX
     /// default: 0.7.
-    #[serde(default = "default_phase2_mmr_lambda")]
     pub phase2_mmr_lambda: f64,
     /// Token-overlap threshold above which a Phase 2 candidate is
     /// dropped as a hard duplicate.  Spec §IX uses cosine > 0.85;
     /// without per-item embeddings we apply the same number to Jaccard
     /// overlap.
-    #[serde(default = "default_phase2_mmr_duplicate_threshold")]
     pub phase2_mmr_duplicate_threshold: f64,
 
     /// Enable the temporal-interval channel in Phase 2 recall.  Fires
     /// only when the query has a parsed temporal phrase.
-    #[serde(default = "default_phase2_temporal_enabled")]
     pub phase2_temporal_enabled: bool,
     /// Enable the graph spreading-activation channel in Phase 2.  Fires
     /// only when the query has at least one resolvable entity seed.
-    #[serde(default = "default_phase2_graph_enabled")]
     pub phase2_graph_enabled: bool,
     /// PPR damping factor for the graph channel.  Standard 0.85.
-    #[serde(default = "default_phase2_graph_damping")]
     pub phase2_graph_damping: f64,
     /// PPR power-iteration cap for the graph channel.
-    #[serde(default = "default_phase2_graph_max_iter")]
     pub phase2_graph_max_iter: usize,
     /// Per-edge-type weight multipliers for graph propagation.  Empty
     /// map means "use the built-in defaults" (see
@@ -703,7 +660,6 @@ pub struct UnikoConfig {
     /// phrasings ("adoption agency" / "adoption agencies") collapse
     /// into one vote bucket before mode-voting picks the canonical.
     /// When `false`, fall back to legacy exact-string bucketing.
-    #[serde(default = "default_consolidation_cluster_objects")]
     pub consolidation_cluster_objects: bool,
 
     /// Prepend a human-readable month-year prefix (e.g. `"January 2024"`)
@@ -713,7 +669,6 @@ pub struct UnikoConfig {
     /// Asymmetric on purpose: queries are not augmented, since uniko's
     /// Phase-2 temporal channel already handles query-side temporal
     /// cues via BTIC overlap.
-    #[serde(default = "default_consolidation_date_augment_embedding")]
     pub consolidation_date_augment_embedding: bool,
 }
 
@@ -751,25 +706,33 @@ impl Default for UnikoConfig {
             recall_min_score: 0.001,
             recall_vector_weight: 0.5,
             recall_bm25_weight: 0.5,
-            nlp_srl_enabled: default_nlp_srl_enabled(),
+            nlp_srl_enabled: true,
             query_variants: Vec::new(),
-            rrf_k: default_rrf_k(),
+            rrf_k: 60.0,
             recall_per_variant_limit: None,
-            phase1_strategy: default_phase1_strategy(),
-            phase1_boost_alpha: default_phase1_boost_alpha(),
+            // `boost` validated 2026-05-14 to beat `merge` by +0.5pts overall
+            // and +0.9pts on Multi-hop on conv-26+conv-30 with reranker on,
+            // `recall_limit=15`, `reranker_top_n=50`.  Boost only takes effect
+            // when `recall_limit < reranker_top_n` so its session-level Fact
+            // boosts can push chunks above the truncation cutoff.
+            phase1_strategy: "boost".to_string(),
+            // Validated 2026-05-14: α=0.6 with `recall_limit=15`,
+            // `reranker_top_n=50`, `phase1_strategy=boost` ties or beats α=0.3
+            // on every category in conv-26+conv-30, no regressions.
+            phase1_boost_alpha: 0.6,
             half_life_days: 30.0,
             prune_below: 0.05,
             phase1_coverage_threshold: 0.75,
             phase2_coverage_threshold: 0.65,
-            phase2_mmr_lambda: default_phase2_mmr_lambda(),
-            phase2_mmr_duplicate_threshold: default_phase2_mmr_duplicate_threshold(),
-            phase2_temporal_enabled: default_phase2_temporal_enabled(),
-            phase2_graph_enabled: default_phase2_graph_enabled(),
-            phase2_graph_damping: default_phase2_graph_damping(),
-            phase2_graph_max_iter: default_phase2_graph_max_iter(),
+            phase2_mmr_lambda: 0.7,
+            phase2_mmr_duplicate_threshold: 0.85,
+            phase2_temporal_enabled: true,
+            phase2_graph_enabled: true,
+            phase2_graph_damping: 0.85,
+            phase2_graph_max_iter: 30,
             phase2_graph_edge_weights: std::collections::HashMap::new(),
-            consolidation_cluster_objects: default_consolidation_cluster_objects(),
-            consolidation_date_augment_embedding: default_consolidation_date_augment_embedding(),
+            consolidation_cluster_objects: true,
+            consolidation_date_augment_embedding: true,
         }
     }
 }
@@ -847,6 +810,35 @@ impl UnikoConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_json_deserialises_to_default() {
+        // The struct-level `#[serde(default)]` means an empty JSON
+        // object must yield the same value as `Default::default()`.
+        // Catches accidental removal of either the attribute or the
+        // `impl Default` field that would otherwise default to
+        // zero/empty under serde's per-field fallback.
+        let parsed: UnikoConfig = serde_json::from_str("{}").expect("empty {} parses");
+        let expected = UnikoConfig::default();
+        assert_eq!(parsed.phase1_strategy, expected.phase1_strategy);
+        assert_eq!(parsed.phase1_boost_alpha, expected.phase1_boost_alpha);
+        assert_eq!(parsed.rrf_k, expected.rrf_k);
+        assert_eq!(parsed.phase2_mmr_lambda, expected.phase2_mmr_lambda);
+        assert_eq!(parsed.nlp_srl_enabled, expected.nlp_srl_enabled);
+        assert_eq!(parsed.phase2_temporal_enabled, expected.phase2_temporal_enabled);
+        assert_eq!(parsed.phase2_graph_enabled, expected.phase2_graph_enabled);
+        assert_eq!(parsed.phase2_graph_damping, expected.phase2_graph_damping);
+        assert_eq!(parsed.phase2_graph_max_iter, expected.phase2_graph_max_iter);
+        assert_eq!(
+            parsed.consolidation_cluster_objects,
+            expected.consolidation_cluster_objects,
+        );
+        assert_eq!(
+            parsed.consolidation_date_augment_embedding,
+            expected.consolidation_date_augment_embedding,
+        );
+        assert_eq!(parsed.recall_limit, expected.recall_limit);
+    }
 
     #[test]
     fn test_config_defaults() {

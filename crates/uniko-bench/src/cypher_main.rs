@@ -119,15 +119,13 @@ async fn main() -> Result<()> {
         schema_path: cli.schema.clone(),
         ..Default::default()
     };
-    config.embedding = match cli.embedding.as_str() {
-        "nomic" => uniko_store::config::EmbeddingConfig::nomic_v15(),
-        "minilm" => uniko_store::config::EmbeddingConfig::minilm_l6_v2(),
-        "bge-small" => uniko_store::config::EmbeddingConfig::bge_small_en_v15(),
-        "bge-large" => uniko_store::config::EmbeddingConfig::bge_large_en_v15(),
-        other => anyhow::bail!(
-            "unknown --embedding preset {other:?}; expected one of: nomic, minilm, bge-small, bge-large"
-        ),
-    };
+    config.embedding = uniko_store::config::EmbeddingConfig::preset(&cli.embedding)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown --embedding preset {:?}; expected one of: nomic, minilm, bge-small, bge-large",
+                cli.embedding,
+            )
+        })?;
 
     let kb = if cli.prefetch {
         KnowledgeBase::open_with_xervo(&cli.kb, config, Vec::<ModelAliasSpec>::new()).await

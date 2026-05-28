@@ -322,20 +322,12 @@ impl BenchConfig {
     pub fn resolve_embedder(&self) -> Result<EmbeddingConfig> {
         match &self.models.embedder {
             EmbedderChoice::Inline { inline } => Ok(inline.clone()),
-            EmbedderChoice::Preset { preset } => match preset.as_str() {
-                "nomic" => Ok(EmbeddingConfig::nomic_v15()),
-                "minilm" => Ok(EmbeddingConfig::minilm_l6_v2()),
-                "bge-small" => Ok(EmbeddingConfig::bge_small_en_v15()),
-                "bge-large" => Ok(EmbeddingConfig::bge_large_en_v15()),
-                "embeddinggemma" | "gemma" => Ok(EmbeddingConfig::embedding_gemma_300m()),
-                "embeddinggemma-mistralrs" | "gemma-mistralrs" => {
-                    Ok(EmbeddingConfig::embedding_gemma_300m_mistralrs())
-                }
-                other => anyhow::bail!(
-                    "unknown embedder preset {other:?}; expected one of: nomic, minilm, \
+            EmbedderChoice::Preset { preset } => EmbeddingConfig::preset(preset).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown embedder preset {preset:?}; expected one of: nomic, minilm, \
                      bge-small, bge-large, embeddinggemma, embeddinggemma-mistralrs"
-                ),
-            },
+                )
+            }),
         }
     }
 
