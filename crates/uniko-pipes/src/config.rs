@@ -13,8 +13,6 @@ pub struct PipelineConfig {
     pub ingest_concurrency: usize,
     /// Bounded channel capacity for consolidation tasks.
     pub consolidation_queue_capacity: usize,
-    /// Maximum concurrent consolidation cycles.
-    pub consolidation_concurrency: usize,
     /// Observation count that triggers consolidation for an agent.
     pub consolidation_threshold: u32,
     /// Seconds between periodic consolidation sweeps.
@@ -51,7 +49,6 @@ impl Default for PipelineConfig {
             ingest_queue_capacity: 200,
             ingest_concurrency: 8,
             consolidation_queue_capacity: 32,
-            consolidation_concurrency: 4,
             consolidation_threshold: 20,
             consolidation_interval_secs: 900,
             consolidation_batch_size: 500,
