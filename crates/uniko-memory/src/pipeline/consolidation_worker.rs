@@ -134,7 +134,11 @@ impl ConsolidationWorker {
                         .map(|(agent_id, _)| agent_id.clone())
                         .collect();
                     for agent_id in agents {
-                        self.agent_counters.insert(agent_id.clone(), 0);
+                        // Reset the counter on the same owned string we
+                        // already have rather than cloning again.
+                        if let Some(c) = self.agent_counters.get_mut(&agent_id) {
+                            *c = 0;
+                        }
                         self.run_consolidation_cycle(&agent_id).await;
                     }
                 }
