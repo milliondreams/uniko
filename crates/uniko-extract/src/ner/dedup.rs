@@ -84,15 +84,10 @@ pub async fn upsert_entities(
     let phase_start = std::time::Instant::now();
     let prep = prepare_entity_upsert(kb, deduped).await?;
     let session = kb.db().session();
-    let tx = session
-        .tx()
-        .await
-        .map_err(|err| UnikoError::Storage(err.to_string()))?;
+    let tx = session.tx().await?;
     let matches = apply_entity_upsert(kb, &tx, source_node_id, prep).await?;
     let commit_start = std::time::Instant::now();
-    tx.commit()
-        .await
-        .map_err(|err| UnikoError::Storage(err.to_string()))?;
+    tx.commit().await?;
     let commit_ms = commit_start.elapsed().as_millis() as u64;
     let total_ms = phase_start.elapsed().as_millis() as u64;
     tracing::info!(commit_ms, "dedup commit");
@@ -138,23 +133,14 @@ pub async fn prepare_entity_upsert(
             .query_with(match_cypher)
             .param("eids", Value::List(eids_list))
             .fetch_all()
-            .await
-            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+            .await?;
         let mut existing: HashMap<String, (NodeId, i64, f64)> =
             HashMap::with_capacity(match_result.rows().len());
         for row in match_result.rows() {
-            let entity_id: String = row
-                .get("entity_id")
-                .map_err(|err| UnikoError::Storage(err.to_string()))?;
-            let nid: i64 = row
-                .get("nid")
-                .map_err(|err| UnikoError::Storage(err.to_string()))?;
-            let frequency: i64 = row
-                .get("frequency")
-                .map_err(|err| UnikoError::Storage(err.to_string()))?;
-            let confidence: f64 = row
-                .get("confidence")
-                .map_err(|err| UnikoError::Storage(err.to_string()))?;
+            let entity_id: String = row.get("entity_id")?;
+            let nid: i64 = row.get("nid")?;
+            let frequency: i64 = row.get("frequency")?;
+            let confidence: f64 = row.get("confidence")?;
             existing.insert(entity_id, (nid, frequency, confidence));
         }
         existing
@@ -306,8 +292,7 @@ pub async fn apply_entity_upsert(
             .param("updates", Value::List(updates_list))
             .param("now", now_value)
             .run()
-            .await
-            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+            .await?;
     }
     let phase3_update_ms = phase3_start.elapsed().as_millis();
 

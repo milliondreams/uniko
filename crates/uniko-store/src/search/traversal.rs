@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::error::{Result, UnikoError};
+use crate::error::Result;
 use crate::storage::KnowledgeBase;
 use crate::storage::edges::Direction;
 use crate::types::{EdgeId, NodeId};
@@ -99,17 +99,12 @@ impl KnowledgeBase {
             .query_with(&cypher)
             .param("sid", start)
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let mut nodes = Vec::with_capacity(result.len());
         for row in result.rows() {
-            let tid: i64 = row
-                .get("tid")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
-            let node: uni_db::Node = row
-                .get("t")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let tid: i64 = row.get("tid")?;
+            let node: uni_db::Node = row.get("t")?;
             let label = node.labels.into_iter().next().unwrap_or_default();
             nodes.push(TraversalResult {
                 node_id: tid,
@@ -233,20 +228,15 @@ impl KnowledgeBase {
         let session = self.db.session();
         let result = session
             .query("MATCH (a)-[r]->(b) RETURN id(a) AS src, id(b) AS dst, type(r) AS etype")
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         // Build weighted adjacency: src -> [(dst, weight), ...]
         let mut out_edges: HashMap<NodeId, Vec<(NodeId, f64)>> = HashMap::new();
         let mut all_nodes: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
 
         for row in result.rows() {
-            let src: i64 = row
-                .get("src")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
-            let dst: i64 = row
-                .get("dst")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let src: i64 = row.get("src")?;
+            let dst: i64 = row.get("dst")?;
             let etype: String = row.get("etype").unwrap_or_default();
             let w = edge_weights
                 .and_then(|m| m.get(&etype).copied())

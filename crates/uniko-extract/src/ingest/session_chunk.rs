@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+use uniko_store::{KnowledgeBase, NodeId};
 
 use super::chunking::text::TextChunker;
 use super::chunking::{ChunkConfig, ChunkData, Chunker};
@@ -75,8 +75,7 @@ pub async fn chunk_session(
         .query_with(cypher)
         .param("sid", session_id)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     if result.is_empty() {
         tracing::debug!(session_id, "no messages in session");
@@ -186,8 +185,7 @@ pub async fn chunk_session_observations(
         .query_with(check_cypher)
         .param("sid", session_id)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
     if !check.is_empty() {
         tracing::debug!(
             session_id,
@@ -213,8 +211,7 @@ pub async fn chunk_session_observations(
         .query_with(cypher)
         .param("sid", session_id)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     if result.is_empty() {
         tracing::debug!(session_id, "no observations in session");
@@ -290,8 +287,7 @@ pub async fn chunk_session_observations(
         .query_with(entity_cypher)
         .param("sid", session_id)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let entity_nids: Vec<NodeId> = entity_result
         .rows()
@@ -339,8 +335,7 @@ pub async fn chunk_session_observations(
         .query_with(participant_cypher)
         .param("sid", session_id)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
     let participant_nids: Vec<NodeId> = participant_result
         .rows()
         .iter()

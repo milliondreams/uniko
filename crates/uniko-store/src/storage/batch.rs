@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use uni_db::{Transaction, Value, Vid};
 
 use super::{KnowledgeBase, validate_edge_type, validate_label, validate_property_name};
-use crate::error::{Result, UnikoError};
+use crate::error::Result;
 use crate::types::{EdgeId, NodeId};
 
 impl KnowledgeBase {
@@ -34,14 +34,9 @@ impl KnowledgeBase {
             return Ok(Vec::new());
         }
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let node_ids = self.batch_create_nodes_in_tx(&tx, label, items).await?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        tx.commit().await?;
         Ok(node_ids)
     }
 
@@ -85,10 +80,7 @@ impl KnowledgeBase {
         // semantics are preserved.
         let t_start = std::time::Instant::now();
         let properties_list: Vec<HashMap<String, Value>> = items.to_vec();
-        let vids = tx
-            .bulk_insert_vertices(label, properties_list)
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let vids = tx.bulk_insert_vertices(label, properties_list).await?;
         let t_query = t_start.elapsed().as_micros() as u64;
         let node_ids: Vec<NodeId> = vids.iter().map(|v| v.as_u64() as i64).collect();
 
@@ -196,16 +188,11 @@ impl KnowledgeBase {
             return Ok(Vec::new());
         }
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let edge_ids = self
             .batch_create_edges_inner_in_tx(&tx, edge_type, src_label, dst_label, edges, return_ids)
             .await?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        tx.commit().await?;
         Ok(edge_ids)
     }
 
@@ -247,9 +234,7 @@ impl KnowledgeBase {
                     (Vid::new(*s as u64), Vid::new(*d as u64), props.clone())
                 })
                 .collect();
-            tx.bulk_insert_edges(edge_type, bulk_edges)
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            tx.bulk_insert_edges(edge_type, bulk_edges).await?;
             let t_query = t_start.elapsed().as_micros();
             tracing::debug!(
                 edge_type,
@@ -327,13 +312,10 @@ impl KnowledgeBase {
             .query_with(&cypher)
             .param("edges", Value::List(list))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         let mut edge_ids = Vec::with_capacity(edges.len());
         for row in result.rows() {
-            let eid: i64 = row
-                .get("eid")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let eid: i64 = row.get("eid")?;
             edge_ids.push(eid);
         }
         let metrics = result.metrics().clone();

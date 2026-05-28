@@ -98,19 +98,13 @@ impl KnowledgeBase {
             .query_with("MATCH (c:ArtifactContent {content_id: $cid}) RETURN id(c) AS vid LIMIT 1")
             .param("cid", Value::String(spec.content_id.clone()))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         if let Some(row) = existing.rows().first() {
-            let vid: i64 = row
-                .get("vid")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let vid: i64 = row.get("vid")?;
             return Ok(vid);
         }
 
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
 
         let now = Utc::now();
         let result = tx
@@ -138,18 +132,13 @@ impl KnowledgeBase {
             )
             .param("created_at", datetime_value(now))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         let row = result
             .rows()
             .first()
             .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
-        let vid: i64 = row
-            .get("vid")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let vid: i64 = row.get("vid")?;
+        tx.commit().await?;
         Ok(vid)
     }
 
@@ -169,8 +158,7 @@ impl KnowledgeBase {
             )
             .param("cid", Value::String(content_id.to_string()))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         let row = result.rows().first().ok_or_else(|| {
             UnikoError::Storage(format!("no :ArtifactContent for content_id={content_id}"))
         })?;

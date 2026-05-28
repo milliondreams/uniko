@@ -277,11 +277,7 @@ async fn fetch_lifecycle_rules(kb: &KnowledgeBase) -> Result<Vec<RuleSnapshot>, 
                          coalesce(r.confidence, 0.5) AS conf, \
                          coalesce(r.missed_cycles, 0) AS mc, \
                          r.last_scored_at AS lsa";
-    let result = session
-        .query_with(cypher)
-        .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+    let result = session.query_with(cypher).fetch_all().await?;
 
     let mut out = Vec::new();
     for row in result.rows() {
@@ -323,16 +319,13 @@ async fn fetch_rule_by_name(kb: &KnowledgeBase, name: &str) -> Result<RuleSnapsh
         .query_with(cypher)
         .param("n", name)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
     let row = result
         .rows()
         .first()
         .ok_or_else(|| UnikoError::Storage(format!("rule '{name}' not found")))?;
     Ok(RuleSnapshot {
-        node_id: row
-            .get("nid")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?,
+        node_id: row.get("nid")?,
         name: row.get("name").unwrap_or_default(),
         source_type: row.get("st").unwrap_or_else(|_| "authored".into()),
         status: row

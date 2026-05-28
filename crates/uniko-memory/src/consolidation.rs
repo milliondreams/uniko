@@ -795,8 +795,7 @@ async fn fetch_unprocessed_observations(
         .query_with(cypher)
         .param("lim", limit)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut out: Vec<UnprocessedObs> = Vec::with_capacity(result.rows().len());
     for row in result.rows() {

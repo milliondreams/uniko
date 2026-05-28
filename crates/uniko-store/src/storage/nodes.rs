@@ -29,14 +29,9 @@ impl KnowledgeBase {
         properties: &HashMap<String, Value>,
     ) -> Result<NodeId> {
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let vid = self.create_node_in_tx(&tx, label, properties).await?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        tx.commit().await?;
         Ok(vid)
     }
 
@@ -78,10 +73,7 @@ impl KnowledgeBase {
         let bind_us = t.elapsed().as_micros() as u64;
 
         let t = std::time::Instant::now();
-        let result = qb
-            .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let result = qb.fetch_all().await?;
         let fetch_us = t.elapsed().as_micros() as u64;
 
         let t = std::time::Instant::now();
@@ -89,9 +81,7 @@ impl KnowledgeBase {
             .rows()
             .first()
             .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
-        let vid: i64 = row
-            .get("vid")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let vid: i64 = row.get("vid")?;
         let extract_us = t.elapsed().as_micros() as u64;
 
         // uni-db reports its own internal split via QueryMetrics on the
@@ -135,15 +125,12 @@ impl KnowledgeBase {
             .query_with("MATCH (n) WHERE id(n) = $vid RETURN n")
             .param("vid", node_id)
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         match result.rows().first() {
             None => Ok(None),
             Some(row) => {
-                let node: uni_db::Node = row
-                    .get("n")
-                    .map_err(|e| UnikoError::Storage(e.to_string()))?;
+                let node: uni_db::Node = row.get("n")?;
                 let label = node.labels.into_iter().next().unwrap_or_default();
                 Ok(Some((label, node.properties)))
             }
@@ -173,18 +160,13 @@ impl KnowledgeBase {
             .query_with(&cypher)
             .param("eid", ext_id)
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         match result.rows().first() {
             None => Ok(None),
             Some(row) => {
-                let vid: i64 = row
-                    .get("vid")
-                    .map_err(|e| UnikoError::Storage(e.to_string()))?;
-                let node: uni_db::Node = row
-                    .get("n")
-                    .map_err(|e| UnikoError::Storage(e.to_string()))?;
+                let vid: i64 = row.get("vid")?;
+                let node: uni_db::Node = row.get("n")?;
                 Ok(Some((vid, node.properties)))
             }
         }
@@ -210,22 +192,15 @@ impl KnowledgeBase {
         let cypher = format!("MATCH (n) WHERE id(n) = $vid {set_clause}");
 
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
 
         let mut qb = tx.execute_with(&cypher);
         qb = qb.param("vid", node_id);
         for (k, v) in &params {
             qb = qb.param(k.as_str(), v.clone());
         }
-        qb.run()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        qb.run().await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -238,19 +213,13 @@ impl KnowledgeBase {
     /// Returns [`UnikoError::Storage`] on database failure.
     pub async fn delete_node(&self, node_id: NodeId) -> Result<bool> {
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let result = tx
             .execute_with("MATCH (n) WHERE id(n) = $vid DETACH DELETE n")
             .param("vid", node_id)
             .run()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
+        tx.commit().await?;
         Ok(result.nodes_deleted() > 0)
     }
 
@@ -326,19 +295,12 @@ impl KnowledgeBase {
         for (k, v) in &all_params {
             qb = qb.param(k.as_str(), v.clone());
         }
-        let result = qb
-            .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let result = qb.fetch_all().await?;
 
         let mut nodes = Vec::with_capacity(result.len());
         for row in result.rows() {
-            let vid: i64 = row
-                .get("vid")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
-            let node: uni_db::Node = row
-                .get("n")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let vid: i64 = row.get("vid")?;
+            let node: uni_db::Node = row.get("n")?;
             nodes.push((vid, node.properties));
         }
         Ok(nodes)

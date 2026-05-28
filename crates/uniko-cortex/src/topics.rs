@@ -175,11 +175,7 @@ async fn fetch_entities(kb: &KnowledgeBase) -> Result<Vec<EntityRow>, UnikoError
                   RETURN id(e) AS nid, e.entity_id AS eid, e.name AS name, \
                          coalesce(e.entity_type, '') AS etype, \
                          e.embedding AS emb";
-    let result = session
-        .query_with(cypher)
-        .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+    let result = session.query_with(cypher).fetch_all().await?;
 
     let mut out = Vec::new();
     for row in result.rows() {
@@ -220,8 +216,7 @@ async fn fetch_cooccurrence_pairs(
         .query_with(cypher)
         .param("lim", max_pairs)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut out = Vec::new();
     for row in result.rows() {

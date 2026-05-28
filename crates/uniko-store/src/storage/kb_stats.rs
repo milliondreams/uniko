@@ -64,8 +64,7 @@ impl KnowledgeBase {
             )
             .param("sid", Value::String(STATS_ID.to_string()))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let persisted_kind: Option<String> =
             result
@@ -96,10 +95,7 @@ impl KnowledgeBase {
     /// when no persisted row exists.
     async fn write_kb_stats_first_open(&self) -> Result<()> {
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let cypher = "
             CREATE (s:KnowledgeBaseStats {
                 stats_id: $sid,
@@ -114,11 +110,8 @@ impl KnowledgeBase {
             .param("mp", empty_modality_presence())
             .param("now", datetime_value(Utc::now()))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -138,8 +131,7 @@ impl KnowledgeBase {
             )
             .param("sid", Value::String(STATS_ID.to_string()))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let mut p = ModalityPresence::default();
         if let Some(row) = result.rows().first()
@@ -167,10 +159,7 @@ impl KnowledgeBase {
     /// Returns [`UnikoError::Storage`] on database failure.
     pub async fn bump_modality_presence(&self, modality: &str) -> Result<()> {
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
 
         // MERGE the singleton, then SET the flag. Two separate
         // statements share the same transaction so the row is created
@@ -184,8 +173,7 @@ impl KnowledgeBase {
         .param("mp", empty_modality_presence())
         .param("now", datetime_value(Utc::now()))
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
         // Update the single flag by recomputing the map. uni-db's Map
         // properties are atomic — there's no per-key SET, so we round-
@@ -218,12 +206,9 @@ impl KnowledgeBase {
         .param("mp", Value::Map(m))
         .param("now", datetime_value(Utc::now()))
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        tx.commit().await?;
         Ok(())
     }
 }

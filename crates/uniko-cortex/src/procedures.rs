@@ -224,8 +224,7 @@ pub async fn match_procedures(
         .query_with(cypher)
         .param("st", STATUS_ACTIVE)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut out = Vec::new();
     for row in result.rows() {
@@ -365,8 +364,7 @@ async fn read_procedure(
         .query_with(cypher)
         .param("pid", procedure_id)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
     let row = result
         .rows()
         .first()
@@ -397,8 +395,7 @@ async fn fallback_sequence_query(
         .param("aid", agent_id)
         .param("thr", threshold)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut out = Vec::new();
     for row in result.rows() {

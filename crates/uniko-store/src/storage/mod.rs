@@ -94,11 +94,7 @@ impl KnowledgeBase {
     pub async fn in_memory(config: UnikoConfig) -> Result<Self> {
         config.validate()?;
         let catalog = load_catalog(&config, &[])?;
-        let db = Uni::in_memory()
-            .xervo_catalog(catalog)
-            .build()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let db = Uni::in_memory().xervo_catalog(catalog).build().await?;
         apply_schema(&db, &config).await?;
         prefetch_models(&db).await;
         Self {
@@ -125,11 +121,7 @@ impl KnowledgeBase {
     ) -> Result<Self> {
         config.validate()?;
         let catalog = load_catalog(&config, &extra_catalog)?;
-        let db = Uni::in_memory()
-            .xervo_catalog(catalog)
-            .build()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let db = Uni::in_memory().xervo_catalog(catalog).build().await?;
         apply_schema(&db, &config).await?;
         prefetch_models(&db).await;
         Self {
@@ -156,10 +148,7 @@ impl KnowledgeBase {
         if let Some(uni_cfg) = apply_perf_knobs_from_env() {
             builder = builder.config(uni_cfg);
         }
-        let db = builder
-            .build()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let db = builder.build().await?;
         apply_schema(&db, &config).await?;
         prefetch_models(&db).await;
         Self {
@@ -211,8 +200,7 @@ impl KnowledgeBase {
         let db = Uni::open(path.as_ref().to_string_lossy())
             .xervo_catalog(catalog)
             .build()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         apply_schema(&db, &config).await?;
         if prefetch {
             prefetch_models(&db).await;
@@ -258,11 +246,7 @@ impl KnowledgeBase {
     ) -> Result<Arc<uni_xervo::runtime::ModelRuntime>> {
         config.validate()?;
         let catalog = load_catalog(config, extra_catalog)?;
-        let bootstrap = Uni::in_memory()
-            .xervo_catalog(catalog)
-            .build()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let bootstrap = Uni::in_memory().xervo_catalog(catalog).build().await?;
         let runtime = bootstrap.xervo().raw_runtime().cloned().ok_or_else(|| {
             UnikoError::Internal(
                 "bootstrap Uni did not register an xervo runtime (was the catalog empty?)".into(),
@@ -300,8 +284,7 @@ impl KnowledgeBase {
         let db = Uni::open(path.as_ref().to_string_lossy())
             .xervo_runtime(runtime)
             .build()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         apply_schema(&db, &config).await?;
         Self {
             db: Arc::new(db),
@@ -348,9 +331,8 @@ impl KnowledgeBase {
         let db = Arc::try_unwrap(self.db).map_err(|_| {
             UnikoError::Internal("cannot shutdown: outstanding references exist".into())
         })?;
-        db.shutdown()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))
+        db.shutdown().await?;
+        Ok(())
     }
 }
 

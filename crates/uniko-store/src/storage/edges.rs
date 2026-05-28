@@ -64,32 +64,22 @@ impl KnowledgeBase {
         };
 
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
 
         let mut qb = tx.query_with(&cypher);
         qb = qb.param("src", from).param("dst", to);
         for (k, v) in &params {
             qb = qb.param(k.as_str(), v.clone());
         }
-        let result = qb
-            .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let result = qb.fetch_all().await?;
 
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        tx.commit().await?;
 
         let row = result
             .rows()
             .first()
             .ok_or_else(|| UnikoError::Storage("CREATE edge returned no rows".into()))?;
-        let eid: i64 = row
-            .get("eid")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let eid: i64 = row.get("eid")?;
         Ok(eid)
     }
 
@@ -112,14 +102,9 @@ impl KnowledgeBase {
             return Ok(Vec::new());
         }
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let edge_ids = self.create_edges_in_tx(&tx, edges).await?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        tx.commit().await?;
         Ok(edge_ids)
     }
 
@@ -230,8 +215,7 @@ impl KnowledgeBase {
                 sent_props,
             )],
         )
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
         let sent_by_ms = sent_by_start.elapsed().as_micros() as u64;
 
         // IN_SESSION — always one edge, no properties.
@@ -244,8 +228,7 @@ impl KnowledgeBase {
                 HashMap::new(),
             )],
         )
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
         let in_session_ms = in_session_start.elapsed().as_micros() as u64;
 
         // ADDRESSED_TO — 0..N edges, batched in one call.
@@ -255,9 +238,7 @@ impl KnowledgeBase {
                 .iter()
                 .map(|&r| (Vid::new(msg_nid as u64), Vid::new(r as u64), HashMap::new()))
                 .collect();
-            tx.bulk_insert_edges("ADDRESSED_TO", edges)
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            tx.bulk_insert_edges("ADDRESSED_TO", edges).await?;
         }
         let addressed_to_ms = addressed_to_start.elapsed().as_micros() as u64;
 
@@ -274,8 +255,7 @@ impl KnowledgeBase {
                     next_props,
                 )],
             )
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         }
         let next_ms = next_start.elapsed().as_micros() as u64;
 
@@ -340,8 +320,7 @@ impl KnowledgeBase {
             .query_with(&cypher)
             .param("nid", node_id)
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         rows_to_edge_records(&result)
     }
@@ -376,8 +355,7 @@ impl KnowledgeBase {
             .query_with(cypher)
             .param("nid", node_id)
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         rows_to_edge_records(&result)
     }
@@ -391,10 +369,7 @@ impl KnowledgeBase {
     /// Returns [`UnikoError::Storage`] on database failure.
     pub async fn delete_edge(&self, edge_id: EdgeId) -> Result<bool> {
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         // `id(r) = $eid` on an untyped relationship triggers a uni-db
         // planner bug where the function gets lowered to `r._vid`
         // (see `bugs/uni-db-edge-id-vid-planner.md`).  Reading the
@@ -404,11 +379,8 @@ impl KnowledgeBase {
             .execute_with("MATCH ()-[r]->() WHERE r._eid = $eid DELETE r")
             .param("eid", edge_id)
             .run()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
+        tx.commit().await?;
         Ok(result.relationships_deleted() > 0)
     }
 
@@ -430,20 +402,14 @@ impl KnowledgeBase {
         let cypher =
             format!("MATCH (a)-[r:{edge_type}]->(b) WHERE id(a) = $src AND id(b) = $dst DELETE r");
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let result = tx
             .execute_with(&cypher)
             .param("src", from)
             .param("dst", to)
             .run()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
+        tx.commit().await?;
         Ok(result.relationships_deleted() as u64)
     }
 
@@ -466,22 +432,15 @@ impl KnowledgeBase {
         let cypher = format!("MATCH ()-[r]->() WHERE r._eid = $eid {set_clause}");
 
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
 
         let mut qb = tx.execute_with(&cypher);
         qb = qb.param("eid", edge_id);
         for (k, v) in &params {
             qb = qb.param(k.as_str(), v.clone());
         }
-        qb.run()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        qb.run().await?;
+        tx.commit().await?;
         Ok(())
     }
 }
@@ -490,21 +449,11 @@ impl KnowledgeBase {
 fn rows_to_edge_records(result: &uni_db::QueryResult) -> Result<Vec<EdgeRecord>> {
     let mut records = Vec::with_capacity(result.len());
     for row in result.rows() {
-        let eid: i64 = row
-            .get("eid")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let src: i64 = row
-            .get("src")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let dst: i64 = row
-            .get("dst")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let rtype: String = row
-            .get("rtype")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
-        let edge: uni_db::Edge = row
-            .get("r")
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let eid: i64 = row.get("eid")?;
+        let src: i64 = row.get("src")?;
+        let dst: i64 = row.get("dst")?;
+        let rtype: String = row.get("rtype")?;
+        let edge: uni_db::Edge = row.get("r")?;
         records.push(EdgeRecord {
             id: eid,
             edge_type: rtype,

@@ -194,15 +194,12 @@ async fn find_previous_episode(
         .query_with(cypher)
         .param("aid", agent_id)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let Some(row) = result.rows().first() else {
         return Ok(None);
     };
-    let node: uni_db::Node = row
-        .get("e")
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+    let node: uni_db::Node = row.get("e")?;
     let vid = node.vid.as_u64() as i64;
     let ts = match node.properties.get("timestamp") {
         Some(Value::Temporal(t)) => {

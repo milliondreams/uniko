@@ -207,8 +207,7 @@ async fn collect_goal_scope(
         .query_with(cypher)
         .param("gid", params.goal_id.as_str())
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let ids: Vec<String> = result
         .rows()
@@ -236,8 +235,7 @@ async fn fetch_goal_items(
         .query_with(cypher)
         .param("ids", goal_ids_value(goal_ids))
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut items = Vec::new();
     for row in result.rows() {
@@ -275,8 +273,7 @@ async fn fetch_task_items(
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut items = Vec::new();
     for row in result.rows() {
@@ -323,8 +320,7 @@ async fn fetch_session_items(
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     // Sessions are time-bearing: rank by recency.  The query already
     // orders by started_at DESC; we map ordinal recency to a [0..1]
@@ -367,8 +363,7 @@ async fn fetch_message_items(
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut items = Vec::new();
     let rows = result.rows();
@@ -415,8 +410,7 @@ async fn fetch_fact_items(
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut items = Vec::new();
     for row in result.rows() {
@@ -455,8 +449,7 @@ async fn fetch_entity_items(
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
 
     let mut items = Vec::new();
     let rows = result.rows();

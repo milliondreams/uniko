@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use uni_db::Value;
 
-use crate::error::{Result, UnikoError};
+use crate::error::Result;
 use crate::storage::KnowledgeBase;
 use crate::storage::blob::MergeContent;
 use crate::types::{NodeId, datetime_value};
@@ -49,16 +49,13 @@ impl KnowledgeBase {
                         a.kind AS kind",
             )
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let mut report = MigrationReport::default();
         for row in result.rows() {
             report.scanned += 1;
 
-            let vid: NodeId = row
-                .get("vid")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let vid: NodeId = row.get("vid")?;
             let content = match row.value("content") {
                 Some(Value::String(s)) => s.clone(),
                 _ => continue, // already-null content from a partial migration
@@ -94,10 +91,7 @@ impl KnowledgeBase {
             // duplicates. uni-db requires both endpoints addressed by
             // id() in a single MERGE pattern. We perform it manually:
             // OPTIONAL MATCH for existing edge, CREATE if absent.
-            let tx = session
-                .tx()
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let tx = session.tx().await?;
             let existing_edge = tx
                 .query_with(
                     "MATCH (a:Artifact)-[r:HAS_CONTENT]->(c:ArtifactContent) \
@@ -106,8 +100,7 @@ impl KnowledgeBase {
                 .param("a", vid)
                 .param("c", content_nid)
                 .fetch_all()
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+                .await?;
 
             if existing_edge.rows().is_empty() {
                 tx.query_with(
@@ -118,8 +111,7 @@ impl KnowledgeBase {
                 .param("a", vid)
                 .param("c", content_nid)
                 .fetch_all()
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+                .await?;
             }
 
             // Strip the legacy content field.
@@ -131,12 +123,9 @@ impl KnowledgeBase {
             .param("hash", Value::String(hash))
             .param("now", datetime_value(Utc::now()))
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
-            tx.commit()
-                .await
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            tx.commit().await?;
 
             if existing_edge.rows().is_empty() {
                 report.migrated += 1;
@@ -168,8 +157,7 @@ impl KnowledgeBase {
             )
             .param("a", artifact_nid)
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let mut vectors: Vec<Vec<f32>> = Vec::new();
         for row in result.rows() {
@@ -205,14 +193,11 @@ impl KnowledgeBase {
                  RETURN id(a) AS vid",
             )
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let mut count = 0;
         for row in result.rows() {
-            let vid: NodeId = row
-                .get("vid")
-                .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            let vid: NodeId = row.get("vid")?;
             if self.mean_pool_artifact_text_embedding(vid).await? {
                 count += 1;
             }
@@ -228,26 +213,20 @@ impl KnowledgeBase {
     /// Returns [`UnikoError::Storage`] on database failure.
     pub async fn backfill_chunk_modality_text(&self) -> Result<usize> {
         let session = self.db.session();
-        let tx = session
-            .tx()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        let tx = session.tx().await?;
         let result = tx
             .query_with(
                 "MATCH (c:Chunk) WHERE c.modality IS NULL \
                  SET c.modality = 'text' RETURN count(c) AS updated",
             )
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
         let updated: i64 = result
             .rows()
             .first()
             .and_then(|r| r.get("updated").ok())
             .unwrap_or(0);
-        tx.commit()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        tx.commit().await?;
         Ok(updated as usize)
     }
 }

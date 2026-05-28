@@ -71,8 +71,7 @@ impl Viewer {
             .query_with(cypher)
             .param("pid", pid.as_str())
             .fetch_all()
-            .await
-            .map_err(|e| UnikoError::Storage(e.to_string()))?;
+            .await?;
 
         let mut teams = HashSet::new();
         let mut orgs = HashSet::new();
@@ -198,8 +197,7 @@ async fn fetch_visibilities(
         .query_with(cypher)
         .param("ids", uni_db::Value::List(ids))
         .fetch_all()
-        .await
-        .map_err(|e| UnikoError::Storage(e.to_string()))?;
+        .await?;
     let mut out = std::collections::HashMap::new();
     for row in result.rows() {
         let Ok(nid) = row.get::<i64>("nid") else {
