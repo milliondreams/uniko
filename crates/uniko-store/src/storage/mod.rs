@@ -51,8 +51,6 @@ use crate::config::UnikoConfig;
 use crate::error::{Result, UnikoError};
 use crate::schema::constants::{edges as edge_consts, labels};
 use crate::schema::{EMBED_ALIAS, NLP_ALIAS, RERANK_ALIAS, register_schema};
-use crate::types::{EdgeId, NodeId};
-
 pub use edges::{Direction, EdgeRecord};
 pub use filter::Filter;
 
@@ -532,33 +530,6 @@ fn build_embed_options(
         serde_json::json!(cfg.dimensions),
     );
     serde_json::Value::Object(opts)
-}
-
-/// Convert a uni-db `Vid` to our `NodeId` (`i64`).
-#[expect(
-    dead_code,
-    reason = "will be used when higher layers operate on Vid directly"
-)]
-pub(crate) fn vid_to_node_id(vid: uni_db::Vid) -> NodeId {
-    vid.as_u64() as i64
-}
-
-/// Convert our `NodeId` to a uni-db `Vid`.
-#[expect(
-    dead_code,
-    reason = "will be used when higher layers operate on Vid directly"
-)]
-pub(crate) fn node_id_to_vid(id: NodeId) -> uni_db::Vid {
-    uni_db::Vid::new(id as u64)
-}
-
-/// Convert a uni-db `Eid` to our `EdgeId` (`i64`).
-#[expect(
-    dead_code,
-    reason = "will be used when higher layers operate on Eid directly"
-)]
-pub(crate) fn eid_to_edge_id(eid: uni_db::Eid) -> EdgeId {
-    eid.as_u64() as i64
 }
 
 /// Verify that `label` is a known node label.

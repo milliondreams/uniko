@@ -957,10 +957,8 @@ impl KnowledgeBase {
     async fn count_recent_invalidations(
         &self,
         entity_name: &str,
-        now: DateTime<Utc>,
+        _now: DateTime<Utc>,
     ) -> Result<i64> {
-        let earliest_ms = (now - chrono::Duration::days(30)).timestamp_millis();
-
         let session = self.db.session();
         let cypher = "MATCH (new:Fact)-[r:INVALIDATES]->(old:Fact) \
                       WHERE old.subject = $n \
@@ -969,9 +967,7 @@ impl KnowledgeBase {
             .query_with(cypher)
             .param("n", entity_name)
             .fetch_all()
-            .await
-            .map_err(|e| crate::UnikoError::Storage(e.to_string()))?;
-        let _ = earliest_ms; // Reserved: when BTIC predicate is filterable in Cypher, narrow.
+            .await?;
         match result.rows().first() {
             Some(row) => Ok(row.get::<i64>("k").unwrap_or(0)),
             None => Ok(0),

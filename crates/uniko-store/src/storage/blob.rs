@@ -17,7 +17,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use uni_db::Value;
 
-use crate::blob_store::{BlobStorage, BlobStore, PutOutcome, build_backend};
+use crate::blob_store::{BlobStore, PutOutcome, build_backend};
 use crate::error::{Result, UnikoError};
 use crate::storage::KnowledgeBase;
 use crate::types::datetime_value;
@@ -202,9 +202,6 @@ fn hex_encode(bytes: &[u8]) -> String {
     }
     out
 }
-
-#[allow(dead_code)] // exposed only so callers don't have to re-derive shape
-fn _ensure_default_used_via_kbconfig(_: &BlobStorage) {}
 
 #[cfg(test)]
 mod tests {
