@@ -22,9 +22,14 @@ pub struct ShutdownCoordinator {
     consolidation: CancellationToken,
 }
 
+impl Default for ShutdownCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShutdownCoordinator {
     /// Build the token hierarchy.
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let root = CancellationToken::new();
         let ingest = root.child_token();

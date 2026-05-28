@@ -32,7 +32,11 @@ pub trait Step: Send + Sync {
     /// Whether this step should execute for the given context.
     ///
     /// Returns `false` to skip (e.g. code NER skips non-code content).
-    fn should_run(&self, ctx: &PipelineContext) -> bool;
+    /// Defaults to always-run; override to gate on content type or
+    /// other context state.
+    fn should_run(&self, _ctx: &PipelineContext) -> bool {
+        true
+    }
 
     /// Execute the step, mutating context with results.
     ///

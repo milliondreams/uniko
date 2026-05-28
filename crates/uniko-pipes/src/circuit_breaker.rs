@@ -59,7 +59,9 @@ impl CircuitBreaker {
             STATE_CLOSED => CircuitState::Closed,
             STATE_OPEN => CircuitState::Open,
             STATE_HALF_OPEN => CircuitState::HalfOpen,
-            _ => CircuitState::Closed,
+            // All writers go through the `STATE_*` consts; any other
+            // value would mean memory corruption.
+            other => unreachable!("invalid circuit state byte: {other}"),
         }
     }
 
@@ -87,17 +89,13 @@ impl CircuitBreaker {
     {
         let st = self.state.load(Ordering::Acquire);
 
-        match st {
-            STATE_OPEN => {
-                if !self.check_recovery() {
-                    return Err(UnikoError::Llm("circuit breaker open".into()));
-                }
-                // Transition to HalfOpen for probe.
-                self.state.store(STATE_HALF_OPEN, Ordering::Release);
-                tracing::info!("circuit breaker HALF-OPEN — probing");
+        if st == STATE_OPEN {
+            if !self.check_recovery() {
+                return Err(UnikoError::Llm("circuit breaker open".into()));
             }
-            STATE_HALF_OPEN | STATE_CLOSED => {}
-            _ => {}
+            // Transition to HalfOpen for probe.
+            self.state.store(STATE_HALF_OPEN, Ordering::Release);
+            tracing::info!("circuit breaker HALF-OPEN — probing");
         }
 
         match f().await {
