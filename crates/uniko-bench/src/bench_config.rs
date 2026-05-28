@@ -94,6 +94,10 @@ pub struct BenchConfig {
     /// Pricing CSV path + per-event JSONL output toggles.
     #[serde(default)]
     pub cost: CostSettings,
+    /// LongMemEval-harness specific knobs (concurrency, token budget,
+    /// question-type filter).  Other bench harnesses ignore this.
+    #[serde(default)]
+    pub lme: LmeSettings,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -216,6 +220,50 @@ impl Default for CostSettings {
             no_events: false,
         }
     }
+}
+
+/// LongMemEval-specific runtime knobs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LmeSettings {
+    /// Concurrent LME items in flight.  Each holds its own KB; tune
+    /// against GPU memory + shared-runtime headroom.
+    #[serde(default = "default_lme_question_concurrency")]
+    pub question_concurrency: usize,
+    /// Concurrent sessions ingested within one item.  Capped by uni-db
+    /// write contention.
+    #[serde(default = "default_lme_session_concurrency")]
+    pub session_concurrency: usize,
+    /// Token budget for the recall bundle handed to the LLM.
+    #[serde(default = "default_lme_token_budget")]
+    pub token_budget: usize,
+    /// Optional filter to specific LME question types (shorthand:
+    /// `ssu`, `ssa`, `ssp`, `ms`, `tr`, `ku`).  `None` → no filter.
+    #[serde(default)]
+    pub question_types: Option<Vec<String>>,
+}
+
+impl Default for LmeSettings {
+    fn default() -> Self {
+        Self {
+            question_concurrency: default_lme_question_concurrency(),
+            session_concurrency: default_lme_session_concurrency(),
+            token_budget: default_lme_token_budget(),
+            question_types: None,
+        }
+    }
+}
+
+fn default_lme_question_concurrency() -> usize {
+    8
+}
+
+fn default_lme_session_concurrency() -> usize {
+    8
+}
+
+fn default_lme_token_budget() -> usize {
+    8192
 }
 
 fn default_true() -> bool {
@@ -362,9 +410,8 @@ fn llm_alias_to_spec(a: &LlmAlias) -> ModelAliasSpec {
     }
 }
 
-/// Provider-specific catalog options.  Duplicated from the legacy
-/// `crate::provider_options` so the bench-config path can build its
-/// own catalog without depending on the deprecated CLI helper.
+/// Provider-specific catalog options used when materialising
+/// [`ModelAliasSpec`] entries from a JSON-loaded [`LlmAlias`].
 fn provider_options(provider: &str, base_url: Option<&str>) -> serde_json::Value {
     match provider {
         "local/mistralrs" => serde_json::json!({"isq": "Q4K"}),

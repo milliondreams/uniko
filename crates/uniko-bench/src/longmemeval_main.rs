@@ -4,21 +4,23 @@
 //! runs recall queries, and evaluates retrieval quality and answer
 //! correctness.
 //!
+//! Configuration goes through one `--bench-config <path>` JSON file
+//! describing models / recall / LME knobs; CLI carries only what
+//! changes per invocation (data, output, KB dir, reuse, question
+//! filter, phase1 mode).
+//!
 //! # Usage
 //!
 //! ```bash
 //! # Phase 1 gate (retrieval-only, SSU+SSA+MS categories)
 //! cargo run -p uniko-bench --bin longmemeval-bench -- \
+//!     --bench-config crates/uniko-bench/configs/lme_default.json \
 //!     --data data/longmemeval_s_cleaned.json --phase1
-//!
-//! # Full benchmark with LLM
-//! cargo run -p uniko-bench --bin longmemeval-bench -- \
-//!     --data data/longmemeval_s_cleaned.json \
-//!     --llm-alias llm/gemma4 --llm-model-id google/gemma-3-4b-it
 //!
 //! # Dev iteration (5 questions only)
 //! cargo run -p uniko-bench --bin longmemeval-bench -- \
-//!     --data data/longmemeval_s_cleaned.json --phase1 --max-questions 5
+//!     --bench-config crates/uniko-bench/configs/lme_default.json \
+//!     --data data/longmemeval_s_cleaned.json --max-questions 5
 //! ```
 
 use std::path::PathBuf;
@@ -30,105 +32,30 @@ use clap::Parser;
 use futures::stream::{self, StreamExt};
 
 // mimalloc as global allocator — measured ~3x throughput on uni-db's
-// concurrent_mutations benchmark (uni-db commit 65399a2b). Allocation
-// is on the hot path for every Cypher parse/plan/execute cycle and
-// every Lance L0 buffer write, so the global allocator choice
-// materially shifts ingest throughput. M-MIMALLOC-APPS.
+// concurrent_mutations benchmark (uni-db commit 65399a2b).
 #[global_allocator]
 static GLOBAL: uni_db::MiMalloc = uni_db::MiMalloc;
 
+use uniko_bench::bench_config::BenchConfig;
 use uniko_bench::longmemeval::data::{self, LmeQuestionType};
 use uniko_bench::longmemeval::eval;
 use uniko_bench::longmemeval::ingest;
 use uniko_bench::longmemeval::query;
 use uniko_bench::longmemeval::report;
 
-/// LongMemEval benchmark for uniko cognitive memory.
 #[derive(Parser)]
 #[command(
     name = "longmemeval-bench",
     about = "Run LongMemEval benchmark against uniko"
 )]
 struct Cli {
+    /// Path to bench config JSON (models, recall, LME knobs).
+    #[arg(long)]
+    bench_config: PathBuf,
+
     /// Path to LongMemEval JSON file (e.g., longmemeval_s_cleaned.json).
     #[arg(long)]
     data: PathBuf,
-
-    /// Phase 1 mode: filter to SSU+SSA+MS, retrieval-only, context_contains_answer metric.
-    #[arg(long)]
-    phase1: bool,
-
-    /// Filter to specific question types (comma-separated: ssu,ssa,ssp,ms,tr,ku).
-    #[arg(long)]
-    question_types: Option<String>,
-
-    /// Run only specific question IDs (comma-separated).
-    #[arg(long)]
-    questions: Option<String>,
-
-    /// Max questions to process (for dev iteration).
-    #[arg(long)]
-    max_questions: Option<usize>,
-
-    /// Maximum number of LME items (questions) processed concurrently.
-    /// Each item has its own isolated KB so there's no shared-state
-    /// contention. Memory scales linearly: each in-flight item holds
-    /// its KB + loaded NLP models. Set to 1 for fully sequential runs.
-    #[arg(long, default_value = "8")]
-    question_concurrency: usize,
-
-    /// Maximum number of chat sessions ingested concurrently within a
-    /// single LME item. All workers write to the per-item KB, so the
-    /// win is capped by uni-db's concurrent-write throughput. Set to 1
-    /// to ingest sessions sequentially (matches pre-parallel behavior).
-    #[arg(long, default_value = "8")]
-    session_concurrency: usize,
-
-    /// Token budget for recall (default 8192).
-    #[arg(long, default_value = "8192")]
-    token_budget: usize,
-
-    /// LLM model alias for answer generation.
-    #[arg(long)]
-    llm_alias: Option<String>,
-
-    /// HuggingFace model ID for the LLM (e.g., "google/gemma-3-4b-it").
-    #[arg(long)]
-    llm_model_id: Option<String>,
-
-    /// Separate LLM alias for judge (defaults to llm-alias).
-    #[arg(long)]
-    judge_alias: Option<String>,
-
-    /// HuggingFace model ID (or provider model name) for the judge LLM.
-    /// Defaults to llm-model-id.
-    #[arg(long)]
-    judge_model_id: Option<String>,
-
-    /// Provider for the judge LLM (e.g. "remote/openai" for GPT-5).
-    /// Defaults to "local/mistralrs".
-    #[arg(long)]
-    judge_provider: Option<String>,
-
-    /// Provider for the generation LLM. Defaults to "local/mistralrs".
-    #[arg(long)]
-    llm_provider: Option<String>,
-
-    /// Base URL of an OpenAI-compatible HTTP server for the generation
-    /// LLM (e.g. "http://127.0.0.1:1234/v1"). When set, the gen alias
-    /// is registered against `remote/openai` with this base URL. Implies
-    /// `--llm-provider remote/openai`.
-    #[arg(long)]
-    llm_base_url: Option<String>,
-
-    /// Base URL of an OpenAI-compatible server for the judge LLM.
-    /// Defaults to OpenAI's public API.
-    #[arg(long)]
-    judge_base_url: Option<String>,
-
-    /// Skip LLM judge evaluation.
-    #[arg(long)]
-    no_judge: bool,
 
     /// Output JSON report file path.
     #[arg(long, default_value = "longmemeval_results.json")]
@@ -142,104 +69,17 @@ struct Cli {
     #[arg(long)]
     reuse: bool,
 
-    /// Path to xervo model catalog JSON file.
+    /// Phase 1 mode: filter to SSU+SSA+MS, retrieval-only.
     #[arg(long)]
-    catalog: Option<PathBuf>,
+    phase1: bool,
 
-    /// Path to schema JSON file.
+    /// Run only specific question IDs (comma-separated).
     #[arg(long)]
-    schema: Option<PathBuf>,
+    questions: Option<String>,
 
-    /// Override embedding dimensions (default 768 for Nomic, use 384 for MiniLM).
+    /// Max questions to process (for dev iteration).
     #[arg(long)]
-    embedding_dim: Option<usize>,
-
-    /// Embedding preset to use. Must match what was used at ingest time.
-    /// One of: `nomic` (default 768d), `minilm` (384d), `bge-small`
-    /// (384d), `bge-large` (1024d).
-    #[arg(long, default_value = "nomic")]
-    embedding: String,
-
-    /// Disable the reranker. Reranker is **on by default** — pass
-    /// `--no-reranker` to fall back to pure recall ranking. Matches
-    /// the LoCoMo bench so the two harnesses tune to the same defaults.
-    #[arg(long)]
-    no_reranker: bool,
-
-    /// HuggingFace reranker model id. xervo 0.11 auto-detects whether
-    /// the ONNX graph expects `token_type_ids`, so XLM-R-based models
-    /// (e.g. `BAAI/bge-reranker-base`) work alongside BERT-based ones
-    /// (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`). For
-    /// `--reranker-style generative`, use a decoder-LM export such as
-    /// `onnx-community/Qwen3-Reranker-0.6B-ONNX`.
-    #[arg(long, default_value = "cross-encoder/ms-marco-MiniLM-L-6-v2")]
-    reranker_model: String,
-
-    /// Reranker code path. `cross-encoder` (default) for BERT-family
-    /// cross-encoders that emit a relevance logit; `generative` for
-    /// decoder-LM rerankers that score yes/no via next-token logits.
-    #[arg(long, default_value = "cross-encoder")]
-    reranker_style: String,
-
-    /// Top-N RRF candidates to send through the reranker. Must be
-    /// `>= recall_limit` when reranker is enabled.
-    #[arg(long, default_value = "50")]
-    reranker_top_n: usize,
-
-    /// Maximum items in the recall bundle (overrides `recall_limit`
-    /// in the embedding config).
-    #[arg(long)]
-    recall_limit: Option<usize>,
-
-    /// Phase 1 (Compact) contribution strategy:
-    /// - `boost` (default) — Facts/Observations influence chunk ranking
-    ///   via a session-level boost; bundle stays 100% Chunks.
-    /// - `merge` — cap=3 interleave Facts by score into the Phase 3 bundle.
-    /// - `off` — skip Phase 1 entirely.
-    #[arg(long, default_value = "boost")]
-    phase1_strategy: String,
-
-    /// Multiplicative weight applied to Fact scores when computing the
-    /// session-chunk boost under `--phase1-strategy boost`. α=0.6 is
-    /// the validated default.
-    #[arg(long, default_value = "0.6")]
-    phase1_boost_alpha: f64,
-
-    /// Disable the graph spreading-activation channel in Phase 2 recall.
-    /// Default: on. Channel only fires when the query has at least one
-    /// resolvable entity seed.
-    #[arg(long)]
-    no_phase2_graph: bool,
-
-    /// Disable the temporal-interval channel in Phase 2 recall.
-    /// Default: on. Channel only fires when the query has a parsed
-    /// temporal phrase.
-    #[arg(long)]
-    no_phase2_temporal: bool,
-
-    /// When set, P4 Consolidation refines each Observation's
-    /// `(subject, predicate, object)` triple via the LLM at this
-    /// alias before grouping into Facts. Off by default — keeps the
-    /// SRL/DEP triple P3 produces.
-    #[arg(long)]
-    extract_triples_llm_alias: Option<String>,
-
-    /// Disable cosine-similarity clustering of object surface forms in
-    /// P4 Consolidation. Default: clustering on.
-    #[arg(long)]
-    no_consolidation_cluster: bool,
-
-    /// Disable the `"[Month Year] "` date prefix prepended to Fact
-    /// embed text in P4 Consolidation. Default: date-augment on.
-    #[arg(long)]
-    no_date_augment_embedding: bool,
-
-    /// Comma-separated list of query-reformulation variants to enable.
-    /// Recognised: `keywords`, `original`, `declarative`, `type_anchored`.
-    /// Empty / unset uses the default 4-variant configuration. Pass
-    /// `keywords` alone for legacy single-query behaviour.
-    #[arg(long, default_value = "")]
-    variants: String,
+    max_questions: Option<usize>,
 }
 
 #[tokio::main]
@@ -256,6 +96,9 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    let bench = BenchConfig::load(&cli.bench_config)
+        .with_context(|| format!("loading bench config {}", cli.bench_config.display()))?;
+
     // Load dataset.
     tracing::info!(path = %cli.data.display(), "loading LongMemEval dataset");
     let mut items = data::load_longmemeval(&cli.data)?;
@@ -263,16 +106,15 @@ async fn main() -> Result<()> {
 
     // Apply question type filter.
     let type_filter: Option<Vec<LmeQuestionType>> = if cli.phase1 {
-        // Phase 1 gate: SSU + SSA + MS only.
         Some(vec![
             LmeQuestionType::SingleSessionUser,
             LmeQuestionType::SingleSessionAssistant,
             LmeQuestionType::MultiSession,
         ])
     } else {
-        cli.question_types.as_ref().map(|types_str| {
-            types_str
-                .split(',')
+        bench.lme.question_types.as_ref().map(|types| {
+            types
+                .iter()
                 .filter_map(|s| LmeQuestionType::from_shorthand(s.trim()))
                 .collect()
         })
@@ -300,87 +142,26 @@ async fn main() -> Result<()> {
         tracing::info!(truncated = items.len(), "limited to max questions");
     }
 
-    // Determine LLM mode.  Eagerly clone alias strings here so cli can
-    // be moved into an Arc later without keeping live borrows.
-    let retrieval_only = cli.phase1 || cli.llm_alias.is_none();
+    // LLM mode: --phase1 implies retrieval-only.  Otherwise, both gen
+    // and judge are driven from BenchConfig.models.
+    let retrieval_only = cli.phase1 || bench.retrieval_only;
     let llm_alias_owned: Option<String> = if retrieval_only {
         None
     } else {
-        cli.llm_alias.clone()
+        Some(bench.models.generator.alias.clone())
     };
-    let judge_alias_owned: Option<String> = if cli.no_judge || retrieval_only {
+    let judge_alias_owned: Option<String> = if !bench.judge_enabled || retrieval_only {
         None
     } else {
-        cli.judge_alias.clone().or_else(|| cli.llm_alias.clone())
+        Some(bench.models.judge.alias.clone())
     };
 
-    // Build config.
-    let mut config = uniko_store::config::UnikoConfig {
-        catalog_path: cli.catalog.clone(),
-        schema_path: cli.schema.clone(),
-        ..Default::default()
-    };
-    config.embedding = match cli.embedding.as_str() {
-        "nomic" => uniko_store::config::EmbeddingConfig::nomic_v15(),
-        "minilm" => uniko_store::config::EmbeddingConfig::minilm_l6_v2(),
-        "bge-small" => uniko_store::config::EmbeddingConfig::bge_small_en_v15(),
-        "bge-large" => uniko_store::config::EmbeddingConfig::bge_large_en_v15(),
-        other => anyhow::bail!(
-            "unknown --embedding preset {other:?}; expected one of: nomic, minilm, bge-small, bge-large"
-        ),
-    };
-    if let Some(dim) = cli.embedding_dim {
-        config.embedding.dimensions = dim;
-    }
-    // Reranker is default-on via `RerankerConfig::default()`. Apply
-    // CLI overrides (model/style/top_n) regardless, so the user can
-    // swap models without explicitly enabling. `--no-reranker` disables.
-    config.reranker.enabled = !cli.no_reranker;
-    if config.reranker.enabled {
-        config.reranker.model_id = cli.reranker_model.clone();
-        config.reranker.style = cli.reranker_style.clone();
-        config.reranker.top_n = cli.reranker_top_n;
-    }
-    if let Some(limit) = cli.recall_limit {
-        config.recall_limit = limit;
-        if config.reranker.enabled && config.reranker.top_n < limit {
-            config.reranker.top_n = limit;
-        }
-    }
-    config.phase1_strategy = cli.phase1_strategy.clone();
-    config.phase1_boost_alpha = cli.phase1_boost_alpha;
-    config.phase2_graph_enabled = !cli.no_phase2_graph;
-    config.phase2_temporal_enabled = !cli.no_phase2_temporal;
-    config.consolidation_cluster_objects = !cli.no_consolidation_cluster;
-    config.consolidation_date_augment_embedding = !cli.no_date_augment_embedding;
-    if !cli.variants.trim().is_empty() {
-        config.query_variants = cli
-            .variants
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
+    let mut config = uniko_store::config::UnikoConfig::default();
+    bench
+        .apply_to_uniko_config(&mut config)
+        .context("applying bench config to UnikoConfig")?;
 
-    // Build LLM catalog. `--llm-base-url` implies `remote/openai`
-    // unless `--llm-provider` is explicitly set.
-    let llm_provider = cli.llm_provider.as_deref().or_else(|| {
-        if cli.llm_base_url.is_some() {
-            Some("remote/openai")
-        } else {
-            None
-        }
-    });
-    let extra_catalog = uniko_bench::build_llm_catalog(
-        cli.llm_alias.as_deref(),
-        cli.llm_model_id.as_deref(),
-        llm_provider,
-        cli.llm_base_url.as_deref(),
-        cli.judge_alias.as_deref(),
-        cli.judge_model_id.as_deref(),
-        cli.judge_provider.as_deref(),
-        cli.judge_base_url.as_deref(),
-    );
+    let extra_catalog = bench.build_catalog_specs();
     for spec in &extra_catalog {
         tracing::info!(
             alias = %spec.alias,
@@ -391,23 +172,17 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Run benchmark.  Items are processed concurrently up to
-    // `--question-concurrency`; each item owns its own KB so there's
-    // no cross-item write contention.  Results land in a shared Vec
-    // (order is the completion order, not the input order — the
-    // aggregation routines key on question_id, not position).
+    // Items run concurrently up to `lme.question_concurrency`.
     type ResultEntry = (query::LmeQueryResult, Option<f64>);
     let all_results: Arc<tokio::sync::Mutex<Vec<ResultEntry>>> =
         Arc::new(tokio::sync::Mutex::new(Vec::with_capacity(items.len())));
     let bench_start = Instant::now();
     let total_items = items.len();
-    let question_concurrency = cli.question_concurrency.max(1);
+    let question_concurrency = bench.lme.question_concurrency.max(1);
+    let session_concurrency = bench.lme.session_concurrency.max(1);
+    let token_budget = bench.lme.token_budget;
 
-    // Build the ONNX/Xervo runtime **once**, before the per-item
-    // loop, and share its `Arc` across every concurrent KB. Without
-    // this, q≥3 on an 8 GB GPU OOMs because each KB loads its own
-    // model session (~3.7 GB each). See
-    // `uniko_store::KnowledgeBase::build_shared_runtime`.
+    // Build the ONNX/Xervo runtime once, share across every concurrent KB.
     let shared_runtime = uniko_store::KnowledgeBase::build_shared_runtime(&config, &extra_catalog)
         .await
         .context("building shared Xervo runtime")?;
@@ -416,14 +191,13 @@ async fn main() -> Result<()> {
         "shared Xervo runtime built; all KBs in this process will reuse it"
     );
 
-    // Captures shared by every per-item worker.  All Arc-cloneable or
-    // Copy/cheap-Clone.  llm_alias_owned/judge_alias_owned were already
-    // built upfront (line ~297) so cli can move into Arc freely.
+    let bench = Arc::new(bench);
     let cli = Arc::new(cli);
     let config = Arc::new(config);
 
     stream::iter(items.into_iter().enumerate())
         .for_each_concurrent(question_concurrency, |(item_idx, item)| {
+            let bench = bench.clone();
             let cli = cli.clone();
             let config = config.clone();
             let runtime = shared_runtime.clone();
@@ -474,7 +248,7 @@ async fn main() -> Result<()> {
                         &kb_dir,
                         (*config).clone(),
                         runtime.clone(),
-                        cli.session_concurrency,
+                        session_concurrency,
                     )
                     .await
                     {
@@ -495,9 +269,9 @@ async fn main() -> Result<()> {
 
                 // P4 Consolidation: see longmemeval_main rationale.
                 let cycle_start = Instant::now();
-                let triple_source = match cli.extract_triples_llm_alias.as_deref() {
+                let triple_source = match bench.models.extract_triples.as_ref() {
                     Some(alias) => uniko_memory::consolidation::TripleSource::Llm {
-                        alias: alias.to_string(),
+                        alias: alias.alias.clone(),
                     },
                     None => uniko_memory::consolidation::TripleSource::SrlDep,
                 };
@@ -524,8 +298,7 @@ async fn main() -> Result<()> {
                     ),
                 }
 
-                // P5 + P6 — explicit cortex sweep per question so the
-                // bench always exercises procedure + topic surfaces.
+                // P5 + P6 — explicit cortex sweep per question.
                 run_cortex_sweep(&kb, &item.question_id).await;
 
                 let bench_agent_id = format!("bench-agent-{}", item.question_id);
@@ -553,7 +326,7 @@ async fn main() -> Result<()> {
                     item.question_type,
                     gold,
                     &evidence_map,
-                    cli.token_budget,
+                    token_budget,
                     llm_alias_owned.as_deref(),
                 )
                 .await
@@ -631,17 +404,12 @@ async fn main() -> Result<()> {
                     tracing::debug!(error = %e, "episode recording failed");
                 }
 
-                // Push result + checkpoint write under the lock.  The
-                // lock window is short (Vec push + JSON serialize) and
-                // serialized writes preserve a consistent on-disk
-                // snapshot after each completed item.
                 let mut results = all_results.lock().await;
                 results.push((qr, judge_score));
                 let partial = report::aggregate_lme(&results, total_items);
                 if let Err(e) = report::write_lme_json(&results, &partial, &cli.output) {
                     tracing::warn!(error = %e, "checkpoint write failed (continuing)");
                 }
-                // KB drops at end of scope.
             }
         })
         .await;
@@ -657,13 +425,11 @@ async fn main() -> Result<()> {
         "benchmark complete",
     );
 
-    // Aggregate and report.
     let lme_report = report::aggregate_lme(&all_results, total_items);
     report::print_lme_report(&lme_report);
     report::write_lme_json(&all_results, &lme_report, &cli.output)?;
     tracing::info!(path = %cli.output.display(), "results written");
 
-    // Phase 1 gate check.
     if cli.phase1 {
         let pass = lme_report.overall_context_contains_rate >= 0.90;
         println!(
@@ -681,13 +447,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run P5 (procedure promotion) + P6 (topic detection) for one
-/// bench item.  Mirrors the live consolidation worker's cortex
-/// sweep but unconditional, so every LME run exercises the full
-/// downstream surface regardless of consolidation cadence.
-///
-/// Failures are logged and dropped — cortex is downstream of
-/// consolidation, never a hard requirement for the eval.
+/// Run P5 (procedure promotion) + P6 (topic detection) for one bench
+/// item.  Failures are logged and dropped.
 async fn run_cortex_sweep(kb: &Arc<uniko_store::KnowledgeBase>, question_id: &str) {
     use std::time::Instant;
     let proc_start = Instant::now();

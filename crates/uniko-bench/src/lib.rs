@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
+use uni_db::ModelAliasSpec;
 use uniko_memory::consolidation::TripleSource;
 use uniko_memory::recall::ContextBundle;
 use uniko_store::config::UnikoConfig;
@@ -71,109 +71,6 @@ pub async fn open_kb_with_runtime(
         .await
         .context("opening KB with shared runtime")?;
     Ok(Arc::new(kb))
-}
-
-// ── LLM Catalog ─────────────────────────────────────────────────
-
-/// Build model alias specs for LLM generation and judging.
-///
-/// Creates catalog entries for the generation LLM and optionally a
-/// separate judge LLM. The judge can use a different provider and
-/// model from the generator (e.g. local mistralrs for generation +
-/// remote OpenAI for judging).
-///
-/// `judge_provider` and `judge_model_id` default to the generator's
-/// values when not specified. `llm_provider` defaults to
-/// `"local/mistralrs"`.
-#[allow(clippy::too_many_arguments)]
-pub fn build_llm_catalog(
-    llm_alias: Option<&str>,
-    llm_model_id: Option<&str>,
-    llm_provider: Option<&str>,
-    llm_base_url: Option<&str>,
-    judge_alias: Option<&str>,
-    judge_model_id: Option<&str>,
-    judge_provider: Option<&str>,
-    judge_base_url: Option<&str>,
-) -> Vec<ModelAliasSpec> {
-    let mut catalog = Vec::new();
-
-    let gen_provider = llm_provider.unwrap_or("local/mistralrs");
-
-    if let (Some(alias), Some(model_id)) = (llm_alias, llm_model_id) {
-        catalog.push(ModelAliasSpec {
-            alias: alias.to_string(),
-            task: ModelTask::Generate,
-            provider_id: gen_provider.to_string(),
-            model_id: model_id.to_string(),
-            revision: None,
-            warmup: WarmupPolicy::Lazy,
-            required: false,
-            timeout: None,
-            load_timeout: None,
-            retry: None,
-            options: provider_options(gen_provider, llm_base_url),
-        });
-    }
-
-    if let Some(judge) = judge_alias {
-        let same_as_gen = llm_alias == Some(judge);
-        if !same_as_gen {
-            // Fall back to generator's provider/model when the caller
-            // doesn't override.
-            let provider = judge_provider.unwrap_or(gen_provider);
-            let model_id = judge_model_id
-                .or(llm_model_id)
-                .expect("judge_alias requires either judge_model_id or llm_model_id");
-            catalog.push(ModelAliasSpec {
-                alias: judge.to_string(),
-                task: ModelTask::Generate,
-                provider_id: provider.to_string(),
-                model_id: model_id.to_string(),
-                revision: None,
-                warmup: WarmupPolicy::Lazy,
-                required: false,
-                timeout: None,
-                load_timeout: None,
-                retry: None,
-                options: provider_options(provider, judge_base_url),
-            });
-        }
-    }
-
-    catalog
-}
-
-/// Per-provider default options for a generation alias.
-///
-/// `local/mistralrs` defaults to ISQ Q4K so the user doesn't need a
-/// pre-quantized model file. `remote/openai` (and OpenAI-compatible
-/// servers like LM Studio / vLLM / llama.cpp) accept an optional
-/// `base_url` override; uni-xervo 0.10+ honors it. `remote/vertexai`
-/// pins `location=global` (the cross-region endpoint) and reads
-/// `project_id` from `VERTEXAI_PROJECT`; the access token comes from
-/// `VERTEXAI_API_TOKEN` (override `gcloud auth print-access-token`).
-fn provider_options(provider: &str, base_url: Option<&str>) -> serde_json::Value {
-    match provider {
-        "local/mistralrs" => serde_json::json!({"isq": "Q4K"}),
-        "remote/openai" => match base_url {
-            Some(url) => serde_json::json!({"base_url": url}),
-            None => serde_json::json!({}),
-        },
-        "remote/vertexai" => {
-            let mut opts = serde_json::Map::new();
-            opts.insert("location".into(), serde_json::json!("global"));
-            opts.insert(
-                "api_token_env".into(),
-                serde_json::json!("VERTEXAI_API_TOKEN"),
-            );
-            if let Ok(project) = std::env::var("VERTEXAI_PROJECT") {
-                opts.insert("project_id".into(), serde_json::json!(project));
-            }
-            serde_json::Value::Object(opts)
-        }
-        _ => serde_json::json!({}),
-    }
 }
 
 // ── Context Formatting ──────────────────────────────────────────
