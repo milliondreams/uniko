@@ -587,6 +587,45 @@ fn split_sentences(text: &str) -> Vec<String> {
     sentences
 }
 
+// --- Tensor extraction helpers ---
+//
+// All `extract_f32_*` functions share three operations: fetch the named
+// tensor, assert it's an F32 array, and coerce its dynamic dimensions to
+// a rank-typed `Array<f32, D>`. These two helpers factor those out so
+// each public extractor reduces to its shape contract.
+
+/// Fetch a named output tensor and clone its underlying `ArrayD<f32>`.
+fn fetch_f32(outputs: &TensorBatch, name: &str) -> Result<ndarray::ArrayD<f32>, UnikoError> {
+    let tensor = outputs
+        .get(name)
+        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
+    match tensor {
+        TensorValue::F32(arr) => Ok(arr.clone()),
+        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    }
+}
+
+/// Coerce dynamic dims → rank-typed dims, mapping the error consistently.
+fn into_dim<D: ndarray::Dimension>(
+    arr: ndarray::ArrayD<f32>,
+    name: &str,
+) -> Result<ndarray::Array<f32, D>, UnikoError> {
+    arr.into_dimensionality::<D>()
+        .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
+}
+
+/// Reshape to `new_shape` then coerce to rank-typed dims.
+fn reshape_into<D: ndarray::Dimension>(
+    arr: ndarray::ArrayD<f32>,
+    name: &str,
+    new_shape: &[usize],
+) -> Result<ndarray::Array<f32, D>, UnikoError> {
+    let reshaped = arr
+        .into_shape_with_order(ndarray::IxDyn(new_shape))
+        .map_err(|e| UnikoError::Pipeline(format!("reshape {name}: {e}")))?;
+    into_dim(reshaped, name)
+}
+
 /// Extract a 3D f32 tensor from outputs as `[batch, max_seq, num_classes]`.
 ///
 /// Used by [`NlpPipeline::analyze_batch`] for batched per-row decoding.
@@ -598,24 +637,14 @@ fn extract_f32_3d(
     expected_batch: usize,
     expected_seq: usize,
 ) -> Result<ndarray::Array3<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() != 3 || shape[0] != expected_batch || shape[1] != expected_seq {
-                return Err(UnikoError::Pipeline(format!(
-                    "{name}: expected [{expected_batch}, {expected_seq}, *], got {shape:?}"
-                )));
-            }
-            arr.clone()
-                .into_dimensionality::<ndarray::Ix3>()
-                .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape();
+    if shape.len() != 3 || shape[0] != expected_batch || shape[1] != expected_seq {
+        return Err(UnikoError::Pipeline(format!(
+            "{name}: expected [{expected_batch}, {expected_seq}, *], got {shape:?}"
+        )));
     }
+    into_dim(arr, name)
 }
 
 /// Extract a 2D f32 tensor from outputs as `[batch, num_classes]`.
@@ -626,57 +655,28 @@ fn extract_f32_2d_batch(
     name: &str,
     expected_batch: usize,
 ) -> Result<ndarray::Array2<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() != 2 || shape[0] != expected_batch {
-                return Err(UnikoError::Pipeline(format!(
-                    "{name}: expected [{expected_batch}, *], got {shape:?}"
-                )));
-            }
-            arr.clone()
-                .into_dimensionality::<ndarray::Ix2>()
-                .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape();
+    if shape.len() != 2 || shape[0] != expected_batch {
+        return Err(UnikoError::Pipeline(format!(
+            "{name}: expected [{expected_batch}, *], got {shape:?}"
+        )));
     }
+    into_dim(arr, name)
 }
 
 /// Extract a 2D f32 tensor from outputs, squeezing the batch dimension.
 ///
 /// Expects shape `[1, seq_len, num_classes]` → returns `[seq_len, num_classes]`.
 fn extract_f32_2d(outputs: &TensorBatch, name: &str) -> Result<ndarray::Array2<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() == 3 && shape[0] == 1 {
-                // Squeeze batch dim: [1, seq, classes] → [seq, classes]
-                let squeezed = arr
-                    .clone()
-                    .into_shape_with_order(ndarray::IxDyn(&[shape[1], shape[2]]))
-                    .map_err(|e| UnikoError::Pipeline(format!("reshape {name}: {e}")))?;
-                squeezed
-                    .into_dimensionality()
-                    .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-            } else if shape.len() == 2 {
-                arr.clone()
-                    .into_dimensionality()
-                    .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-            } else {
-                Err(UnikoError::Pipeline(format!(
-                    "{name}: unexpected shape {shape:?}"
-                )))
-            }
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape().to_vec();
+    match shape.len() {
+        3 if shape[0] == 1 => reshape_into(arr, name, &[shape[1], shape[2]]),
+        2 => into_dim(arr, name),
+        _ => Err(UnikoError::Pipeline(format!(
+            "{name}: unexpected shape {shape:?}"
+        ))),
     }
 }
 
@@ -684,33 +684,14 @@ fn extract_f32_2d(outputs: &TensorBatch, name: &str) -> Result<ndarray::Array2<f
 ///
 /// Expects shape `[1, num_classes]` → returns `[num_classes]`.
 fn extract_f32_1d(outputs: &TensorBatch, name: &str) -> Result<ndarray::Array1<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() == 2 && shape[0] == 1 {
-                // Squeeze: [1, classes] → [classes]
-                let squeezed = arr
-                    .clone()
-                    .into_shape_with_order(ndarray::IxDyn(&[shape[1]]))
-                    .map_err(|e| UnikoError::Pipeline(format!("reshape {name}: {e}")))?;
-                squeezed
-                    .into_dimensionality()
-                    .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-            } else if shape.len() == 1 {
-                arr.clone()
-                    .into_dimensionality()
-                    .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-            } else {
-                Err(UnikoError::Pipeline(format!(
-                    "{name}: unexpected shape {shape:?}"
-                )))
-            }
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape().to_vec();
+    match shape.len() {
+        2 if shape[0] == 1 => reshape_into(arr, name, &[shape[1]]),
+        1 => into_dim(arr, name),
+        _ => Err(UnikoError::Pipeline(format!(
+            "{name}: unexpected shape {shape:?}"
+        ))),
     }
 }
 
@@ -719,27 +700,14 @@ fn extract_f32_2d_squeeze_batch(
     outputs: &TensorBatch,
     name: &str,
 ) -> Result<ndarray::Array2<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() != 3 || shape[0] != 1 {
-                return Err(UnikoError::Pipeline(format!(
-                    "{name}: expected [1, seq, seq], got {shape:?}"
-                )));
-            }
-            let squeezed = arr
-                .clone()
-                .into_shape_with_order(ndarray::IxDyn(&[shape[1], shape[2]]))
-                .map_err(|e| UnikoError::Pipeline(format!("reshape {name}: {e}")))?;
-            squeezed
-                .into_dimensionality()
-                .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape().to_vec();
+    if shape.len() != 3 || shape[0] != 1 {
+        return Err(UnikoError::Pipeline(format!(
+            "{name}: expected [1, seq, seq], got {shape:?}"
+        )));
     }
+    reshape_into(arr, name, &[shape[1], shape[2]])
 }
 
 /// Extract `label_scores[1, seq, seq, num_rels]` and squeeze to
@@ -748,27 +716,14 @@ fn extract_f32_3d_squeeze_batch(
     outputs: &TensorBatch,
     name: &str,
 ) -> Result<ndarray::Array3<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() != 4 || shape[0] != 1 {
-                return Err(UnikoError::Pipeline(format!(
-                    "{name}: expected [1, seq, seq, num_rels], got {shape:?}"
-                )));
-            }
-            let squeezed = arr
-                .clone()
-                .into_shape_with_order(ndarray::IxDyn(&[shape[1], shape[2], shape[3]]))
-                .map_err(|e| UnikoError::Pipeline(format!("reshape {name}: {e}")))?;
-            squeezed
-                .into_dimensionality()
-                .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape().to_vec();
+    if shape.len() != 4 || shape[0] != 1 {
+        return Err(UnikoError::Pipeline(format!(
+            "{name}: expected [1, seq, seq, num_rels], got {shape:?}"
+        )));
     }
+    reshape_into(arr, name, &[shape[1], shape[2], shape[3]])
 }
 
 /// Extract `arc_scores[B, S, S]` from a batched forward pass.
@@ -778,27 +733,18 @@ fn extract_f32_3d_square(
     expected_batch: usize,
     expected_seq: usize,
 ) -> Result<ndarray::Array3<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() != 3
-                || shape[0] != expected_batch
-                || shape[1] != expected_seq
-                || shape[2] != expected_seq
-            {
-                return Err(UnikoError::Pipeline(format!(
-                    "{name}: expected [{expected_batch}, {expected_seq}, {expected_seq}], got {shape:?}"
-                )));
-            }
-            arr.clone()
-                .into_dimensionality::<ndarray::Ix3>()
-                .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape();
+    if shape.len() != 3
+        || shape[0] != expected_batch
+        || shape[1] != expected_seq
+        || shape[2] != expected_seq
+    {
+        return Err(UnikoError::Pipeline(format!(
+            "{name}: expected [{expected_batch}, {expected_seq}, {expected_seq}], got {shape:?}"
+        )));
     }
+    into_dim(arr, name)
 }
 
 /// Extract `label_scores[B, S, S, num_rels]` from a batched forward pass.
@@ -808,27 +754,18 @@ fn extract_f32_4d(
     expected_batch: usize,
     expected_seq: usize,
 ) -> Result<ndarray::Array4<f32>, UnikoError> {
-    let tensor = outputs
-        .get(name)
-        .ok_or_else(|| UnikoError::Pipeline(format!("missing output tensor: {name}")))?;
-    match tensor {
-        TensorValue::F32(arr) => {
-            let shape = arr.shape();
-            if shape.len() != 4
-                || shape[0] != expected_batch
-                || shape[1] != expected_seq
-                || shape[2] != expected_seq
-            {
-                return Err(UnikoError::Pipeline(format!(
-                    "{name}: expected [{expected_batch}, {expected_seq}, {expected_seq}, *], got {shape:?}"
-                )));
-            }
-            arr.clone()
-                .into_dimensionality::<ndarray::Ix4>()
-                .map_err(|e| UnikoError::Pipeline(format!("dim {name}: {e}")))
-        }
-        _ => Err(UnikoError::Pipeline(format!("{name}: expected F32 tensor"))),
+    let arr = fetch_f32(outputs, name)?;
+    let shape = arr.shape();
+    if shape.len() != 4
+        || shape[0] != expected_batch
+        || shape[1] != expected_seq
+        || shape[2] != expected_seq
+    {
+        return Err(UnikoError::Pipeline(format!(
+            "{name}: expected [{expected_batch}, {expected_seq}, {expected_seq}, *], got {shape:?}"
+        )));
     }
+    into_dim(arr, name)
 }
 
 /// Build a `word_idx → first_subword_idx` map from the tokenizer's
