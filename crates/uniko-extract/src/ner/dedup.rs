@@ -14,12 +14,6 @@ use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use super::types::{EntityMatch, RawEntity};
 
-/// Cosine similarity threshold for same-type entity merging.
-const SIMILARITY_SAME_TYPE: f64 = 0.85;
-
-/// Cosine similarity threshold for cross-type entity merging (stricter).
-const SIMILARITY_CROSS_TYPE: f64 = 0.92;
-
 /// Merge raw entities by canonical name within a single extraction batch.
 ///
 /// Entities with the same `canonical_name` are collapsed: the highest
@@ -330,108 +324,7 @@ pub async fn apply_entity_upsert(
         "apply_entity breakdown",
     );
 
-    // Touch the labels constant so import stays load-bearing; the
-    // hardcoded "Entity" string in Phase 1 Cypher must match it.
-    debug_assert_eq!(labels::ENTITY, "Entity");
-
     Ok(matches)
-}
-
-/// Format the text used to compute an entity's embedding.
-///
-/// Formula: `"name (type)"` or just `"name"` if type is empty.
-fn format_embed_text(name: &str, entity_type: &str) -> String {
-    if entity_type.is_empty() || entity_type == "other" {
-        name.to_string()
-    } else {
-        format!("{name} ({entity_type})")
-    }
-}
-
-/// Search for an existing Entity with a similar embedding.
-///
-/// Returns `Some((node_id, properties))` if a match above the
-/// similarity threshold is found for a compatible type.  Returns
-/// `None` if no match, Xervo is unavailable, or the graph has no
-/// Entity embeddings yet.
-#[expect(
-    dead_code,
-    reason = "Phase-2 embedding-based entity dedup; not yet wired into the canonical-name dedup path"
-)]
-async fn find_similar_entity(
-    kb: &KnowledgeBase,
-    name: &str,
-    entity_type: &str,
-) -> uniko_store::Result<Option<(NodeId, HashMap<String, Value>)>> {
-    // Compute embedding for the candidate entity.
-    let embed_text = format_embed_text(name, entity_type);
-    let vec = match crate::embedding::embed_query(kb, &embed_text).await {
-        Ok(v) if !v.is_empty() => v,
-        _ => return Ok(None), // Xervo unavailable or empty — skip similarity.
-    };
-
-    // Vector search for similar existing entities.
-    let results = match kb
-        .vector_search(&vec, labels::ENTITY, "embedding", 5, None)
-        .await
-    {
-        Ok(r) => r,
-        Err(_) => return Ok(None), // No vector index or no data — skip.
-    };
-
-    for result in &results {
-        let existing_type = result
-            .properties
-            .get("entity_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("other");
-
-        // Determine threshold based on type compatibility.
-        let threshold = if !types_compatible(entity_type, existing_type) {
-            continue; // Incompatible types — never merge.
-        } else if entity_type == existing_type {
-            SIMILARITY_SAME_TYPE
-        } else {
-            SIMILARITY_CROSS_TYPE
-        };
-
-        if result.score >= threshold {
-            return Ok(Some((result.node_id, result.properties.clone())));
-        }
-    }
-
-    Ok(None)
-}
-
-/// Whether two entity types are compatible for merging.
-///
-/// Incompatible pairs (never merge regardless of similarity):
-/// - person ↔ org
-/// - person ↔ place
-/// - code_symbol ↔ code_import
-/// - date ↔ anything except date
-fn types_compatible(a: &str, b: &str) -> bool {
-    // "other" is compatible with everything.
-    if a == "other" || b == "other" {
-        return true;
-    }
-    // Same type is always compatible.
-    if a == b {
-        return true;
-    }
-    // Date is only compatible with date.
-    if a == "date" || b == "date" {
-        return false;
-    }
-    // Incompatible pairs.
-    let pair = if a < b { (a, b) } else { (b, a) };
-    !matches!(
-        pair,
-        ("organization", "person")
-            | ("location", "person")
-            | ("location", "organization")
-            | ("code_import", "code_symbol")
-    )
 }
 
 #[cfg(test)]

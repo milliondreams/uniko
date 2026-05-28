@@ -314,11 +314,7 @@ async fn extract_entities_and_nlp(
         }
     }
 
-    // 4. LLM enhance stub.
-    let llm_ents = crate::ner::llm::enhance_entities_llm(&msg.content, &all_raw).await;
-    all_raw.extend(llm_ents);
-
-    // 5. Dedup.
+    // 4. Dedup.
     let deduped = deduplicate_raw(all_raw);
 
     EntityExtractionOutput {

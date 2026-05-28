@@ -2,13 +2,12 @@
 //!
 //! The atomic ingest path (`crate::ingest::atomic::ingest_message_atomic`)
 //! drives entity extraction directly via the helpers in
-//! [`dedup`] and [`rules`] / [`onnx`] / [`llm`]; the standalone Step
-//! adapter has been retired.
+//! [`dedup`] and [`rules`] / [`onnx`]; the standalone Step adapter has
+//! been retired.
 
 #[cfg(feature = "code-parse")]
 pub mod code;
 pub mod dedup;
-pub mod llm;
 pub mod onnx;
 pub mod rules;
 pub mod types;
