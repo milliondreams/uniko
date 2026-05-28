@@ -47,23 +47,9 @@ pub fn entities_from_nlp_result(
                 .map(|start| (start, start + span.text.len()))
                 .unwrap_or((0, 0));
 
-            // Canonical name: title-case the surface form.
-            let canonical = span
-                .text
-                .split_whitespace()
-                .map(|w| {
-                    let mut chars = w.chars();
-                    match chars.next() {
-                        Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
-                        None => String::new(),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-
             RawEntity {
                 surface_form: span.text.clone(),
-                canonical_name: canonical,
+                canonical_name: title_case(&span.text),
                 entity_type,
                 confidence: span.confidence as f64,
                 source: ExtractionSource::OnnxModel,
@@ -83,4 +69,21 @@ pub fn entities_from_nlp_result(
 #[cfg(not(feature = "onnx"))]
 pub fn extract_entities_onnx(_text: &str) -> Result<Vec<RawEntity>, UnikoError> {
     Err(UnikoError::Pipeline("ONNX NER model not available".into()))
+}
+
+/// Title-case `s` whitespace-token-wise: uppercase the first character
+/// of each whitespace-delimited word, lowercase the rest. Multi-codepoint
+/// safe (Unicode case mapping).
+#[cfg(feature = "onnx")]
+fn title_case(s: &str) -> String {
+    s.split_whitespace()
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

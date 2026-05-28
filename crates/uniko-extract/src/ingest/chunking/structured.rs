@@ -178,7 +178,7 @@ struct Rows {
 
 fn chunk_rows(rows: &Rows, config: &ChunkConfig, source: &str) -> Vec<ChunkData> {
     let heading_json = serde_json::to_string(&rows.header).unwrap_or_else(|_| "[]".into());
-    let header_md = format_header_row(&rows.header);
+    let header_md = format_row(&rows.header, true);
     let header_tokens = count_tokens(&header_md);
 
     let mut out: Vec<ChunkData> = Vec::new();
@@ -187,7 +187,7 @@ fn chunk_rows(rows: &Rows, config: &ChunkConfig, source: &str) -> Vec<ChunkData>
     let mut chunk_index = 0;
 
     for r in &rows.rows {
-        let row_md = format_data_row(r);
+        let row_md = format_row(r, false);
         let row_tokens = count_tokens(&row_md);
         if !buf_rows.is_empty() && buf_tokens + row_tokens > config.max_chunk_tokens {
             push_chunk(
@@ -251,7 +251,9 @@ fn push_chunk(
     *chunk_index += 1;
 }
 
-fn format_header_row(cols: &[String]) -> String {
+/// Format a Markdown table row from `cols`. When `with_separator`, the
+/// trailing `| --- | --- |` separator row is appended (header rows only).
+fn format_row(cols: &[String], with_separator: bool) -> String {
     let mut s = String::new();
     s.push('|');
     for c in cols {
@@ -260,23 +262,13 @@ fn format_header_row(cols: &[String]) -> String {
         s.push_str(" |");
     }
     s.push('\n');
-    s.push('|');
-    for _ in cols {
-        s.push_str(" --- |");
+    if with_separator {
+        s.push('|');
+        for _ in cols {
+            s.push_str(" --- |");
+        }
+        s.push('\n');
     }
-    s.push('\n');
-    s
-}
-
-fn format_data_row(cols: &[String]) -> String {
-    let mut s = String::new();
-    s.push('|');
-    for c in cols {
-        s.push(' ');
-        s.push_str(&escape_md_cell(c));
-        s.push_str(" |");
-    }
-    s.push('\n');
     s
 }
 

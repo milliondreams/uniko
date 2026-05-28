@@ -57,7 +57,7 @@ impl uniko_pipes::Step for IngestStep {
 
         match ingest_type {
             "message" => {
-                let msg = deserialize_message(&ctx.metadata)?;
+                let msg: IngestMessage = deserialize_payload(&ctx.metadata, "IngestMessage")?;
                 // Use SessionContext from metadata if available, else create a fresh one.
                 let mut session_ctx = ctx
                     .metadata
@@ -74,7 +74,8 @@ impl uniko_pipes::Step for IngestStep {
                 Ok(StepOutcome::Completed)
             }
             "artifact" => {
-                let art = deserialize_artifact(&ctx.metadata)?;
+                let art: uniko_pipes::IngestArtifact =
+                    deserialize_payload(&ctx.metadata, "IngestArtifact")?;
                 let result = artifact::ingest_artifact(&ctx.kb, &art).await?;
                 ctx.node_id = result.artifact_node_id;
                 if result.was_deduplicated {
@@ -95,24 +96,17 @@ impl uniko_pipes::Step for IngestStep {
     }
 }
 
-/// Deserialize an [`IngestMessage`] from pipeline metadata.
-fn deserialize_message(
+/// Deserialize an `ingest_payload` from pipeline metadata.
+///
+/// `kind_label` is included in the error message when deserialization
+/// fails (e.g. `"IngestMessage"`, `"IngestArtifact"`).
+fn deserialize_payload<T: serde::de::DeserializeOwned>(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
-) -> Result<IngestMessage, UnikoError> {
+    kind_label: &str,
+) -> Result<T, UnikoError> {
     let payload = metadata
         .get("ingest_payload")
         .ok_or_else(|| UnikoError::Pipeline("missing ingest_payload in metadata".into()))?;
     serde_json::from_value(payload.clone())
-        .map_err(|e| UnikoError::Pipeline(format!("invalid IngestMessage: {e}")))
-}
-
-/// Deserialize an [`IngestArtifact`] from pipeline metadata.
-fn deserialize_artifact(
-    metadata: &std::collections::HashMap<String, serde_json::Value>,
-) -> Result<uniko_pipes::IngestArtifact, UnikoError> {
-    let payload = metadata
-        .get("ingest_payload")
-        .ok_or_else(|| UnikoError::Pipeline("missing ingest_payload in metadata".into()))?;
-    serde_json::from_value(payload.clone())
-        .map_err(|e| UnikoError::Pipeline(format!("invalid IngestArtifact: {e}")))
+        .map_err(|e| UnikoError::Pipeline(format!("invalid {kind_label}: {e}")))
 }

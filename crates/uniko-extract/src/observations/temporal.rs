@@ -235,8 +235,8 @@ pub fn resolve_temporal_with_granularity(
     None
 }
 
-/// Like [`parse_n_ago`] but also returns the granularity inferred from
-/// the unit string.  Used by [`resolve_temporal_with_granularity`].
+/// Parse `"N {unit} ago"`. Returns the [`Duration`] + inferred
+/// [`TemporalGranularity`]; used by [`resolve_temporal_with_granularity`].
 fn parse_n_ago_with_gran(text: &str) -> Option<(Duration, TemporalGranularity)> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
@@ -245,14 +245,11 @@ fn parse_n_ago_with_gran(text: &str) -> Option<(Duration, TemporalGranularity)> 
         )
         .unwrap()
     });
-    let caps = re.captures(text)?;
-    let n: i64 = parse_count(&caps[1])?;
-    let unit = &caps[2];
-    let dur = duration_for_unit(unit, n)?;
-    Some((dur, granularity_for_unit(unit)))
+    parse_n_unit_with_re(text, re)
 }
 
-/// Like [`parse_in_n`] but also returns the granularity.
+/// Parse `"in N {unit}"`. Mirrors [`parse_n_ago_with_gran`] for the
+/// forward direction.
 fn parse_in_n_with_gran(text: &str) -> Option<(Duration, TemporalGranularity)> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
@@ -261,6 +258,12 @@ fn parse_in_n_with_gran(text: &str) -> Option<(Duration, TemporalGranularity)> {
         )
         .unwrap()
     });
+    parse_n_unit_with_re(text, re)
+}
+
+/// Shared core for the two `(N, unit)` regexes — extract the count + unit
+/// captures and map through [`duration_for_unit`] / [`granularity_for_unit`].
+fn parse_n_unit_with_re(text: &str, re: &Regex) -> Option<(Duration, TemporalGranularity)> {
     let caps = re.captures(text)?;
     let n: i64 = parse_count(&caps[1])?;
     let unit = &caps[2];
@@ -429,39 +432,34 @@ fn parse_weekday(s: &str) -> Option<Weekday> {
 }
 
 /// Parse "in January" through "in December".
+///
+/// Single regex scan over `text`; 3-letter abbreviations are matched via
+/// the same alternation as full month names, so input is read once
+/// rather than ~24 substring sweeps.
 fn parse_in_month(text: &str) -> Option<u32> {
-    let months = [
-        ("january", 1),
-        ("february", 2),
-        ("march", 3),
-        ("april", 4),
-        ("may", 5),
-        ("june", 6),
-        ("july", 7),
-        ("august", 8),
-        ("september", 9),
-        ("october", 10),
-        ("november", 11),
-        ("december", 12),
-        ("jan", 1),
-        ("feb", 2),
-        ("mar", 3),
-        ("apr", 4),
-        ("jun", 6),
-        ("jul", 7),
-        ("aug", 8),
-        ("sep", 9),
-        ("oct", 10),
-        ("nov", 11),
-        ("dec", 12),
-    ];
-
-    for (name, num) in months {
-        if text.contains(&format!("in {name}")) {
-            return Some(num);
-        }
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r"\bin\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b",
+        )
+        .unwrap()
+    });
+    let caps = re.captures(text)?;
+    match &caps[1] {
+        "january" | "jan" => Some(1),
+        "february" | "feb" => Some(2),
+        "march" | "mar" => Some(3),
+        "april" | "apr" => Some(4),
+        "may" => Some(5),
+        "june" | "jun" => Some(6),
+        "july" | "jul" => Some(7),
+        "august" | "aug" => Some(8),
+        "september" | "sep" => Some(9),
+        "october" | "oct" => Some(10),
+        "november" | "nov" => Some(11),
+        "december" | "dec" => Some(12),
+        _ => None,
     }
-    None
 }
 
 /// Resolve a month number to the nearest past occurrence.

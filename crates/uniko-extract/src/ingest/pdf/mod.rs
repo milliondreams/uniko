@@ -83,26 +83,16 @@ pub async fn ingest_pdf(
 
     // 2. Hash + dedup (by hash, then by artifact_id).
     let hash = KnowledgeBase::sha256_hex(&bytes);
-    if let Some((existing_id, _)) = kb.get_node_by_ext_id("Artifact", "hash", &hash).await? {
-        return Ok(PdfIngestResult {
-            artifact_node_id: existing_id,
-            chunk_node_ids: Vec::new(),
-            page_count: 0,
-            was_deduplicated: true,
-            extraction_failure: None,
-        });
-    }
-    if let Some((existing_id, _)) = kb
-        .get_node_by_ext_id("Artifact", "artifact_id", &opts.artifact_id)
-        .await?
-    {
-        return Ok(PdfIngestResult {
-            artifact_node_id: existing_id,
-            chunk_node_ids: Vec::new(),
-            page_count: 0,
-            was_deduplicated: true,
-            extraction_failure: None,
-        });
+    for (key, value) in [("hash", hash.as_str()), ("artifact_id", &opts.artifact_id)] {
+        if let Some((existing_id, _)) = kb.get_node_by_ext_id("Artifact", key, value).await? {
+            return Ok(PdfIngestResult {
+                artifact_node_id: existing_id,
+                chunk_node_ids: Vec::new(),
+                page_count: 0,
+                was_deduplicated: true,
+                extraction_failure: None,
+            });
+        }
     }
 
     let size = bytes.len() as i64;

@@ -37,41 +37,58 @@ pub fn chunk_pages(pages: &[ExtractedPage], config: &ChunkConfig) -> Vec<ChunkDa
 
         let page_tokens = count_tokens(&page.text);
         if page_tokens <= config.max_chunk_tokens {
-            out.push(ChunkData {
-                text: page.text.clone(),
-                index: global_idx,
-                start: 0,
-                end: page.text.len(),
-                token_count: page_tokens,
-                chunk_type: "page".into(),
-                language: None,
-                symbol_name: None,
-                heading: None,
-                metadata: Some(meta),
-            });
+            out.push(page_chunk(
+                page.text.clone(),
+                global_idx,
+                0,
+                page.text.len(),
+                page_tokens,
+                meta,
+            ));
             global_idx += 1;
             continue;
         }
 
         // Long page — split via TextChunker, then tag every sub-chunk.
         for sub in TextChunker.chunk(&page.text, config) {
-            out.push(ChunkData {
-                text: sub.text,
-                index: global_idx,
-                start: sub.start,
-                end: sub.end,
-                token_count: sub.token_count,
-                chunk_type: "page".into(),
-                language: None,
-                symbol_name: None,
-                heading: None,
-                metadata: Some(meta.clone()),
-            });
+            out.push(page_chunk(
+                sub.text,
+                global_idx,
+                sub.start,
+                sub.end,
+                sub.token_count,
+                meta.clone(),
+            ));
             global_idx += 1;
         }
     }
 
     out
+}
+
+/// Build a `chunk_type = "page"` [`ChunkData`] carrying the given page
+/// metadata. Used for both single-chunk pages and post-`TextChunker`
+/// sub-chunks of long pages.
+fn page_chunk(
+    text: String,
+    index: usize,
+    start: usize,
+    end: usize,
+    token_count: usize,
+    metadata: serde_json::Value,
+) -> ChunkData {
+    ChunkData {
+        text,
+        index,
+        start,
+        end,
+        token_count,
+        chunk_type: "page".into(),
+        language: None,
+        symbol_name: None,
+        heading: None,
+        metadata: Some(metadata),
+    }
 }
 
 /// [`Chunker`] adapter — used only when the chunker is selected by

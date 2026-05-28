@@ -83,14 +83,20 @@ struct Segment {
 // ── Split helpers ───────────────────────────────────────────────────
 
 /// Split content at paragraph boundaries (`\n\n`).
+///
+/// Offsets are tracked from the split's own position into `content`,
+/// then advanced past the leading whitespace of each part — avoids the
+/// O(n²) `content[offset..].find(trimmed)` rescan per paragraph.
 fn split_paragraphs(content: &str) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut offset = 0;
 
     for part in content.split("\n\n") {
+        let part_len = part.len();
         let trimmed = part.trim();
         if !trimmed.is_empty() {
-            let start = content[offset..].find(trimmed).unwrap_or(0) + offset;
+            let lead_ws = part.len() - part.trim_start().len();
+            let start = offset + lead_ws;
             let end = start + trimmed.len();
             segments.push(Segment {
                 text: trimmed.to_string(),
@@ -98,7 +104,7 @@ fn split_paragraphs(content: &str) -> Vec<Segment> {
                 end,
             });
         }
-        offset += part.len() + 2; // +2 for the "\n\n" delimiter
+        offset += part_len + 2; // +2 for the "\n\n" delimiter
     }
     segments
 }
