@@ -15,7 +15,6 @@
 use uniko_memory::recall::RecallConfig;
 use uniko_memory::recall::modality::{
     RecallCounters, audio_channel_active, image_channel_active, multimodal_channel_active,
-    video_channel_active,
 };
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
@@ -47,7 +46,6 @@ async fn dormant_in_text_only_corpus_with_toggles_off() {
     // Activation predicates: both signals required → all dormant.
     assert!(!image_channel_active(&presence, cfg.enable_image_channel));
     assert!(!audio_channel_active(&presence, cfg.enable_audio_channel));
-    assert!(!video_channel_active(&presence, cfg.enable_video_channel));
     assert!(!multimodal_channel_active(
         &presence,
         cfg.enable_multimodal_channel
@@ -74,7 +72,6 @@ async fn dormant_in_text_only_corpus_even_with_toggles_on() {
     // in the common case.
     assert!(!image_channel_active(&presence, true));
     assert!(!audio_channel_active(&presence, true));
-    assert!(!video_channel_active(&presence, true));
     assert!(!multimodal_channel_active(&presence, true));
 
     kb.shutdown().await.expect("shutdown");

@@ -34,7 +34,6 @@ pub use uniko_store::storage::kb_stats::ModalityPresence;
 pub struct RecallCounters {
     image_channel_fires: Arc<AtomicUsize>,
     audio_channel_fires: Arc<AtomicUsize>,
-    video_channel_fires: Arc<AtomicUsize>,
     multimodal_channel_fires: Arc<AtomicUsize>,
 }
 
@@ -56,11 +55,6 @@ impl RecallCounters {
         self.audio_channel_fires.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment the video channel counter.
-    pub fn bump_video(&self) {
-        self.video_channel_fires.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Increment the multimodal channel counter.
     pub fn bump_multimodal(&self) {
         self.multimodal_channel_fires
@@ -79,12 +73,6 @@ impl RecallCounters {
         self.audio_channel_fires.load(Ordering::Relaxed)
     }
 
-    /// Read the video channel counter.
-    #[must_use]
-    pub fn video(&self) -> usize {
-        self.video_channel_fires.load(Ordering::Relaxed)
-    }
-
     /// Read the multimodal channel counter.
     #[must_use]
     pub fn multimodal(&self) -> usize {
@@ -95,7 +83,7 @@ impl RecallCounters {
     /// for one-shot "did anything cross-modal fire?" assertions.
     #[must_use]
     pub fn total(&self) -> usize {
-        self.image() + self.audio() + self.video() + self.multimodal()
+        self.image() + self.audio() + self.multimodal()
     }
 }
 
@@ -114,14 +102,6 @@ pub fn image_channel_active(presence: &ModalityPresence, image_channel_enabled: 
 #[must_use]
 pub fn audio_channel_active(presence: &ModalityPresence, audio_channel_enabled: bool) -> bool {
     presence.has_audio_content && audio_channel_enabled
-}
-
-/// Mirror of [`image_channel_active`] for video. Video corpora always
-/// have an audio track too; the channel still gates on the video
-/// presence flag so we don't fire purely on the side-channel.
-#[must_use]
-pub fn video_channel_active(presence: &ModalityPresence, video_channel_enabled: bool) -> bool {
-    presence.has_video_content && video_channel_enabled
 }
 
 /// Mirror of [`image_channel_active`] for the multimodal channel
@@ -162,7 +142,6 @@ mod tests {
         // Channel toggle on, but presence false: channel does NOT activate.
         assert!(!image_channel_active(&p, true));
         assert!(!audio_channel_active(&p, true));
-        assert!(!video_channel_active(&p, true));
         assert!(!multimodal_channel_active(&p, true));
     }
 
