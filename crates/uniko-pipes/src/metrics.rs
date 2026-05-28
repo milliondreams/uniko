@@ -4,7 +4,6 @@
 //! Counter, Gauge, and Histogram types.
 
 use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
-use serde::Serialize;
 
 use crate::circuit_breaker::CircuitState;
 
@@ -176,23 +175,4 @@ pub fn emit_procedure_cycle_duration(ms: f64) {
 /// Increment the procedures-promoted counter.
 pub fn emit_procedures_promoted(n: usize) {
     counter!("uniko.cortex.procedures_promoted_total").increment(n as u64);
-}
-
-/// Point-in-time snapshot of key pipeline metrics.
-#[derive(Debug, Clone, Serialize)]
-pub struct MetricsSnapshot {
-    /// Total items ingested.
-    pub ingest_items_total: u64,
-    /// Total items that failed.
-    pub ingest_items_failed: u64,
-    /// Total consolidation cycles.
-    pub consolidation_cycles_total: u64,
-    /// Total LLM calls.
-    pub llm_calls_total: u64,
-    /// Total LLM errors.
-    pub llm_errors_total: u64,
-    /// Current circuit breaker state.
-    pub llm_circuit_state: CircuitState,
-    /// Current dead-letter queue depth.
-    pub deadletter_pending: u64,
 }

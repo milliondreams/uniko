@@ -24,6 +24,7 @@ pub struct ShutdownCoordinator {
 
 impl ShutdownCoordinator {
     /// Build the token hierarchy.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let root = CancellationToken::new();
         let ingest = root.child_token();
@@ -43,11 +44,6 @@ impl ShutdownCoordinator {
     /// Token for the consolidation worker.
     pub fn consolidation_token(&self) -> CancellationToken {
         self.consolidation.clone()
-    }
-
-    /// Token for a per-item child (child of ingest).
-    pub fn item_token(&self) -> CancellationToken {
-        self.ingest.child_token()
     }
 
     /// Whether the root has been cancelled.
@@ -101,12 +97,6 @@ impl ShutdownCoordinator {
     }
 }
 
-impl Default for ShutdownCoordinator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,17 +106,14 @@ mod tests {
         let coord = ShutdownCoordinator::new();
         let ingest = coord.ingest_token();
         let consolidation = coord.consolidation_token();
-        let item = coord.item_token();
 
         assert!(!ingest.is_cancelled());
         assert!(!consolidation.is_cancelled());
-        assert!(!item.is_cancelled());
 
         coord.root.cancel();
 
         assert!(ingest.is_cancelled());
         assert!(consolidation.is_cancelled());
-        assert!(item.is_cancelled());
     }
 
     #[test]

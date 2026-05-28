@@ -70,6 +70,7 @@ const STALL_THRESHOLD_SECS: u64 = 300;
 
 impl HealthTracker {
     /// Create a fresh tracker with no history.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             items_processed: 0,
@@ -113,12 +114,6 @@ impl HealthTracker {
             items_failed: self.items_failed,
             avg_latency_ms: self.avg_latency_ms,
         }
-    }
-}
-
-impl Default for HealthTracker {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

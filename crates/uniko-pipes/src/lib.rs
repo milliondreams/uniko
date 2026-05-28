@@ -1,7 +1,7 @@
 //! # uniko-pipes — Layer 2: Pipeline Infrastructure
 //!
-//! Generic pipeline machinery: Step trait, circuit breaker, retry with backoff,
-//! dead-letter queue, cancellation tokens, health checks, and metrics.
+//! Generic pipeline machinery: Step trait, circuit breaker, dead-letter
+//! queue, cancellation tokens, health checks, and metrics.
 //!
 //! Depends on `uniko-store` only. Content processing steps live in `uniko-extract`.
 
@@ -11,7 +11,6 @@ pub mod config;
 pub mod dead_letter;
 pub mod health;
 pub mod metrics;
-pub mod retry;
 pub mod step;
 pub mod types;
 
@@ -22,8 +21,6 @@ pub use cancel::ShutdownCoordinator;
 pub use circuit_breaker::{CircuitBreaker, CircuitState};
 #[doc(inline)]
 pub use config::PipelineConfig;
-#[doc(inline)]
-pub use retry::RetryPolicy;
 #[doc(inline)]
 pub use step::{PipelineContext, Step};
 #[doc(inline)]
