@@ -24,7 +24,7 @@
 //! Recording is **off by default** at the convenience wrapper — the
 //! caller must supply [`QueryRecordOptions`] to opt in. The standalone
 //! primitive is always explicit.
-use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
@@ -111,85 +111,50 @@ pub async fn record_query_episode(
     agent_id: &str,
     params: RecordQueryEpisodeParams<'_>,
 ) -> Result<NodeId, UnikoError> {
-    let mut state = JsonMap::new();
-
-    // Required fields — always present.
-    state.insert(
-        "topic".into(),
-        JsonValue::String(params.question.to_string()),
-    );
-    state.insert(
-        "question".into(),
-        JsonValue::String(params.question.to_string()),
-    );
-    state.insert(
-        "answer".into(),
-        JsonValue::String(params.answer.to_string()),
-    );
-    state.insert(
-        "recall_node_ids".into(),
-        JsonValue::Array(
-            params
-                .recall_node_ids
-                .iter()
-                .copied()
-                .map(|n| JsonValue::Number(JsonNumber::from(n)))
-                .collect(),
-        ),
-    );
-    state.insert(
-        "recall_count".into(),
-        JsonValue::Number(JsonNumber::from(params.recall_node_ids.len() as u64)),
-    );
-    // recall_coverage is f64; JsonNumber::from_f64 rejects NaN/inf —
-    // clamp before insertion so a NaN coverage doesn't drop the field.
-    let coverage = if params.recall_coverage.is_finite() {
-        params.recall_coverage
-    } else {
-        0.0
-    };
-    state.insert(
-        "recall_coverage".into(),
-        JsonNumber::from_f64(coverage)
-            .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null),
-    );
-    state.insert(
-        "recall_tokens".into(),
-        JsonValue::Number(JsonNumber::from(params.recall_tokens as u64)),
-    );
-
+    // `JsonNumber::from_f64` rejects NaN/inf — clamp here so a NaN
+    // coverage doesn't drop the field downstream.
+    let coverage = finite_or_zero(params.recall_coverage);
+    let mut state = json!({
+        "topic": params.question,
+        "question": params.question,
+        "answer": params.answer,
+        "recall_node_ids": params.recall_node_ids,
+        "recall_count": params.recall_node_ids.len(),
+        "recall_coverage": coverage,
+        "recall_tokens": params.recall_tokens,
+    });
+    let obj = state.as_object_mut().expect("json! literal is an object");
     if let Some(t) = params.answer_input_tokens {
-        state.insert(
-            "answer_input_tokens".into(),
-            JsonValue::Number(JsonNumber::from(t)),
-        );
+        obj.insert("answer_input_tokens".into(), json!(t));
     }
     if let Some(t) = params.answer_output_tokens {
-        state.insert(
-            "answer_output_tokens".into(),
-            JsonValue::Number(JsonNumber::from(t)),
-        );
+        obj.insert("answer_output_tokens".into(), json!(t));
     }
     if let Some(m) = params.answer_model {
-        state.insert("answer_model".into(), JsonValue::String(m.to_string()));
+        obj.insert("answer_model".into(), json!(m));
     }
 
     // Merge extra_state — built-in keys win over caller-supplied ones.
     if let Some(JsonValue::Object(extra)) = params.extra_state {
         for (k, v) in extra {
-            state.entry(k).or_insert(v);
+            obj.entry(k).or_insert(v);
         }
     }
 
     let ep_params = RecordEpisodeParams {
         action_type: params.action_type.unwrap_or("retrieve").to_string(),
         outcome: params.outcome.map(str::to_string),
-        state: Some(JsonValue::Object(state)),
+        state: Some(state),
         importance: params.importance,
         ..Default::default()
     };
     record_episode(kb, agent_id, ep_params).await
+}
+
+/// Replace `NaN` / `±inf` with `0.0` so values flowing into JSON or
+/// other rejecters of non-finite floats stay representable.
+fn finite_or_zero(x: f64) -> f64 {
+    if x.is_finite() { x } else { 0.0 }
 }
 
 /// The answer surface a caller's generator closure returns.

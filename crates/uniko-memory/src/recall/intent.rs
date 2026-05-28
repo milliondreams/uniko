@@ -8,6 +8,7 @@ use uniko_store::{KnowledgeBase, UnikoError};
 
 /// Content POS tags to keep for keyword extraction.
 /// NOUN, VERB, PROPN, ADJ, NUM — drop function words.
+#[cfg(feature = "onnx")]
 const CONTENT_POS: &[&str] = &["NOUN", "VERB", "PROPN", "ADJ", "NUM"];
 
 /// Variant labels recognised when building an [`IntentProfile`].
@@ -444,6 +445,8 @@ async fn analyze_query(kb: &KnowledgeBase, query: &str) -> QueryAnalysis {
     if let Some(analysis) = analyze_query_onnx(kb, query).await {
         return analysis;
     }
+    #[cfg(not(feature = "onnx"))]
+    let _ = kb;
 
     // Fallback: rule-based NER, raw query as keywords.
     let raw = extract_entities_rule_based(query);

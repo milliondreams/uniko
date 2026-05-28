@@ -203,23 +203,10 @@ async fn find_previous_episode(
     };
     let node: uni_db::Node = row.get("e")?;
     let vid = node.vid.as_u64() as i64;
-    let ts = match node.properties.get("timestamp") {
-        Some(Value::Temporal(t)) => {
-            let millis = t
-                .epoch_millis()
-                .ok_or_else(|| UnikoError::Storage("Episode.timestamp has no epoch".into()))?;
-            DateTime::<Utc>::from_timestamp_millis(millis)
-                .ok_or_else(|| UnikoError::Storage(format!("epoch millis {millis} out of range")))?
-        }
-        Some(Value::String(s)) => DateTime::parse_from_rfc3339(s)
-            .map_err(|e| UnikoError::Storage(e.to_string()))?
-            .with_timezone(&Utc),
-        other => {
-            return Err(UnikoError::Storage(format!(
-                "Episode.timestamp unexpected type: {other:?}"
-            )));
-        }
-    };
+    let ts_value = node.properties.get("timestamp").ok_or_else(|| {
+        UnikoError::Storage("Episode.timestamp missing".into())
+    })?;
+    let ts = crate::value_convert::require_datetime(ts_value, "Episode.timestamp")?;
 
     if ts < earliest || ts > now {
         return Ok(None);

@@ -268,55 +268,28 @@ struct RuleSnapshot {
     last_scored_at: Option<DateTime<Utc>>,
 }
 
+/// Standard `RETURN` clause for Rule snapshots — kept in one place so
+/// `fetch_lifecycle_rules` and `fetch_rule_by_name` always project the
+/// same columns and `row_to_snapshot` can decode them uniformly.
+const RULE_SNAPSHOT_RETURN: &str = "RETURN id(r) AS nid, r.name AS name, \
+                                    coalesce(r.source_type, 'authored') AS st, \
+                                    coalesce(r.status, 'candidate') AS status, \
+                                    coalesce(r.confidence, 0.5) AS conf, \
+                                    coalesce(r.missed_cycles, 0) AS mc, \
+                                    r.last_scored_at AS lsa";
+
 async fn fetch_lifecycle_rules(kb: &KnowledgeBase) -> Result<Vec<RuleSnapshot>, UnikoError> {
     let session = kb.db().session();
-    let cypher = "MATCH (r:Rule) \
-                  RETURN id(r) AS nid, r.name AS name, \
-                         coalesce(r.source_type, 'authored') AS st, \
-                         coalesce(r.status, 'candidate') AS status, \
-                         coalesce(r.confidence, 0.5) AS conf, \
-                         coalesce(r.missed_cycles, 0) AS mc, \
-                         r.last_scored_at AS lsa";
-    let result = session.query_with(cypher).fetch_all().await?;
-
-    let mut out = Vec::new();
-    for row in result.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let name: String = row.get("name").unwrap_or_default();
-        let source_type: String = row.get("st").unwrap_or_else(|_| "authored".into());
-        let status: String = row
-            .get("status")
-            .unwrap_or_else(|_| STATUS_CANDIDATE.into());
-        let confidence: f64 = row.get("conf").unwrap_or(0.5);
-        let missed_cycles: i64 = row.get("mc").unwrap_or(0);
-        let last_scored_at = extract_optional_dt(row, "lsa");
-        out.push(RuleSnapshot {
-            node_id: nid,
-            name,
-            source_type,
-            status,
-            confidence,
-            missed_cycles,
-            last_scored_at,
-        });
-    }
-    Ok(out)
+    let cypher = format!("MATCH (r:Rule) {RULE_SNAPSHOT_RETURN}");
+    let result = session.query_with(&cypher).fetch_all().await?;
+    Ok(result.rows().iter().filter_map(row_to_snapshot).collect())
 }
 
 async fn fetch_rule_by_name(kb: &KnowledgeBase, name: &str) -> Result<RuleSnapshot, UnikoError> {
     let session = kb.db().session();
-    let cypher = "MATCH (r:Rule) WHERE r.name = $n \
-                  RETURN id(r) AS nid, r.name AS name, \
-                         coalesce(r.source_type, 'authored') AS st, \
-                         coalesce(r.status, 'candidate') AS status, \
-                         coalesce(r.confidence, 0.5) AS conf, \
-                         coalesce(r.missed_cycles, 0) AS mc, \
-                         r.last_scored_at AS lsa \
-                  LIMIT 1";
+    let cypher = format!("MATCH (r:Rule) WHERE r.name = $n {RULE_SNAPSHOT_RETURN} LIMIT 1");
     let result = session
-        .query_with(cypher)
+        .query_with(&cypher)
         .param("n", name)
         .fetch_all()
         .await?;
@@ -324,8 +297,16 @@ async fn fetch_rule_by_name(kb: &KnowledgeBase, name: &str) -> Result<RuleSnapsh
         .rows()
         .first()
         .ok_or_else(|| UnikoError::Storage(format!("rule '{name}' not found")))?;
-    Ok(RuleSnapshot {
-        node_id: row.get("nid")?,
+    row_to_snapshot(row).ok_or_else(|| UnikoError::Storage(format!("rule '{name}' missing nid")))
+}
+
+/// Decode a Rule row produced by [`RULE_SNAPSHOT_RETURN`] into a
+/// [`RuleSnapshot`].  Returns `None` when `nid` is unreadable —
+/// callers either skip or surface a missing-rule error.
+fn row_to_snapshot(row: &uni_db::Row) -> Option<RuleSnapshot> {
+    let nid: i64 = row.get("nid").ok()?;
+    Some(RuleSnapshot {
+        node_id: nid,
         name: row.get("name").unwrap_or_default(),
         source_type: row.get("st").unwrap_or_else(|_| "authored".into()),
         status: row
@@ -333,30 +314,8 @@ async fn fetch_rule_by_name(kb: &KnowledgeBase, name: &str) -> Result<RuleSnapsh
             .unwrap_or_else(|_| STATUS_CANDIDATE.into()),
         confidence: row.get("conf").unwrap_or(0.5),
         missed_cycles: row.get("mc").unwrap_or(0),
-        last_scored_at: extract_optional_dt(row, "lsa"),
+        last_scored_at: crate::value_convert::extract_optional_dt(row, "lsa"),
     })
-}
-
-/// Pull a column out of a uni-db row and parse it as a UTC datetime.
-///
-/// uni-db serializes DateTime properties as `Value::Temporal`, but
-/// `Row::get::<String>` can't reach a Temporal directly and
-/// `toString()` is not yet implemented for temporals.  We work around
-/// this by indexing the row's values directly and matching on the
-/// underlying `Value` variant.
-fn extract_optional_dt(row: &uni_db::Row, column: &str) -> Option<DateTime<Utc>> {
-    let idx = row.columns().iter().position(|c| c == column)?;
-    let value = row.values().get(idx)?;
-    match value {
-        uni_db::Value::Temporal(t) => {
-            let millis = t.epoch_millis()?;
-            DateTime::<Utc>::from_timestamp_millis(millis)
-        }
-        uni_db::Value::String(s) if !s.is_empty() => DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|d| d.with_timezone(&Utc)),
-        _ => None,
-    }
 }
 
 fn days_since(last: &Option<DateTime<Utc>>, now: DateTime<Utc>) -> i64 {

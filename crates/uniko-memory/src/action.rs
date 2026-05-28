@@ -372,10 +372,11 @@ fn split_overflow(
     };
     match out {
         JsonValue::String(s) => {
-            if count_tokens(s) > threshold_tokens {
+            let tokens = count_tokens(s);
+            if tokens > threshold_tokens {
                 // Replace the inlined output with a short stub so the
                 // Action still records the kind of payload it produced.
-                let stub = format!("<overflow: {} tokens spilled to Artifact>", count_tokens(s));
+                let stub = format!("<overflow: {tokens} tokens spilled to Artifact>");
                 (Some(Value::String(stub)), Some(s.clone()))
             } else {
                 (Some(Value::String(s.clone())), None)

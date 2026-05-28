@@ -94,10 +94,11 @@ impl IngestWorker {
         let dlq_max = self.dlq_max_retries;
 
         tokio::spawn(async move {
-            // Acquire semaphore permit (bounds concurrency).
-            let _permit = match permit.acquire().await {
-                Ok(p) => p,
-                Err(_) => return, // Semaphore closed.
+            // Acquire semaphore permit (bounds concurrency).  An `Err`
+            // here means the semaphore was closed during shutdown —
+            // nothing to do, drop the task.
+            let Ok(_permit) = permit.acquire().await else {
+                return;
             };
 
             let start = std::time::Instant::now();

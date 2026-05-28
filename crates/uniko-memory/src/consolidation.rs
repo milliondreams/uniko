@@ -311,29 +311,10 @@ pub async fn run_cycle_with(
         HashMap::new()
     } else {
         let refs: Vec<&str> = unique_vec.iter().map(String::as_str).collect();
-        let doc_prefix = kb.config().embedding.document_prefix.clone();
-        // Chunked to avoid the BFC arena OOM seen with single-call
-        // batches at ~6k inputs (~1.3 GB activation buffer for BGE).
-        match embed_batch_chunked(kb, &refs, doc_prefix.as_deref(), EMBED_BATCH_CHUNK_SIZE).await {
-            Ok(embs) if embs.len() == unique_vec.len() => {
-                unique_vec.iter().cloned().zip(embs).collect()
-            }
-            Ok(embs) => {
-                tracing::warn!(
-                    requested = unique_vec.len(),
-                    returned = embs.len(),
-                    "object embedding batch length mismatch; falling back to string-exact dedup",
-                );
-                HashMap::new()
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "object embedding batch failed; falling back to string-exact dedup",
-                );
-                HashMap::new()
-            }
-        }
+        embed_or_warn(kb, &refs, "object")
+            .await
+            .map(|embs| unique_vec.iter().cloned().zip(embs).collect())
+            .unwrap_or_default()
     };
 
     let mut created_facts: Vec<NodeId> = Vec::new();
@@ -429,36 +410,14 @@ pub async fn run_cycle_with(
     }
 
     // Single chunked-batched embedding call for every Fact in the
-    // cycle (replaces 2 874+ sequential `embed_document` calls). A
+    // cycle (replaces 2 874+ sequential `embed_document` calls).  A
     // partial / failed batch degrades to storing Facts without an
     // embedding — same fallback the per-group path used.
     let embed_texts: Vec<&str> = plans.iter().map(|p| p.embed_text.as_str()).collect();
-    let doc_prefix = kb.config().embedding.document_prefix.clone();
-    let fact_embeddings: Vec<Option<Vec<f32>>> = match embed_batch_chunked(
-        kb,
-        &embed_texts,
-        doc_prefix.as_deref(),
-        EMBED_BATCH_CHUNK_SIZE,
-    )
-    .await
-    {
-        Ok(embs) if embs.len() == plans.len() => embs.into_iter().map(Some).collect(),
-        Ok(embs) => {
-            tracing::warn!(
-                requested = plans.len(),
-                returned = embs.len(),
-                "fact embedding batch length mismatch; storing Facts without embeddings",
-            );
-            vec![None; plans.len()]
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "fact embedding batch failed; storing Facts without embeddings",
-            );
-            vec![None; plans.len()]
-        }
-    };
+    let fact_embeddings: Vec<Option<Vec<f32>>> = embed_or_warn(kb, &embed_texts, "fact")
+        .await
+        .map(|embs| embs.into_iter().map(Some).collect())
+        .unwrap_or_else(|| vec![None; plans.len()]);
 
     // Batched fact upsert: one batched MATCH, one batched CREATE for
     // new facts, one batched UPDATE for reinforced facts. Replaces
@@ -582,6 +541,42 @@ pub async fn run_cycle_with(
         facts_invalidated: invalidated_facts.len(),
         drift_alerts,
     })
+}
+
+/// Chunked-batched embed with uniform "warn and fall back" behaviour.
+///
+/// Returns `Some(embeddings)` only when the batch yields exactly one
+/// vector per input.  Length mismatches and call failures both log at
+/// `warn` and return `None`, letting callers degrade gracefully (the
+/// object-clustering path falls back to string-exact dedup; the fact
+/// path stores Facts without an embedding).
+///
+/// `purpose` is interpolated into the warning so the log identifies
+/// which call site degraded (e.g. `"object"` vs `"fact"`).
+async fn embed_or_warn(
+    kb: &KnowledgeBase,
+    inputs: &[&str],
+    purpose: &str,
+) -> Option<Vec<Vec<f32>>> {
+    let doc_prefix = kb.config().embedding.document_prefix.clone();
+    // Chunked to avoid the BFC arena OOM seen with single-call batches
+    // at ~6k inputs (~1.3 GB activation buffer for BGE).
+    match embed_batch_chunked(kb, inputs, doc_prefix.as_deref(), EMBED_BATCH_CHUNK_SIZE).await {
+        Ok(embs) if embs.len() == inputs.len() => Some(embs),
+        Ok(embs) => {
+            tracing::warn!(
+                purpose,
+                requested = inputs.len(),
+                returned = embs.len(),
+                "embedding batch length mismatch; falling back",
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(purpose, error = %e, "embedding batch failed; falling back");
+            None
+        }
+    }
 }
 
 /// `min(prev, new)` when `prev` is set, otherwise `new`.  Tiny helper
@@ -800,41 +795,40 @@ async fn fetch_unprocessed_observations(
         .fetch_all()
         .await?;
 
-    let mut out: Vec<UnprocessedObs> = Vec::with_capacity(result.rows().len());
-    for row in result.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let Ok(subject) = row.get::<String>("subject") else {
-            continue;
-        };
-        let Ok(predicate) = row.get::<String>("predicate") else {
-            continue;
-        };
-        let object: Option<String> = row.get::<String>("object").ok();
-        let content: String = row.get::<String>("content").unwrap_or_default();
-        let observed_at = row
-            .get::<String>("observed_at")
+    Ok(result.rows().iter().filter_map(try_parse_observation).collect())
+}
+
+/// Decode one Observation row into [`UnprocessedObs`].  Returns `None`
+/// when any required column (`nid`/`subject`/`predicate`) is missing or
+/// malformed — those rows are silently skipped, matching the legacy
+/// per-field guards.
+fn try_parse_observation(row: &uni_db::Row) -> Option<UnprocessedObs> {
+    let nid = row.get::<i64>("nid").ok()?;
+    let subject = row.get::<String>("subject").ok()?;
+    let predicate = row.get::<String>("predicate").ok()?;
+    let parse_rfc3339 = |s: String| {
+        DateTime::parse_from_rfc3339(&s)
             .ok()
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
-        let temporal_anchor = row
-            .get::<String>("temporal_anchor")
-            .ok()
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
-        out.push(UnprocessedObs {
-            node_id: nid,
-            subject,
-            predicate,
-            object,
-            content,
-            observed_at,
-            temporal_anchor,
-        });
-    }
-    Ok(out)
+    };
+    let observed_at = row
+        .get::<String>("observed_at")
+        .ok()
+        .and_then(parse_rfc3339)
+        .unwrap_or_else(Utc::now);
+    let temporal_anchor = row
+        .get::<String>("temporal_anchor")
+        .ok()
+        .and_then(parse_rfc3339);
+    Some(UnprocessedObs {
+        node_id: nid,
+        subject,
+        predicate,
+        object: row.get::<String>("object").ok(),
+        content: row.get::<String>("content").unwrap_or_default(),
+        observed_at,
+        temporal_anchor,
+    })
 }
 
 /// Compose the text that gets embedded for a Fact.
