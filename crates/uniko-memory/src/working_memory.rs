@@ -47,6 +47,16 @@ const APPROX_TOKENS_PER_ITEM: usize = 50;
 /// each category is one indexed query.
 const CANDIDATES_PER_CATEGORY: i64 = 50;
 
+/// Cypher fragment matching any Session bound to an in-scope Goal,
+/// either directly (`FOR_GOAL`) or via a Task (`FOR_TASK → PART_OF`).
+///
+/// Variable `s` must be bound to the candidate Session and the
+/// parameter `$ids` to a `List<String>` of goal ids — the same shape
+/// [`goal_ids_value`] produces.  Inlined into every per-category
+/// fetcher so they all share the same scope semantics.
+const SESSION_IN_GOAL_SCOPE: &str = "(EXISTS { (s)-[:FOR_GOAL]->(g:Goal) WHERE g.goal_id IN $ids } \
+                                    OR EXISTS { (s)-[:FOR_TASK]->(:Task)-[:PART_OF]->(g:Goal) WHERE g.goal_id IN $ids })";
+
 /// Inputs for [`working_memory`].
 #[derive(Debug, Clone, Default)]
 pub struct WorkingMemoryParams {
@@ -306,16 +316,16 @@ async fn fetch_session_items(
     session: &uni_db::Session,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = "MATCH (s:Session) \
-                  WHERE EXISTS { (s)-[:FOR_GOAL]->(g:Goal) WHERE g.goal_id IN $ids } \
-                     OR EXISTS { (s)-[:FOR_TASK]->(:Task)-[:PART_OF]->(g:Goal) WHERE g.goal_id IN $ids } \
-                  RETURN id(s) AS nid, \
-                         coalesce(s.topic, s.session_id) AS content, \
-                         s.started_at AS started_at \
-                  ORDER BY s.started_at DESC \
-                  LIMIT $lim";
+    let cypher = format!(
+        "MATCH (s:Session) WHERE {SESSION_IN_GOAL_SCOPE} \
+         RETURN id(s) AS nid, \
+                coalesce(s.topic, s.session_id) AS content, \
+                s.started_at AS started_at \
+         ORDER BY s.started_at DESC \
+         LIMIT $lim"
+    );
     let result = session
-        .query_with(cypher)
+        .query_with(&cypher)
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
@@ -350,15 +360,16 @@ async fn fetch_message_items(
     session: &uni_db::Session,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
-                  WHERE EXISTS { (s)-[:FOR_GOAL]->(g:Goal) WHERE g.goal_id IN $ids } \
-                     OR EXISTS { (s)-[:FOR_TASK]->(:Task)-[:PART_OF]->(g:Goal) WHERE g.goal_id IN $ids } \
-                  RETURN id(m) AS nid, \
-                         m.content AS content \
-                  ORDER BY m.timestamp DESC \
-                  LIMIT $lim";
+    let cypher = format!(
+        "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
+         WHERE {SESSION_IN_GOAL_SCOPE} \
+         RETURN id(m) AS nid, \
+                m.content AS content \
+         ORDER BY m.timestamp DESC \
+         LIMIT $lim"
+    );
     let result = session
-        .query_with(cypher)
+        .query_with(&cypher)
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
@@ -394,18 +405,19 @@ async fn fetch_fact_items(
     // path that anchors a fact to a goal is through Entity mentions in
     // any in-scope Message.  We bound the join with an IN-list of
     // goal_ids to keep the planner happy.
-    let cypher = "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
-                  WHERE EXISTS { (s)-[:FOR_GOAL]->(g:Goal) WHERE g.goal_id IN $ids } \
-                     OR EXISTS { (s)-[:FOR_TASK]->(:Task)-[:PART_OF]->(g:Goal) WHERE g.goal_id IN $ids } \
-                  MATCH (m)-[:MENTIONS]->(ent:Entity) \
-                  MATCH (f:Fact) WHERE f.subject = ent.name \
-                  RETURN DISTINCT id(f) AS nid, \
-                         coalesce(f.object, f.subject) AS content, \
-                         coalesce(f.confidence, 0.5) AS conf \
-                  ORDER BY conf DESC \
-                  LIMIT $lim";
+    let cypher = format!(
+        "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
+         WHERE {SESSION_IN_GOAL_SCOPE} \
+         MATCH (m)-[:MENTIONS]->(ent:Entity) \
+         MATCH (f:Fact) WHERE f.subject = ent.name \
+         RETURN DISTINCT id(f) AS nid, \
+                coalesce(f.object, f.subject) AS content, \
+                coalesce(f.confidence, 0.5) AS conf \
+         ORDER BY conf DESC \
+         LIMIT $lim"
+    );
     let result = session
-        .query_with(cypher)
+        .query_with(&cypher)
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()
@@ -434,17 +446,18 @@ async fn fetch_entity_items(
     session: &uni_db::Session,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
-                  WHERE EXISTS { (s)-[:FOR_GOAL]->(g:Goal) WHERE g.goal_id IN $ids } \
-                     OR EXISTS { (s)-[:FOR_TASK]->(:Task)-[:PART_OF]->(g:Goal) WHERE g.goal_id IN $ids } \
-                  MATCH (m)-[r:MENTIONS]->(ent:Entity) \
-                  RETURN DISTINCT id(ent) AS nid, \
-                         ent.name AS content, \
-                         coalesce(ent.frequency, 1) AS freq \
-                  ORDER BY freq DESC \
-                  LIMIT $lim";
+    let cypher = format!(
+        "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
+         WHERE {SESSION_IN_GOAL_SCOPE} \
+         MATCH (m)-[r:MENTIONS]->(ent:Entity) \
+         RETURN DISTINCT id(ent) AS nid, \
+                ent.name AS content, \
+                coalesce(ent.frequency, 1) AS freq \
+         ORDER BY freq DESC \
+         LIMIT $lim"
+    );
     let result = session
-        .query_with(cypher)
+        .query_with(&cypher)
         .param("ids", goal_ids_value(goal_ids))
         .param("lim", CANDIDATES_PER_CATEGORY)
         .fetch_all()

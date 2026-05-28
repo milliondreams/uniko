@@ -135,53 +135,17 @@ fn new_cache(capacity: usize) -> Cache {
 /// scanning isn't worth the AST dependency for the MVP, and
 /// callers can re-quote anything legitimately containing those
 /// words inside parameters.
+///
+/// CALL is ambiguous (read-only procedures exist) so it's not in the
+/// list; the keywords below cover every direct write syntax.
 #[must_use]
 pub fn is_safe_read_only(cypher: &str) -> bool {
-    let upper = cypher.to_uppercase();
-    // Word-boundary check to avoid rejecting `CREATE_AT` (no such
-    // identifier today but defensive).  Surround each keyword with
-    // non-alphanumeric chars in a regex-free check.
-    const FORBIDDEN: &[&str] = &[
-        "CREATE", "MERGE", "DELETE", "DETACH", "SET ", "REMOVE", "DROP", "LOAD ",
-    ];
-    for kw in FORBIDDEN {
-        if contains_word(&upper, kw) {
-            return false;
-        }
-    }
-    // CALL is ambiguous (read-only procedures exist) — only reject
-    // CALL when followed by a known write procedure.  For MVP we keep
-    // it permissive; the keyword list above covers every direct write
-    // syntax.
-    true
-}
-
-fn contains_word(haystack: &str, needle: &str) -> bool {
-    // Strip the trailing space sentinel some keywords use, then walk
-    // the haystack splitting on non-alphanumeric chars.
-    let trimmed = needle.trim_end();
-    let mut start = 0;
-    while let Some(pos) = haystack[start..].find(trimmed) {
-        let abs = start + pos;
-        let before = abs == 0
-            || !haystack
-                .as_bytes()
-                .get(abs - 1)
-                .map(|b| b.is_ascii_alphanumeric() || *b == b'_')
-                .unwrap_or(false);
-        let after_idx = abs + trimmed.len();
-        let after = after_idx >= haystack.len()
-            || !haystack
-                .as_bytes()
-                .get(after_idx)
-                .map(|b| b.is_ascii_alphanumeric() || *b == b'_')
-                .unwrap_or(false);
-        if before && after {
-            return true;
-        }
-        start = abs + trimmed.len();
-    }
-    false
+    static FORBIDDEN_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = FORBIDDEN_RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|LOAD)\b")
+            .expect("forbidden-keyword regex compiles")
+    });
+    !re.is_match(cypher)
 }
 
 fn normalise(s: &str) -> String {
@@ -416,19 +380,14 @@ async fn call_with_retry(
 
 /// Strip Markdown code fences and lead-in chatter from an LLM response.
 fn clean_response(raw: &str) -> String {
-    let mut s = raw.trim().to_string();
-    if let Some(stripped) = s.strip_prefix("```cypher") {
-        s = stripped.to_string();
-    } else if let Some(stripped) = s.strip_prefix("```") {
-        s = stripped.to_string();
-    }
-    if let Some(stripped) = s.strip_suffix("```") {
-        s = stripped.to_string();
-    }
-    // Some models prefix with "Cypher:" — strip that too.
-    if let Some(rest) = s.strip_prefix("Cypher:") {
-        s = rest.to_string();
-    }
+    let s = raw.trim();
+    let s = s
+        .strip_prefix("```cypher")
+        .or_else(|| s.strip_prefix("```"))
+        .unwrap_or(s);
+    let s = s.strip_suffix("```").unwrap_or(s);
+    // Some models prefix the body with "Cypher:" — strip that too.
+    let s = s.trim().strip_prefix("Cypher:").unwrap_or(s);
     s.trim().to_string()
 }
 
@@ -472,10 +431,11 @@ mod tests {
     }
 
     #[test]
-    fn contains_word_respects_boundaries() {
-        assert!(contains_word("MATCH (N) CREATE (X)", "CREATE"));
-        assert!(!contains_word("CREATEDATE", "CREATE"));
-        assert!(!contains_word("RECREATED", "CREATE"));
+    fn is_safe_read_only_respects_word_boundaries() {
+        // Embedded substrings should not trip the keyword detector.
+        assert!(is_safe_read_only("MATCH (n) RETURN n.create_date AS d"));
+        assert!(is_safe_read_only("MATCH (n) RETURN n.recreated AS r"));
+        assert!(is_safe_read_only("MATCH (n) RETURN n.dropped_at AS d"));
     }
 
     #[test]
