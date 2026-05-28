@@ -136,8 +136,8 @@ pub async fn detect_topics_once_with_llm(
             continue;
         }
         let topic_id = stable_topic_id(community);
-        let outcome = upsert_topic(kb, &topic_id, community, llm_alias).await?;
-        if outcome.created {
+        let created = upsert_topic(kb, &topic_id, community, llm_alias).await?;
+        if created {
             report.created += 1;
         } else {
             report.updated += 1;
@@ -281,22 +281,23 @@ fn group_by_label(labels_out: &[u32], entities: &[EntityRow]) -> HashMap<u32, Ve
 }
 
 /// Deterministic Topic id derived from the sorted member entity_ids.
+///
+/// Uses truncated SHA-256 (first 64 bits as big-endian hex) rather than
+/// [`std::collections::hash_map::DefaultHasher`] because the latter is not
+/// guaranteed stable across rustc versions, and these IDs are persisted to
+/// the store as `Topic.topic_id`.
 fn stable_topic_id(community: &[EntityRow]) -> String {
+    use sha2::{Digest, Sha256};
     let mut ids: Vec<&str> = community.iter().map(|e| e.entity_id.as_str()).collect();
     ids.sort_unstable();
-    let mut buf = String::new();
+    let mut h = Sha256::new();
     for id in ids {
-        buf.push_str(id);
-        buf.push('|');
+        h.update(id.as_bytes());
+        h.update(b"|");
     }
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    buf.hash(&mut h);
-    format!("topic_{:016x}", h.finish())
-}
-
-struct UpsertOutcome {
-    created: bool,
+    let digest = h.finalize();
+    let lead = u64::from_be_bytes(digest[..8].try_into().expect("Sha256 yields >= 8 bytes"));
+    format!("topic_{lead:016x}")
 }
 
 async fn upsert_topic(
@@ -304,7 +305,7 @@ async fn upsert_topic(
     topic_id: &str,
     members: &[EntityRow],
     llm_alias: Option<&str>,
-) -> Result<UpsertOutcome, UnikoError> {
+) -> Result<bool, UnikoError> {
     let existing = kb
         .get_node_by_ext_id(labels::TOPIC, "topic_id", topic_id)
         .await?
@@ -347,7 +348,7 @@ async fn upsert_topic(
         res?;
     }
 
-    Ok(UpsertOutcome { created: !existing })
+    Ok(!existing)
 }
 
 /// Resolve a topic name, preferring an LLM-generated name when the
@@ -385,12 +386,7 @@ async fn community_name_llm(
 ) -> Option<String> {
     use uni_db::xervo::{GenerationOptions, Message};
 
-    let mut bucket: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for m in members {
-        if !m.entity_type.is_empty() {
-            *bucket.entry(m.entity_type.as_str()).or_insert(0) += 1;
-        }
-    }
+    let bucket = bucket_by_type(members);
     let types = if bucket.is_empty() {
         "untyped".to_string()
     } else {
@@ -440,6 +436,19 @@ async fn community_name_llm(
     }
 }
 
+/// Bucket community members by `entity_type`, skipping members whose
+/// type is empty.  Ordered (BTreeMap) so callers building stable
+/// summaries see deterministic key order.
+fn bucket_by_type(members: &[EntityRow]) -> std::collections::BTreeMap<&str, usize> {
+    let mut bucket: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for m in members {
+        if !m.entity_type.is_empty() {
+            *bucket.entry(m.entity_type.as_str()).or_insert(0) += 1;
+        }
+    }
+    bucket
+}
+
 /// MVP topic naming fallback: join up to three member entity names.
 fn community_name(members: &[EntityRow]) -> String {
     let mut names: Vec<&str> = members.iter().map(|e| e.name.as_str()).collect();
@@ -457,12 +466,7 @@ fn community_name(members: &[EntityRow]) -> String {
 /// ran in rule-only mode) the summary falls back to the flat name
 /// list from [`community_name`].
 fn community_summary(members: &[EntityRow]) -> String {
-    let mut by_type: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for m in members {
-        if !m.entity_type.is_empty() {
-            *by_type.entry(m.entity_type.as_str()).or_insert(0) += 1;
-        }
-    }
+    let by_type = bucket_by_type(members);
     if by_type.is_empty() {
         return format!(
             "Topic of {} entities; representative members: {}",

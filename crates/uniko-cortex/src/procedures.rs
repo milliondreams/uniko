@@ -29,7 +29,7 @@ use serde::Serialize;
 use uni_db::Value;
 use uniko_store::schema::labels;
 use uniko_store::types::datetime_value;
-use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+use uniko_store::{KnowledgeBase, UnikoError};
 
 /// Status string for a Procedure that has been observed once but
 /// hasn't yet crossed the promotion threshold.
@@ -130,12 +130,12 @@ pub async fn promote_procedures_once(
             continue;
         };
 
-        let outcome = upsert_procedure(kb, agent_id, &a, &b, count, cfg).await?;
-        match outcome {
-            UpsertOutcome::Created => report.created += 1,
-            UpsertOutcome::Reinforced => report.reinforced += 1,
-            UpsertOutcome::Promoted => {
-                report.reinforced += 1;
+        let (created, promoted) = upsert_procedure(kb, agent_id, &a, &b, count, cfg).await?;
+        if created {
+            report.created += 1;
+        } else {
+            report.reinforced += 1;
+            if promoted {
                 report.promoted += 1;
             }
         }
@@ -165,7 +165,11 @@ pub async fn record_procedure_use(
             ))
         })?;
 
-    let snapshot = read_procedure(kb, procedure_id).await?;
+    let snapshot = read_procedure(kb, procedure_id).await?.ok_or_else(|| {
+        UnikoError::Storage(format!(
+            "record_procedure_use: Procedure '{procedure_id}' not found"
+        ))
+    })?;
     let use_count = snapshot.use_count + 1;
     let success = snapshot.success_count + i64::from(succeeded);
     let failure = snapshot.failure_count + i64::from(!succeeded);
@@ -256,13 +260,6 @@ pub struct MatchedProcedure {
     pub effectiveness: f64,
 }
 
-/// Internal: result classification for [`upsert_procedure`].
-enum UpsertOutcome {
-    Created,
-    Reinforced,
-    Promoted,
-}
-
 #[derive(Debug, Default)]
 struct ProcedureSnapshot {
     use_count: i64,
@@ -271,6 +268,10 @@ struct ProcedureSnapshot {
     status: String,
 }
 
+/// Returns `(created, promoted)`:
+/// - `created` — a fresh Procedure node was inserted this call.
+/// - `promoted` — an existing candidate crossed the threshold and
+///   transitioned to active in this call.
 async fn upsert_procedure(
     kb: &KnowledgeBase,
     agent_id: &str,
@@ -278,11 +279,11 @@ async fn upsert_procedure(
     action_b: &str,
     support_count: i64,
     cfg: LifecycleConfig,
-) -> Result<UpsertOutcome, UnikoError> {
+) -> Result<(bool, bool), UnikoError> {
     let name = format!("{action_a} → {action_b}");
     let procedure_id = stable_procedure_id(agent_id, action_a, action_b);
 
-    let existing = read_procedure(kb, &procedure_id).await.ok();
+    let existing = read_procedure(kb, &procedure_id).await?;
     let new = existing.is_none();
     let snapshot = existing.unwrap_or_default();
 
@@ -341,19 +342,13 @@ async fn upsert_procedure(
     kb.merge_node(labels::PROCEDURE, "procedure_id", &procedure_id, &props)
         .await?;
 
-    if new {
-        Ok(UpsertOutcome::Created)
-    } else if promoted_this_call {
-        Ok(UpsertOutcome::Promoted)
-    } else {
-        Ok(UpsertOutcome::Reinforced)
-    }
+    Ok((new, promoted_this_call))
 }
 
 async fn read_procedure(
     kb: &KnowledgeBase,
     procedure_id: &str,
-) -> Result<ProcedureSnapshot, UnikoError> {
+) -> Result<Option<ProcedureSnapshot>, UnikoError> {
     let session = kb.db().session();
     let cypher = "MATCH (p:Procedure) WHERE p.procedure_id = $pid \
                   RETURN coalesce(p.use_count, 0) AS uc, \
@@ -365,16 +360,15 @@ async fn read_procedure(
         .param("pid", procedure_id)
         .fetch_all()
         .await?;
-    let row = result
-        .rows()
-        .first()
-        .ok_or_else(|| UnikoError::Storage(format!("procedure '{procedure_id}' not found")))?;
-    Ok(ProcedureSnapshot {
+    let Some(row) = result.rows().first() else {
+        return Ok(None);
+    };
+    Ok(Some(ProcedureSnapshot {
         use_count: row.get("uc").unwrap_or(0),
         success_count: row.get("sc").unwrap_or(0),
         failure_count: row.get("fc").unwrap_or(0),
         status: row.get("st").unwrap_or_default(),
-    })
+    }))
 }
 
 /// Fallback when the Locy runtime can't execute the stdlib rule.
@@ -432,13 +426,22 @@ fn pick_i64(rec: &HashMap<String, Value>, keys: &[&str]) -> Option<i64> {
 }
 
 /// Build a deterministic procedure_id for the (agent, action_a, action_b) triple.
+///
+/// Uses truncated SHA-256 (first 64 bits as big-endian hex) rather than
+/// [`std::collections::hash_map::DefaultHasher`] because the latter is not
+/// guaranteed stable across rustc versions, and these IDs are persisted to
+/// the store as `Procedure.procedure_id`.
 fn stable_procedure_id(agent_id: &str, a: &str, b: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    agent_id.hash(&mut h);
-    a.hash(&mut h);
-    b.hash(&mut h);
-    format!("proc_{:016x}", h.finish())
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(agent_id.as_bytes());
+    h.update(b"\x00");
+    h.update(a.as_bytes());
+    h.update(b"\x00");
+    h.update(b.as_bytes());
+    let digest = h.finalize();
+    let lead = u64::from_be_bytes(digest[..8].try_into().expect("Sha256 yields >= 8 bytes"));
+    format!("proc_{lead:016x}")
 }
 
 /// MVP precondition matcher: each clause is `key=value`, multiple
@@ -464,10 +467,6 @@ fn precondition_matches(rule: &str, state: &HashMap<String, String>) -> bool {
     }
     true
 }
-
-/// Aliases for callers building procedures outside of the promotion
-/// path.
-pub type ProcedureNodeId = NodeId;
 
 #[cfg(test)]
 mod tests {

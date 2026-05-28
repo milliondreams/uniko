@@ -30,12 +30,6 @@ async fn seed_participant(kb: &KnowledgeBase, agent_id: &str) {
         .expect("participant");
 }
 
-/// Silent-skip helper intentionally removed — see notes in the
-/// memory-side action_e2e tests.  Embedding failures must surface
-/// as test failures, not green-bar lies.
-#[allow(dead_code)]
-fn embedding_must_work() {}
-
 async fn record_seq(
     kb: &KnowledgeBase,
     agent_id: &str,
