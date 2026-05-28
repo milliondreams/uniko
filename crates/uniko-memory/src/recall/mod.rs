@@ -832,43 +832,16 @@ pub async fn phase2_expand(
     config: &RecallConfig,
     counters: Option<crate::recall::modality::RecallCounters>,
 ) -> Vec<RecallItem> {
-    let qvec = intent.intent_vec();
-    let qtxt = intent
-        .variants
-        .iter()
-        .find(|v| v.label == "keywords")
-        .map(|v| v.text.as_str())
-        .or_else(|| intent.variants.first().map(|v| v.text.as_str()))
-        .unwrap_or("");
-    let has_vec = !qvec.is_empty();
-    let has_txt = !qtxt.is_empty();
-    let has_temporal = intent.temporal_window.is_some() && config.phase2_temporal_enabled;
-    let has_graph = !intent.entity_refs.is_empty() && config.phase2_graph_enabled;
-    // Cross-modal channels: each gated on (presence flag ∧ toggle ∧
-    // query has a per-modality vec). All three preconditions hold only
-    // in non-text-only corpora running with an explicit opt-in.
-    let presence = kb.read_modality_presence().await.unwrap_or_default();
-    let qm = &intent.query_modalities;
-    let fire_image =
-        crate::recall::modality::image_channel_active(&presence, config.enable_image_channel)
-            && qm.image_vec.is_some();
-    let fire_audio =
-        crate::recall::modality::audio_channel_active(&presence, config.enable_audio_channel)
-            && qm.audio_vec.is_some();
-    let fire_multimodal = crate::recall::modality::multimodal_channel_active(
-        &presence,
-        config.enable_multimodal_channel,
-    ) && (qm.image_vec.is_some() || qm.audio_vec.is_some());
-    if !has_vec
-        && !has_txt
-        && !has_temporal
-        && !has_graph
-        && !fire_image
-        && !fire_audio
-        && !fire_multimodal
-    {
+    let Some(act) = phase2_activation(kb, intent, config).await else {
         return Vec::new();
-    }
+    };
+    let qvec = act.qvec;
+    let qtxt = act.qtxt;
+    let qm = &intent.query_modalities;
+    let (has_vec, has_txt, has_temporal, has_graph) =
+        (act.has_vec, act.has_txt, act.has_temporal, act.has_graph);
+    let (fire_image, fire_audio, fire_multimodal) =
+        (act.fire_image, act.fire_audio, act.fire_multimodal);
 
     // (label, mode, content_field, top_k).  mode ∈ {"vector","fulltext"}.
     let sources: &[(&str, &str, &str, i64)] = &[
@@ -977,8 +950,86 @@ pub async fn phase2_expand(
         return Vec::new();
     }
 
-    let fused = rrf_fuse(per_source.iter().map(|v| v.as_slice()), config.rrf_k);
+    fuse_and_score_phase2(per_source, config)
+}
 
+/// Activation signals + cached query text/vec for phase-2 expansion.
+///
+/// `None` means no channel will fire and the phase can short-circuit.
+struct Phase2Activation<'a> {
+    qvec: &'a [f32],
+    qtxt: &'a str,
+    has_vec: bool,
+    has_txt: bool,
+    has_temporal: bool,
+    has_graph: bool,
+    fire_image: bool,
+    fire_audio: bool,
+    fire_multimodal: bool,
+}
+
+/// Compute which phase-2 channels will fire for this query.
+async fn phase2_activation<'a>(
+    kb: &KnowledgeBase,
+    intent: &'a IntentProfile,
+    config: &RecallConfig,
+) -> Option<Phase2Activation<'a>> {
+    let qvec = intent.intent_vec();
+    let qtxt = intent
+        .variants
+        .iter()
+        .find(|v| v.label == "keywords")
+        .map(|v| v.text.as_str())
+        .or_else(|| intent.variants.first().map(|v| v.text.as_str()))
+        .unwrap_or("");
+    let has_vec = !qvec.is_empty();
+    let has_txt = !qtxt.is_empty();
+    let has_temporal = intent.temporal_window.is_some() && config.phase2_temporal_enabled;
+    let has_graph = !intent.entity_refs.is_empty() && config.phase2_graph_enabled;
+    // Cross-modal channels: each gated on (presence flag ∧ toggle ∧
+    // query has a per-modality vec).
+    let presence = kb.read_modality_presence().await.unwrap_or_default();
+    let qm = &intent.query_modalities;
+    let fire_image =
+        crate::recall::modality::image_channel_active(&presence, config.enable_image_channel)
+            && qm.image_vec.is_some();
+    let fire_audio =
+        crate::recall::modality::audio_channel_active(&presence, config.enable_audio_channel)
+            && qm.audio_vec.is_some();
+    let fire_multimodal = crate::recall::modality::multimodal_channel_active(
+        &presence,
+        config.enable_multimodal_channel,
+    ) && (qm.image_vec.is_some() || qm.audio_vec.is_some());
+    if !has_vec
+        && !has_txt
+        && !has_temporal
+        && !has_graph
+        && !fire_image
+        && !fire_audio
+        && !fire_multimodal
+    {
+        return None;
+    }
+    Some(Phase2Activation {
+        qvec,
+        qtxt,
+        has_vec,
+        has_txt,
+        has_temporal,
+        has_graph,
+        fire_image,
+        fire_audio,
+        fire_multimodal,
+    })
+}
+
+/// RRF-fuse the per-source ranked lists, apply tier weights, and sort
+/// the final phase-2 bundle by score descending.
+fn fuse_and_score_phase2(
+    per_source: Vec<Vec<RankedHit>>,
+    config: &RecallConfig,
+) -> Vec<RecallItem> {
+    let fused = rrf_fuse(per_source.iter().map(|v| v.as_slice()), config.rrf_k);
     let mut items: Vec<RecallItem> = fused
         .into_iter()
         .filter(|(_, (_, content, _))| !content.is_empty())
@@ -994,7 +1045,6 @@ pub async fn phase2_expand(
         })
         .filter(|item| item.score >= config.min_score)
         .collect();
-
     items.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -1529,93 +1579,52 @@ async fn run_recall_for_variant(
     let mut scored: HashMap<NodeId, (String, String, f64)> = HashMap::new();
     let has_vec = !qvec.is_empty();
 
-    // Hybrid (vector + BM25) over chunk types.
-    #[allow(clippy::type_complexity)]
-    let hybrid_targets: &[(&str, Option<&str>, Option<&str>, &str, &str)] = &[
+    // Hybrid (vector + BM25) over chunk types — same query shape, only
+    // the chunk_type filter differs.
+    let (sources, queries, fusion, needs_qvec, needs_qtxt) = if has_vec {
         (
-            "Chunk",
-            Some("embedding"),
-            Some("text"),
-            "text",
-            "m.chunk_type = 'session'",
-        ),
-        (
-            "Chunk",
-            Some("embedding"),
-            Some("text"),
-            "text",
-            "m.chunk_type = 'observation'",
-        ),
-    ];
+            "[m.embedding, m.text]",
+            "[$qvec, $qtxt]",
+            format!(
+                ", {{method: 'weighted', weights: [{}, {}]}}",
+                config.vector_weight, config.bm25_weight
+            ),
+            true,
+            true,
+        )
+    } else {
+        ("m.text", "$qtxt", String::new(), false, true)
+    };
 
-    for &(label, embed_field, fts_field, content_field, where_clause) in hybrid_targets {
-        let (sources, queries, fusion, params_needed) =
-            match (embed_field.filter(|_| has_vec), fts_field) {
-                (Some(ef), Some(ff)) => (
-                    format!("[m.{ef}, m.{ff}]"),
-                    "[$qvec, $qtxt]".to_string(),
-                    format!(
-                        ", {{method: 'weighted', weights: [{}, {}]}}",
-                        config.vector_weight, config.bm25_weight
-                    ),
-                    (true, true),
-                ),
-                (Some(ef), None) => (
-                    format!("m.{ef}"),
-                    "$qvec".to_string(),
-                    String::new(),
-                    (true, false),
-                ),
-                (None, Some(ff)) => (
-                    format!("m.{ff}"),
-                    "$qtxt".to_string(),
-                    String::new(),
-                    (false, true),
-                ),
-                (None, None) => continue,
-            };
-
-        let where_part = if where_clause.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {where_clause}")
-        };
-
+    for chunk_type in ["session", "observation"] {
         let cypher = format!(
-            "MATCH (m:{label}){where_part} \
+            "MATCH (m:Chunk) WHERE m.chunk_type = '{chunk_type}' \
              RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                    m.{content_field} AS content, \
+                    m.text AS content, \
                     similar_to({sources}, {queries}{fusion}) AS score \
              ORDER BY score DESC LIMIT $lim"
         );
 
         let mut builder = session.query_with(&cypher);
         builder = builder.param("lim", config.per_variant_limit as i64);
-        if params_needed.0 {
+        if needs_qvec {
             builder = builder.param("qvec", uni_db::Value::Vector(qvec.to_vec()));
         }
-        if params_needed.1 {
+        if needs_qtxt {
             builder = builder.param("qtxt", qtxt);
         }
 
         match builder.fetch_all().await {
-            Ok(result) => {
-                for row in result.rows() {
-                    let nid: i64 = row.get("nid").unwrap_or(0);
-                    let lbl: String = row.get("lbl").unwrap_or_default();
-                    let content: String = row.get("content").unwrap_or_default();
-                    let score: f64 = row.get("score").unwrap_or(0.0);
-                    scored
-                        .entry(nid)
-                        .and_modify(|(_, _, s)| *s = s.max(score))
-                        .or_insert((lbl, content, score));
-                }
+            Ok(result) => merge_scored_rows(result.rows(), &mut scored),
+            Err(e) => {
+                tracing::debug!(chunk_type, error = %e, "hybrid similar_to failed")
             }
-            Err(e) => tracing::debug!(label, error = %e, "hybrid similar_to failed"),
         }
     }
 
-    // Entity-scoped fan-out.
+    // Entity-scoped fan-out. The cypher per target depends only on
+    // `has_vec` + the per-target tuple, not on `entity_name`, so we
+    // build the 6 templates once and bind $ename per entity.
     let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
         (
             "Chunk",
@@ -1649,13 +1658,12 @@ async fn run_recall_for_variant(
         ),
         ("Observation", "content", "embedding", "m.subject = $ename"),
     ];
-
-    for entity_name in entity_refs {
-        for &(label, content_field, embed_field, pattern) in entity_scoped_targets {
+    let entity_cyphers: Vec<(String, &str)> = entity_scoped_targets
+        .iter()
+        .map(|&(label, content_field, embed_field, pattern)| {
             let cypher = if has_vec {
                 format!(
-                    "MATCH (m:{label}) \
-                     WHERE {pattern} \
+                    "MATCH (m:{label}) WHERE {pattern} \
                      RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                             m.{content_field} AS content, \
                             similar_to([m.{embed_field}, m.{content_field}], [$qvec, $qtxt]) AS score \
@@ -1663,16 +1671,20 @@ async fn run_recall_for_variant(
                 )
             } else {
                 format!(
-                    "MATCH (m:{label}) \
-                     WHERE {pattern} \
+                    "MATCH (m:{label}) WHERE {pattern} \
                      RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                             m.{content_field} AS content, \
                             similar_to(m.{content_field}, $qtxt) AS score \
                      ORDER BY score DESC LIMIT $lim"
                 )
             };
+            (cypher, label)
+        })
+        .collect();
 
-            let mut builder = session.query_with(&cypher);
+    for entity_name in entity_refs {
+        for (cypher, label) in &entity_cyphers {
+            let mut builder = session.query_with(cypher);
             builder = builder
                 .param("ename", entity_name.as_str())
                 .param("qtxt", qtxt)
@@ -1682,18 +1694,7 @@ async fn run_recall_for_variant(
             }
 
             match builder.fetch_all().await {
-                Ok(result) => {
-                    for row in result.rows() {
-                        let nid: i64 = row.get("nid").unwrap_or(0);
-                        let lbl: String = row.get("lbl").unwrap_or_default();
-                        let content: String = row.get("content").unwrap_or_default();
-                        let score: f64 = row.get("score").unwrap_or(0.0);
-                        scored
-                            .entry(nid)
-                            .and_modify(|(_, _, s)| *s = s.max(score))
-                            .or_insert((lbl, content, score));
-                    }
-                }
+                Ok(result) => merge_scored_rows(result.rows(), &mut scored),
                 Err(e) => {
                     tracing::debug!(
                         entity = entity_name,
@@ -1746,6 +1747,24 @@ where
         }
     }
     fused
+}
+
+/// Merge a row batch into the per-variant `scored` accumulator, keeping
+/// the max score per node id.
+fn merge_scored_rows(
+    rows: &[uni_db::Row],
+    scored: &mut HashMap<NodeId, (String, String, f64)>,
+) {
+    for row in rows {
+        let nid: i64 = row.get("nid").unwrap_or(0);
+        let lbl: String = row.get("lbl").unwrap_or_default();
+        let content: String = row.get("content").unwrap_or_default();
+        let score: f64 = row.get("score").unwrap_or(0.0);
+        scored
+            .entry(nid)
+            .and_modify(|(_, _, s)| *s = s.max(score))
+            .or_insert((lbl, content, score));
+    }
 }
 
 fn empty_bundle() -> ContextBundle {

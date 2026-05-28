@@ -155,17 +155,15 @@ impl ConsolidationWorker {
     /// invokes [`Self::maybe_run_cortex_sweep`] which runs P5 + P6
     /// when the cadence gates allow.
     async fn run_consolidation_cycle(&mut self, agent_id: &str) {
-        let start = Instant::now();
         tracing::info!(agent = %agent_id, "consolidation cycle starting");
-
         metrics::emit_consolidation_cycle(agent_id);
+        let start = Instant::now();
 
         match crate::consolidation::run_cycle(&self.kb, agent_id, Some(self.batch_size as i64))
             .await
         {
             Ok(stats) => {
-                let elapsed_ms = start.elapsed().as_millis() as f64;
-                metrics::emit_consolidation_duration(elapsed_ms);
+                let elapsed_ms = record_duration(start, metrics::emit_consolidation_duration);
                 self.health.lock().unwrap().record_success(elapsed_ms);
                 tracing::info!(
                     agent = %agent_id,
@@ -178,8 +176,7 @@ impl ConsolidationWorker {
                 self.maybe_run_cortex_sweep(agent_id).await;
             }
             Err(e) => {
-                let elapsed_ms = start.elapsed().as_millis() as f64;
-                metrics::emit_consolidation_duration(elapsed_ms);
+                let elapsed_ms = record_duration(start, metrics::emit_consolidation_duration);
                 self.health.lock().unwrap().record_failure();
                 tracing::error!(
                     agent = %agent_id,
@@ -234,12 +231,11 @@ impl ConsolidationWorker {
             return;
         }
 
-        let start = Instant::now();
         metrics::emit_procedure_cycle(agent_id);
+        let start = Instant::now();
         match promote_procedures_once(&self.kb, agent_id, LifecycleConfig::default()).await {
             Ok(report) => {
-                let elapsed_ms = start.elapsed().as_millis() as f64;
-                metrics::emit_procedure_cycle_duration(elapsed_ms);
+                let elapsed_ms = record_duration(start, metrics::emit_procedure_cycle_duration);
                 metrics::emit_procedures_promoted(report.promoted);
                 tracing::info!(
                     agent = %agent_id,
@@ -251,8 +247,7 @@ impl ConsolidationWorker {
                 );
             }
             Err(e) => {
-                let elapsed_ms = start.elapsed().as_millis() as f64;
-                metrics::emit_procedure_cycle_duration(elapsed_ms);
+                let elapsed_ms = record_duration(start, metrics::emit_procedure_cycle_duration);
                 tracing::warn!(
                     agent = %agent_id,
                     error = %e,
@@ -277,12 +272,11 @@ impl ConsolidationWorker {
             return;
         }
 
-        let start = Instant::now();
         metrics::emit_topic_cycle(agent_id);
+        let start = Instant::now();
         match detect_topics_once(&self.kb, TopicConfig::default()).await {
             Ok(report) => {
-                let elapsed_ms = start.elapsed().as_millis() as f64;
-                metrics::emit_topic_cycle_duration(elapsed_ms);
+                let elapsed_ms = record_duration(start, metrics::emit_topic_cycle_duration);
                 metrics::emit_topics_created(report.created);
                 tracing::info!(
                     agent = %agent_id,
@@ -294,8 +288,7 @@ impl ConsolidationWorker {
                 );
             }
             Err(e) => {
-                let elapsed_ms = start.elapsed().as_millis() as f64;
-                metrics::emit_topic_cycle_duration(elapsed_ms);
+                let elapsed_ms = record_duration(start, metrics::emit_topic_cycle_duration);
                 tracing::warn!(
                     agent = %agent_id,
                     error = %e,
@@ -306,4 +299,14 @@ impl ConsolidationWorker {
         }
         self.last_topic_sweep_at = Some(now);
     }
+}
+
+/// Emit a duration metric and return the measured milliseconds.
+///
+/// Centralises the `start.elapsed().as_millis() as f64` + metric-emit
+/// boilerplate used by every cycle in this module.
+fn record_duration(start: Instant, emit: fn(f64)) -> f64 {
+    let elapsed_ms = start.elapsed().as_millis() as f64;
+    emit(elapsed_ms);
+    elapsed_ms
 }

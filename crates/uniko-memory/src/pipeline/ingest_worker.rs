@@ -166,49 +166,35 @@ pub(crate) async fn run_step_chain(
 
         let step_name = step.name().to_owned();
         tracing::debug!(step = %step_name, "executing step");
-        let outcome = step.execute(ctx).await;
-        match outcome {
+        let (error, policy) = match step.execute(ctx).await {
             Ok(StepOutcome::Completed) => {
                 tracing::debug!("step completed");
-                result.steps_succeeded.push(step.name().to_owned());
+                result.steps_succeeded.push(step_name);
+                continue;
             }
             Ok(StepOutcome::Skipped { reason }) => {
                 tracing::debug!(reason = %reason, "step skipped");
-                result.steps_skipped.push(step.name().to_owned());
+                result.steps_skipped.push(step_name);
+                continue;
             }
-            Ok(StepOutcome::Failed { error, policy }) => {
-                if handle_failure(
-                    step.name(),
-                    &error,
-                    policy,
-                    ctx,
-                    dlq,
-                    dlq_max_retries,
-                    &mut result,
-                )
-                .await
-                {
-                    break;
-                }
-            }
-            Err(e) => {
-                // Transport-level failure (Step::execute returned Err).
-                // No StepOutcome to consult — default to DeadLetter so the
-                // item is preserved for inspection / retry.
-                if handle_failure(
-                    step.name(),
-                    &e.to_string(),
-                    StepErrorPolicy::DeadLetter,
-                    ctx,
-                    dlq,
-                    dlq_max_retries,
-                    &mut result,
-                )
-                .await
-                {
-                    break;
-                }
-            }
+            Ok(StepOutcome::Failed { error, policy }) => (error, policy),
+            // Transport-level failure (Step::execute returned Err). No
+            // StepOutcome to consult — default to DeadLetter so the item
+            // is preserved for inspection / retry.
+            Err(e) => (e.to_string(), StepErrorPolicy::DeadLetter),
+        };
+        if handle_failure(
+            &step_name,
+            &error,
+            policy,
+            ctx,
+            dlq,
+            dlq_max_retries,
+            &mut result,
+        )
+        .await
+        {
+            break;
         }
     }
     result
