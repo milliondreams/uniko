@@ -10,7 +10,6 @@ pub mod atomic;
 pub mod chunking;
 pub mod context;
 pub mod message;
-pub mod overflow;
 pub mod pdf;
 pub mod session;
 pub mod session_chunk;

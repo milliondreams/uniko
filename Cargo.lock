@@ -11170,25 +11170,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "uniko-fs"
-version = "0.1.0"
-dependencies = [
- "tokio",
- "tracing",
- "uniko-api",
-]
-
-[[package]]
-name = "uniko-mcp"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "tokio",
- "tracing",
- "uniko-api",
-]
-
-[[package]]
 name = "uniko-memory"
 version = "0.1.0"
 dependencies = [
@@ -11216,7 +11197,6 @@ dependencies = [
  "chrono",
  "metrics 0.24.3",
  "metrics-exporter-prometheus",
- "rand 0.9.4",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -11233,14 +11213,6 @@ name = "uniko-py"
 version = "0.1.0"
 dependencies = [
  "pyo3",
- "uniko-api",
-]
-
-[[package]]
-name = "uniko-shell"
-version = "0.1.0"
-dependencies = [
- "tokio",
  "uniko-api",
 ]
 

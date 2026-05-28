@@ -10,9 +10,7 @@
 //! starting a dance studio" (clean, declarative, speaker-attributed).
 
 pub mod cleanup;
-pub mod contradiction;
 pub mod filter;
-pub mod llm;
 pub mod rules;
 #[cfg(feature = "onnx")]
 pub mod rules_engine;
@@ -116,18 +114,10 @@ impl uniko_pipes::Step for ObservationExtractionStep {
 
         // Open the tx + apply writes + commit (legacy semantics — own tx).
         let nodes_start = std::time::Instant::now();
-        let tx = ctx
-            .kb
-            .db()
-            .session()
-            .tx()
-            .await
-            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        let tx = ctx.kb.db().session().tx().await?;
         let obs_node_ids = apply_observations(&ctx.kb, &tx, ctx.node_id, prep).await?;
         let commit_start = std::time::Instant::now();
-        tx.commit()
-            .await
-            .map_err(|err| UnikoError::Storage(err.to_string()))?;
+        tx.commit().await?;
         let commit_ms = commit_start.elapsed().as_millis() as u64;
         let nodes_ms = nodes_start.elapsed().as_millis();
         tracing::info!(commit_ms, "obs commit");

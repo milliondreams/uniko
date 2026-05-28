@@ -7,9 +7,6 @@ members = [
     "crates/uniko-memory",
     "crates/uniko-cortex",
     "crates/uniko-api",
-    "crates/uniko-fs",
-    "crates/uniko-shell",
-    "crates/uniko-mcp",
     "crates/uniko-bench",
     "bindings/uniko-py",
 ]

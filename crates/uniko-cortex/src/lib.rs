@@ -7,7 +7,6 @@
 //! consolidation worker calls into cortex (P5/P6) post-cycle.
 
 pub mod procedures;
-pub mod reasoning;
 pub mod topics;
 
 #[doc(inline)]
