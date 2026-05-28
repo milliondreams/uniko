@@ -339,24 +339,8 @@ async fn main() -> Result<()> {
 
         let evidence_lookup = build_evidence_lookup(&sessions);
 
-        let bench_agent_id = format!("bench-agent-{}", sample.sample_id);
-        let mut agent_props: std::collections::HashMap<String, uni_db::Value> =
-            std::collections::HashMap::new();
-        agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
-        agent_props.insert("name".into(), uni_db::Value::String("bench-agent".into()));
-        if let Err(e) = kb
-            .merge_node(
-                "Participant",
-                "participant_id",
-                &bench_agent_id,
-                &agent_props,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "failed to create bench-agent Participant — skipping episode recording");
-        } else {
-            verify_label_visible(&kb, "Participant", "participant_id", &bench_agent_id).await;
-        }
+        let bench_agent_id = uniko_bench::ensure_bench_agent(&kb, &sample.sample_id).await;
+        verify_label_visible(&kb, "Participant", "participant_id", &bench_agent_id).await;
 
         let questions: Vec<_> = sample
             .qa
@@ -508,19 +492,7 @@ async fn main() -> Result<()> {
             all_results.push((qr, f1, judge_score));
         }
 
-        match Arc::try_unwrap(kb) {
-            Ok(kb_owned) => {
-                if let Err(e) = kb_owned.shutdown().await {
-                    tracing::warn!(sample_id = %sample.sample_id, error = %e, "kb shutdown failed");
-                }
-            }
-            Err(_arc) => {
-                tracing::warn!(
-                    sample_id = %sample.sample_id,
-                    "skipping kb shutdown: outstanding Arc references prevent unwrap",
-                );
-            }
-        }
+        uniko_bench::shutdown_kb(kb, &sample.sample_id).await;
         tracing::info!(
             sample_id = %sample.sample_id,
             "conversation complete",

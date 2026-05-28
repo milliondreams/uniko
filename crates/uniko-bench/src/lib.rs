@@ -44,6 +44,52 @@ use uniko_store::{KnowledgeBase, ModelRuntime};
 
 // ── KB Lifecycle ────────────────────────────────────────────────
 
+/// Best-effort `KB::shutdown` from a shared [`Arc`].
+///
+/// Unwraps the `Arc` to obtain ownership; logs a warning and returns
+/// without shutting down if other clones are still alive (typically a
+/// bug in the harness — every consumer should drop its clone before
+/// the per-sample tear-down). `tag` is attached to all log lines so
+/// callers can disambiguate per-sample / per-question failures.
+pub async fn shutdown_kb(kb: Arc<KnowledgeBase>, tag: &str) {
+    match Arc::try_unwrap(kb) {
+        Ok(kb_owned) => {
+            if let Err(e) = kb_owned.shutdown().await {
+                tracing::warn!(tag, error = %e, "kb shutdown failed");
+            }
+        }
+        Err(_arc) => {
+            tracing::warn!(
+                tag,
+                "skipping kb shutdown: outstanding Arc references prevent unwrap",
+            );
+        }
+    }
+}
+
+/// MERGE a `Participant {kind: "agent"}` row for the bench's synthetic
+/// `bench-agent-{tag}` agent. Returns the constructed `participant_id`
+/// even on MERGE failure (caller logs the warning and decides whether
+/// to skip episode recording).
+pub async fn ensure_bench_agent(kb: &KnowledgeBase, tag: &str) -> String {
+    let bench_agent_id = format!("bench-agent-{tag}");
+    let mut agent_props: HashMap<String, uni_db::Value> = HashMap::new();
+    agent_props.insert("kind".into(), uni_db::Value::String("agent".into()));
+    agent_props.insert("name".into(), uni_db::Value::String("bench-agent".into()));
+    if let Err(e) = kb
+        .merge_node(
+            "Participant",
+            "participant_id",
+            &bench_agent_id,
+            &agent_props,
+        )
+        .await
+    {
+        tracing::warn!(error = %e, "failed to create bench-agent Participant");
+    }
+    bench_agent_id
+}
+
 /// Open an existing persistent KB without ingesting.
 pub async fn open_kb(
     ingest_dir: &Path,

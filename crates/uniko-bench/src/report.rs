@@ -124,6 +124,7 @@ pub struct QuestionDetail {
 
 /// Aggregator state collected over a sub-slice of results (used for
 /// both the overall rollup and each per-conversation rollup).
+#[derive(Default)]
 struct Accum {
     f1_sum: f64,
     judge_scores: Vec<f64>,
@@ -145,36 +146,19 @@ struct Accum {
     by_category: HashMap<QuestionCategory, Accum>,
 }
 
-impl Accum {
-    fn new() -> Self {
-        Self {
-            f1_sum: 0.0,
-            judge_scores: Vec::new(),
-            recall_ms_sum: 0,
-            gen_ms_sum: 0,
-            evidence_found: 0,
-            evidence_total: 0,
-            count: 0,
-            answer_in_sum: 0,
-            answer_in_count: 0,
-            answer_out_sum: 0,
-            answer_out_count: 0,
-            judge_in_sum: 0,
-            judge_in_count: 0,
-            judge_out_sum: 0,
-            judge_out_count: 0,
-            answer_cost_sum: 0.0,
-            judge_cost_sum: 0.0,
-            by_category: HashMap::new(),
-        }
+/// `mean(sum, count)` returns `sum / count` or `0.0` when `count == 0`.
+fn mean(sum: f64, count: usize) -> f64 {
+    if count > 0 {
+        sum / count as f64
+    } else {
+        0.0
     }
+}
 
+impl Accum {
     fn observe(&mut self, qr: &QueryResult, f1: f64, judge: Option<f64>, pricing: &Pricing) {
         self.observe_inner(qr, f1, judge, pricing);
-        let cat = self
-            .by_category
-            .entry(qr.category)
-            .or_insert_with(Accum::new);
+        let cat = self.by_category.entry(qr.category).or_default();
         cat.observe_inner(qr, f1, judge, pricing);
     }
 
@@ -217,11 +201,7 @@ impl Accum {
     }
 
     fn avg_f1(&self) -> f64 {
-        if self.count > 0 {
-            self.f1_sum / self.count as f64
-        } else {
-            0.0
-        }
+        mean(self.f1_sum, self.count)
     }
 
     fn avg_judge(&self) -> Option<f64> {
@@ -233,59 +213,31 @@ impl Accum {
     }
 
     fn avg_recall_ms(&self) -> f64 {
-        if self.count > 0 {
-            self.recall_ms_sum as f64 / self.count as f64
-        } else {
-            0.0
-        }
+        mean(self.recall_ms_sum as f64, self.count)
     }
 
     fn avg_gen_ms(&self) -> f64 {
-        if self.count > 0 {
-            self.gen_ms_sum as f64 / self.count as f64
-        } else {
-            0.0
-        }
+        mean(self.gen_ms_sum as f64, self.count)
     }
 
     fn avg_answer_in(&self) -> f64 {
-        if self.answer_in_count > 0 {
-            self.answer_in_sum as f64 / self.answer_in_count as f64
-        } else {
-            0.0
-        }
+        mean(self.answer_in_sum as f64, self.answer_in_count)
     }
 
     fn avg_answer_out(&self) -> f64 {
-        if self.answer_out_count > 0 {
-            self.answer_out_sum as f64 / self.answer_out_count as f64
-        } else {
-            0.0
-        }
+        mean(self.answer_out_sum as f64, self.answer_out_count)
     }
 
     fn avg_judge_in(&self) -> f64 {
-        if self.judge_in_count > 0 {
-            self.judge_in_sum as f64 / self.judge_in_count as f64
-        } else {
-            0.0
-        }
+        mean(self.judge_in_sum as f64, self.judge_in_count)
     }
 
     fn avg_judge_out(&self) -> f64 {
-        if self.judge_out_count > 0 {
-            self.judge_out_sum as f64 / self.judge_out_count as f64
-        } else {
-            0.0
-        }
+        mean(self.judge_out_sum as f64, self.judge_out_count)
     }
 
     fn avg_query_cost(&self) -> f64 {
-        if self.count > 0 {
-            (self.answer_cost_sum + self.judge_cost_sum) / self.count as f64
-        } else {
-            0.0
-        }
+        mean(self.answer_cost_sum + self.judge_cost_sum, self.count)
     }
 
     fn categories(&self) -> Vec<CategoryReport> {
@@ -368,14 +320,14 @@ pub fn aggregate_with_pricing(
     num_conversations: usize,
     pricing: &Pricing,
 ) -> BenchmarkReport {
-    let mut overall = Accum::new();
+    let mut overall = Accum::default();
     let mut by_sample: BTreeMap<String, Accum> = BTreeMap::new();
 
     for (qr, f1, judge) in results {
         overall.observe(qr, *f1, *judge, pricing);
         by_sample
             .entry(qr.sample_id.clone())
-            .or_insert_with(Accum::new)
+            .or_default()
             .observe(qr, *f1, *judge, pricing);
     }
 
