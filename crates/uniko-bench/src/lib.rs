@@ -4,6 +4,20 @@
 //! (LoCoMo, LongMemEval, etc.): KB lifecycle, LLM catalog
 //! construction, context formatting, and serde helpers.
 
+/// Build a uni-db `DateTime` `Value` from the current wall-clock UTC.
+///
+/// Shared by `update_microbench` and `mutation_set_microbench`, which
+/// both seed temporal columns with the current time during their fan-out
+/// rows.  Falls back to epoch on the (impossible-in-practice) overflow
+/// from `timestamp_nanos_opt`.
+pub fn now_value() -> uni_db::Value {
+    uni_db::Value::Temporal(uni_db::common::TemporalValue::DateTime {
+        nanos_since_epoch: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+        offset_seconds: 0,
+        timezone_name: None,
+    })
+}
+
 pub mod bench_config;
 pub mod data;
 pub mod eval;

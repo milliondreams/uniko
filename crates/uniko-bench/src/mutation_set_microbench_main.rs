@@ -14,18 +14,11 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use uni_db::common::TemporalValue;
 use uni_db::{
     DataType, IndexType, ScalarType, Uni, Value, VectorAlgo, VectorIndexCfg, VectorMetric,
 };
 
-fn now_value() -> Value {
-    Value::Temporal(TemporalValue::DateTime {
-        nanos_since_epoch: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
-        offset_seconds: 0,
-        timezone_name: None,
-    })
-}
+use uniko_bench::now_value;
 
 #[derive(Clone, Copy)]
 struct Variant {
