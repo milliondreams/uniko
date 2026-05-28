@@ -90,17 +90,7 @@ impl KnowledgeBase {
     /// Returns [`UnikoError::Config`] if validation fails, or
     /// [`UnikoError::Storage`] if the database cannot be created.
     pub async fn in_memory(config: UnikoConfig) -> Result<Self> {
-        config.validate()?;
-        let catalog = load_catalog(&config, &[])?;
-        let db = Uni::in_memory().xervo_catalog(catalog).build().await?;
-        apply_schema(&db, &config).await?;
-        prefetch_models(&db).await;
-        Self {
-            db: Arc::new(db),
-            config,
-        }
-        .finalize_init()
-        .await
+        Self::in_memory_with_xervo(config, Vec::new()).await
     }
 
     /// Create an in-memory knowledge base with extra xervo model aliases.
@@ -140,21 +130,7 @@ impl KnowledgeBase {
     /// Returns [`UnikoError::Config`] if validation fails, or
     /// [`UnikoError::Storage`] if the database cannot be opened.
     pub async fn open(path: impl AsRef<Path>, config: UnikoConfig) -> Result<Self> {
-        config.validate()?;
-        let catalog = load_catalog(&config, &[])?;
-        let mut builder = Uni::open(path.as_ref().to_string_lossy()).xervo_catalog(catalog);
-        if let Some(uni_cfg) = apply_perf_knobs_from_env() {
-            builder = builder.config(uni_cfg);
-        }
-        let db = builder.build().await?;
-        apply_schema(&db, &config).await?;
-        prefetch_models(&db).await;
-        Self {
-            db: Arc::new(db),
-            config,
-        }
-        .finalize_init()
-        .await
+        Self::open_with_xervo(path, config, Vec::new()).await
     }
 
     /// Open a persistent knowledge base with extra xervo model aliases.
@@ -195,10 +171,11 @@ impl KnowledgeBase {
     ) -> Result<Self> {
         config.validate()?;
         let catalog = load_catalog(&config, &extra_catalog)?;
-        let db = Uni::open(path.as_ref().to_string_lossy())
-            .xervo_catalog(catalog)
-            .build()
-            .await?;
+        let mut builder = Uni::open(path.as_ref().to_string_lossy()).xervo_catalog(catalog);
+        if let Some(uni_cfg) = apply_perf_knobs_from_env() {
+            builder = builder.config(uni_cfg);
+        }
+        let db = builder.build().await?;
         apply_schema(&db, &config).await?;
         if prefetch {
             prefetch_models(&db).await;
@@ -570,6 +547,31 @@ pub(crate) fn validate_property_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build property fragments + bound parameters.
+///
+/// `fmt(key, param_name)` formats each fragment — e.g. `format!("{key}:
+/// ${param}")` for inline `CREATE` props or `format!("{var}.{key} =
+/// ${param}")` for `SET` clauses.  Parameter names are `s{offset+i}`
+/// to let callers interleave multiple prop sets in one query.
+fn build_kv_pairs<F>(
+    properties: &std::collections::HashMap<String, uni_db::Value>,
+    offset: usize,
+    fmt: F,
+) -> Result<(Vec<String>, Vec<(String, uni_db::Value)>)>
+where
+    F: Fn(&str, &str) -> String,
+{
+    let mut fragments = Vec::with_capacity(properties.len());
+    let mut params = Vec::with_capacity(properties.len());
+    for (i, (key, val)) in properties.iter().enumerate() {
+        validate_property_name(key)?;
+        let param = format!("s{}", offset + i);
+        fragments.push(fmt(key, &param));
+        params.push((param, val.clone()));
+    }
+    Ok((fragments, params))
+}
+
 /// Build inline property syntax `prop1: $s0, prop2: $s1, ...` for CREATE.
 ///
 /// Returns `(inline_fragment, params)`.
@@ -580,14 +582,8 @@ pub(crate) fn build_inline_props(
     if properties.is_empty() {
         return Ok((String::new(), Vec::new()));
     }
-    let mut fragments = Vec::with_capacity(properties.len());
-    let mut params = Vec::with_capacity(properties.len());
-    for (i, (key, val)) in properties.iter().enumerate() {
-        validate_property_name(key)?;
-        let param = format!("s{}", offset + i);
-        fragments.push(format!("{key}: ${param}"));
-        params.push((param, val.clone()));
-    }
+    let (fragments, params) =
+        build_kv_pairs(properties, offset, |key, param| format!("{key}: ${param}"))?;
     Ok((fragments.join(", "), params))
 }
 
@@ -603,16 +599,10 @@ pub(crate) fn build_set_clause(
     if properties.is_empty() {
         return Ok((String::new(), Vec::new()));
     }
-    let mut fragments = Vec::with_capacity(properties.len());
-    let mut params = Vec::with_capacity(properties.len());
-    for (i, (key, val)) in properties.iter().enumerate() {
-        validate_property_name(key)?;
-        let param = format!("s{}", offset + i);
-        fragments.push(format!("{var}.{key} = ${param}"));
-        params.push((param, val.clone()));
-    }
-    let clause = format!("SET {}", fragments.join(", "));
-    Ok((clause, params))
+    let (fragments, params) = build_kv_pairs(properties, offset, |key, param| {
+        format!("{var}.{key} = ${param}")
+    })?;
+    Ok((format!("SET {}", fragments.join(", ")), params))
 }
 
 impl std::fmt::Debug for KnowledgeBase {
