@@ -60,12 +60,11 @@ impl RecallTier {
             "Fact" | "Topic" => Self::Semantic,
             "Procedure" => Self::Procedural,
             "Episode" => Self::Episodic,
-            // Observations index `content` directly now and compete with
-            // Chunks on raw similarity. Putting them in KnowledgeBase
-            // (same weight as Chunk) avoids the tier multiplier
-            // crowding Chunks out of the bundle.
-            "Observation" => Self::KnowledgeBase,
-            "Chunk" | "Artifact" => Self::KnowledgeBase,
+            // Observations index `content` directly and compete with
+            // Chunks on raw similarity, so they share the KnowledgeBase
+            // tier — the multiplier would otherwise crowd Chunks out
+            // of the bundle.
+            "Observation" | "Chunk" | "Artifact" => Self::KnowledgeBase,
             _ => Self::Provenance,
         }
     }
@@ -297,13 +296,7 @@ impl RecallConfig {
             reranker_enabled: cfg.reranker.enabled,
             reranker_top_n: cfg.reranker.top_n,
             reranker_apply_sigmoid: cfg.reranker.apply_sigmoid,
-            // Off by default. The naive "any connected entity matches
-            // predicted type → boost" rule swamps top-K with off-target
-            // hits when the predicted type is common in the corpus
-            // (especially `measurement` for "how many" questions).
-            // Measured −0.149 R@5 / −0.186 NDCG@5 on a 24-question
-            // LongMemEval slice (2026-05-03). Set to a small value like
-            // 1.05 if used as a tiebreaker, or leave at 1.0.
+            // Rationale for the 1.0 default: see `Default for RecallConfig`.
             answer_type_boost: 1.0,
             answer_type_top_n: 50,
             query_variants: cfg.query_variants.clone(),

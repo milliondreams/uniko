@@ -47,60 +47,33 @@ pub fn mmr_dedup(
     let mut selected_indices: Vec<usize> = Vec::with_capacity(target);
 
     while !remaining.is_empty() && selected_indices.len() < target {
-        let mut best_pos = 0usize;
-        let mut best_score = f64::NEG_INFINITY;
-        let mut skip_indices: Vec<usize> = Vec::new();
-
-        for (pos, &i) in remaining.iter().enumerate() {
+        // Single pass: compute max-similarity once per candidate, prune
+        // hard duplicates, and track the best non-duplicate MMR score.
+        let mut best: Option<(usize, f64)> = None;
+        let mut keep: Vec<usize> = Vec::with_capacity(remaining.len());
+        for &i in &remaining {
             let max_sim = selected_indices
                 .iter()
                 .map(|&j| jaccard(&token_sets[i], &token_sets[j]))
                 .fold(0.0_f64, f64::max);
             if max_sim > duplicate_threshold {
-                skip_indices.push(pos);
                 continue;
             }
             let mmr = lambda * candidates[i].score - (1.0 - lambda) * max_sim;
-            if mmr > best_score {
-                best_score = mmr;
-                best_pos = pos;
+            if best.is_none_or(|(_, s)| mmr > s) {
+                best = Some((i, mmr));
             }
+            keep.push(i);
         }
-
-        // Prune hard duplicates from `remaining` (collected with `pos`
-        // indices into `remaining` itself — drop in descending order so
-        // earlier indices stay valid).
-        for &pos in skip_indices.iter().rev() {
-            remaining.remove(pos);
-        }
-        if remaining.is_empty() {
-            break;
-        }
-        if best_score == f64::NEG_INFINITY {
+        remaining = keep;
+        let Some((chosen, _)) = best else {
             // All remaining were skipped as duplicates above.
             break;
-        }
-        // After pruning, `best_pos` may have shifted because we removed
-        // entries earlier in `remaining`.  Recompute: pick the maximum
-        // again over the now-pruned list (cheap, items typically small).
-        let mut chosen = remaining[0];
-        let mut chosen_pos = 0usize;
-        best_score = f64::NEG_INFINITY;
-        for (pos, &i) in remaining.iter().enumerate() {
-            let max_sim = selected_indices
-                .iter()
-                .map(|&j| jaccard(&token_sets[i], &token_sets[j]))
-                .fold(0.0_f64, f64::max);
-            let mmr = lambda * candidates[i].score - (1.0 - lambda) * max_sim;
-            if mmr > best_score {
-                best_score = mmr;
-                chosen = i;
-                chosen_pos = pos;
-            }
-        }
-        let _ = best_pos; // keep for readability of original loop
+        };
         selected_indices.push(chosen);
-        remaining.remove(chosen_pos);
+        if let Some(pos) = remaining.iter().position(|&i| i == chosen) {
+            remaining.remove(pos);
+        }
     }
 
     selected_indices

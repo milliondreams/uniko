@@ -237,13 +237,19 @@ pub async fn build_intent_at(
     // (e.g. POS-stripping a 3-word question) waste an embedder call.
     variant_texts.dedup_by(|a, b| a.1 == b.1);
 
-    // Embed every variant concurrently.
-    let embed_futures = variant_texts.iter().map(|(_, text)| {
+    // Embed every variant concurrently.  Failures degrade to an empty
+    // vector so downstream BM25-only paths still fire; log at debug so
+    // a silently misconfigured embedder still surfaces in traces.
+    let embed_futures = variant_texts.iter().map(|(label, text)| {
         let text = text.clone();
         async move {
-            uniko_extract::embedding::embed_query(kb, &text)
-                .await
-                .unwrap_or_default()
+            match uniko_extract::embedding::embed_query(kb, &text).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::debug!(variant = label, error = %e, "embed_query failed");
+                    Vec::new()
+                }
+            }
         }
     });
     let vectors: Vec<Vec<f32>> = join_all(embed_futures).await;
@@ -435,75 +441,8 @@ pub fn predict_answer_type(question: &str) -> Option<&'static str> {
 /// is unavailable.
 async fn analyze_query(kb: &KnowledgeBase, query: &str) -> QueryAnalysis {
     #[cfg(feature = "onnx")]
-    {
-        let pipeline_opt = uniko_extract::nlp::NlpPipeline::try_new(kb).await;
-        if pipeline_opt.is_none() {
-            tracing::warn!("NLP pipeline unavailable for query analysis");
-        }
-        if let Some(pipeline) = pipeline_opt
-            && let Ok(result) = pipeline.analyze(query).await
-        {
-            let labels = uniko_extract::nlp::assets::label_maps();
-
-            // Extract entity names. Normalize for matching against
-            // node `name` properties: strip trailing punctuation and
-            // possessive `'s`/`'`, drop empty tokens. Without this,
-            // `MATCH (:Participant {name: "Caroline's"})` silently
-            // returns nothing.
-            let entity_refs: Vec<String> = result
-                .entities
-                .iter()
-                .filter_map(|e| normalize_entity_text(&e.text))
-                .collect();
-
-            // Extract content keywords by POS tag.
-            let keywords: Vec<&str> = result
-                .words
-                .iter()
-                .zip(result.pos_indices.iter())
-                .filter_map(|(word, &pos_idx)| {
-                    let pos = labels
-                        .pos_labels
-                        .get(pos_idx)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    if CONTENT_POS.contains(&pos) {
-                        Some(word.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Walk the DEP tree to pull SVO triples for the declarative
-            // variant. Empty for short questions with no parsable verb
-            // — the declarative variant builder will then skip itself.
-            let svo_triples = uniko_extract::nlp::decode::extract_svo_triples(
-                &result.words,
-                &result.pos_indices,
-                &result.dep_arcs,
-                &labels.pos_labels,
-            );
-
-            let kw_str = if keywords.is_empty() {
-                String::new()
-            } else {
-                keywords.join(" ")
-            };
-
-            tracing::info!(
-                entities = ?entity_refs,
-                keywords = %kw_str,
-                svo_count = svo_triples.len(),
-                "NLP query analysis",
-            );
-
-            return QueryAnalysis {
-                keywords: kw_str,
-                entity_refs,
-                svo_triples,
-            };
-        }
+    if let Some(analysis) = analyze_query_onnx(kb, query).await {
+        return analysis;
     }
 
     // Fallback: rule-based NER, raw query as keywords.
@@ -518,6 +457,73 @@ async fn analyze_query(kb: &KnowledgeBase, query: &str) -> QueryAnalysis {
         #[cfg(feature = "onnx")]
         svo_triples: Vec::new(),
     }
+}
+
+/// ONNX-cascade query analysis: NER + POS-filtered keywords + SVO
+/// triples from the DEP tree.  Returns `None` when the NLP pipeline is
+/// unavailable or `analyze()` fails — caller falls back to rule-based
+/// NER in that case.
+#[cfg(feature = "onnx")]
+async fn analyze_query_onnx(kb: &KnowledgeBase, query: &str) -> Option<QueryAnalysis> {
+    let pipeline = uniko_extract::nlp::NlpPipeline::try_new(kb).await.or_else(|| {
+        tracing::warn!("NLP pipeline unavailable for query analysis");
+        None
+    })?;
+    let result = pipeline.analyze(query).await.ok()?;
+    let labels = uniko_extract::nlp::assets::label_maps();
+
+    // Entity names normalized for matching against node `name`
+    // properties: strip trailing punctuation and possessive `'s`/`'`,
+    // drop empty tokens.  Without this, `MATCH (:Participant
+    // {name: "Caroline's"})` silently returns nothing.
+    let entity_refs: Vec<String> = result
+        .entities
+        .iter()
+        .filter_map(|e| normalize_entity_text(&e.text))
+        .collect();
+
+    let keywords: Vec<&str> = result
+        .words
+        .iter()
+        .zip(result.pos_indices.iter())
+        .filter_map(|(word, &pos_idx)| {
+            let pos = labels
+                .pos_labels
+                .get(pos_idx)
+                .map(String::as_str)
+                .unwrap_or("");
+            CONTENT_POS.contains(&pos).then_some(word.as_str())
+        })
+        .collect();
+
+    // Walk the DEP tree to pull SVO triples for the declarative
+    // variant.  Empty for short questions with no parsable verb — the
+    // declarative variant builder will then skip itself.
+    let svo_triples = uniko_extract::nlp::decode::extract_svo_triples(
+        &result.words,
+        &result.pos_indices,
+        &result.dep_arcs,
+        &labels.pos_labels,
+    );
+
+    let kw_str = if keywords.is_empty() {
+        String::new()
+    } else {
+        keywords.join(" ")
+    };
+
+    tracing::info!(
+        entities = ?entity_refs,
+        keywords = %kw_str,
+        svo_count = svo_triples.len(),
+        "NLP query analysis",
+    );
+
+    Some(QueryAnalysis {
+        keywords: kw_str,
+        entity_refs,
+        svo_triples,
+    })
 }
 
 /// Normalize an entity span captured from a question for matching
