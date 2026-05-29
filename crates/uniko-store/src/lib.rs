@@ -10,6 +10,7 @@ pub mod blob_store;
 pub mod config;
 pub mod error;
 pub mod id;
+pub mod locks;
 pub mod locy;
 pub mod operations;
 pub mod schema;

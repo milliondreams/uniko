@@ -220,6 +220,22 @@ impl KnowledgeBase {
         validate_label(label)?;
         validate_property_name(ext_id_field)?;
 
+        // Serialize the check-then-create window for this `ext_id`.
+        // Without the lock two callers can both observe "not present"
+        // and each create their own node, producing duplicate rows.
+        // The lock also covers the subsequent update path so a later
+        // RMW on the same logical row is consistent.
+        let mut lock_key = Vec::with_capacity(
+            5 + label.len() + 1 + ext_id_field.len() + 1 + ext_id.len(),
+        );
+        lock_key.extend_from_slice(b"node:");
+        lock_key.extend_from_slice(label.as_bytes());
+        lock_key.push(0);
+        lock_key.extend_from_slice(ext_id_field.as_bytes());
+        lock_key.push(0);
+        lock_key.extend_from_slice(ext_id.as_bytes());
+        let _rmw_guard = self.rmw_locks.lock(&lock_key).await;
+
         // Two-step upsert to avoid NOT NULL constraint violations during
         // MERGE's internal CREATE (uni-db evaluates constraints before
         // ON CREATE SET runs).

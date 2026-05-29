@@ -599,6 +599,213 @@ async fn test_find_stale_open_facts_preserves_upgraded_certainty() {
 }
 
 #[tokio::test]
+async fn test_upsert_fact_by_triple_concurrent_no_lost_observation_count() {
+    // Regression: `upsert_fact_by_triple` read the prior fact via a
+    // fresh session and wrote back via a separate transaction.  Two
+    // concurrent calls could both observe the same `prior_count` and
+    // each set `new_count = prior + observation_count`, losing one
+    // call's contribution.  With per-key locking the final count must
+    // equal the sum of all contributions.
+    use chrono::Utc;
+
+    let kb = test_kb().await;
+    let now = Utc::now();
+    let subject = "alice";
+    let predicate = "likes";
+    let object = Some("tea");
+    const SPAWNS: i64 = 16;
+
+    let mut handles = Vec::new();
+    for _ in 0..SPAWNS {
+        let kb_c = kb.clone();
+        handles.push(tokio::spawn(async move {
+            kb_c.upsert_fact_by_triple(subject, predicate, object, 1, now, None)
+                .await
+                .unwrap()
+        }));
+    }
+    let mut max_count = 0;
+    for h in handles {
+        let outcome = h.await.unwrap();
+        max_count = max_count.max(outcome.observation_count);
+    }
+    assert_eq!(
+        max_count, SPAWNS,
+        "lost observation_count: final visible count {max_count} != {SPAWNS}",
+    );
+
+    kb.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_record_entity_invalidation_concurrent_no_lost_count() {
+    // Regression: `record_entity_invalidation` reads the Entity's
+    // `invalidation_count`, increments by 1, and writes back via a
+    // separate transaction.  Concurrent calls on the same entity
+    // could both observe the same prior count and each set
+    // `prior + 1`, losing increments.
+    use chrono::Utc;
+
+    let kb = test_kb().await;
+    let now = Utc::now();
+    let entity = "alice";
+    const SPAWNS: i64 = 16;
+    const DRIFT_THRESHOLD: i64 = 1_000_000; // never trip "unstable"
+
+    let mut handles = Vec::new();
+    for _ in 0..SPAWNS {
+        let kb_c = kb.clone();
+        handles.push(tokio::spawn(async move {
+            kb_c.record_entity_invalidation(entity, now, DRIFT_THRESHOLD)
+                .await
+                .unwrap()
+        }));
+    }
+    for h in handles {
+        let _ = h.await.unwrap();
+    }
+
+    // Read back the final invalidation_count.
+    let (_nid, props) = kb
+        .get_node_by_ext_id("Entity", "entity_id", entity)
+        .await
+        .unwrap()
+        .expect("entity must exist");
+    let final_count = props
+        .get("invalidation_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert_eq!(
+        final_count, SPAWNS,
+        "lost invalidation_count: final {final_count} != {SPAWNS}",
+    );
+
+    kb.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_merge_node_concurrent_no_duplicate_creation() {
+    // Regression: `merge_node` does a check-then-create (lookup via
+    // `get_node_by_ext_id`, then either `update_node` or `create_node`).
+    // Two concurrent callers could both observe "not present" and each
+    // create a separate row for the same `ext_id`.  With per-key
+    // locking exactly one row must exist after the dust settles.
+    let kb = test_kb().await;
+    let ext_id = "p-merge-race";
+    let label = "Participant";
+
+    const SPAWNS: usize = 16;
+    let mut handles = Vec::new();
+    for _ in 0..SPAWNS {
+        let kb_c = kb.clone();
+        handles.push(tokio::spawn(async move {
+            let mut props = HashMap::new();
+            props.insert("participant_id".into(), Value::String(ext_id.into()));
+            props.insert("kind".into(), Value::String("agent".into()));
+            kb_c.merge_node(label, "participant_id", ext_id, &props)
+                .await
+                .unwrap()
+        }));
+    }
+    let mut ids = Vec::new();
+    for h in handles {
+        ids.push(h.await.unwrap());
+    }
+    // All merges must resolve to the same node id.
+    let first = ids[0];
+    assert!(
+        ids.iter().all(|&id| id == first),
+        "merge_node produced distinct node ids under contention: {ids:?}",
+    );
+
+    // Verify only one node was actually created.
+    let session = kb.db().session();
+    let q = session
+        .query_with(&format!(
+            "MATCH (n:{label} {{participant_id: $eid}}) RETURN count(n) AS c"
+        ))
+        .param("eid", ext_id)
+        .fetch_all()
+        .await
+        .unwrap();
+    let count: i64 = q.rows().first().unwrap().get("c").unwrap();
+    assert_eq!(count, 1, "merge_node created {count} duplicate rows");
+
+    kb.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_batch_upsert_facts_concurrent_no_lost_count() {
+    // Regression: `batch_upsert_facts` reads prior counts via one
+    // session and writes back via a separate transaction.  Two
+    // concurrent batches targeting overlapping Facts could both
+    // observe the same pre-image and lose increments.  With per-Fact
+    // locking the cumulative count must equal the sum of all batches'
+    // contributions.
+    use chrono::Utc;
+    use uniko_store::operations::facts::FactUpsertInput;
+
+    let kb = test_kb().await;
+    let now = Utc::now();
+    let subject = "alice".to_string();
+    let predicate = "likes".to_string();
+    let object = "tea".to_string();
+    const BATCHES: i64 = 8;
+    const PER_BATCH: i64 = 3;
+
+    let mut handles = Vec::new();
+    for _ in 0..BATCHES {
+        let kb_c = kb.clone();
+        let s = subject.clone();
+        let p = predicate.clone();
+        let o = object.clone();
+        handles.push(tokio::spawn(async move {
+            let inputs: Vec<FactUpsertInput> = (0..PER_BATCH)
+                .map(|_| FactUpsertInput {
+                    subject: s.clone(),
+                    predicate: p.clone(),
+                    object: Some(o.clone()),
+                    observation_count: 1,
+                    observed_at: now,
+                    embedding: None,
+                })
+                .collect();
+            // Each batch internally dedups to a single Fact with
+            // observation_count == PER_BATCH; concurrent batches must
+            // serialize so the cumulative count is BATCHES * PER_BATCH.
+            kb_c.batch_upsert_facts(inputs).await.unwrap()
+        }));
+    }
+    for h in handles {
+        let _ = h.await.unwrap();
+    }
+
+    // Read back the surviving Fact's observation_count.
+    let fact_id = uniko_store::operations::facts::fact_id_for(
+        &subject,
+        &predicate,
+        Some(&object),
+    );
+    let (_nid, props) = kb
+        .get_node_by_ext_id("Fact", "fact_id", &fact_id)
+        .await
+        .unwrap()
+        .expect("Fact must exist");
+    let final_count = props
+        .get("observation_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert_eq!(
+        final_count,
+        BATCHES * PER_BATCH,
+        "lost batch upserts: final observation_count {final_count} != {}",
+        BATCHES * PER_BATCH,
+    );
+
+    kb.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn test_batch_create_edges_fast_rejects_invalid_property_name() {
     // Regression: the fast/bulk path used to silently discard the
     // result of `validate_property_name`, letting invalid keys reach

@@ -77,6 +77,19 @@ pub fn laplace_confidence(observation_count: i64) -> f64 {
     (n + 1.0) / (n + 2.0)
 }
 
+/// Build the per-Fact RMW lock key used by [`KnowledgeBase::upsert_fact_by_triple`]
+/// and [`KnowledgeBase::batch_upsert_facts`].
+///
+/// Both call sites lock in the same namespace so a single-call upsert
+/// and a batch upsert that touch the same Fact serialize against each
+/// other rather than racing.
+fn fact_lock_key(fact_id: &str) -> Vec<u8> {
+    let mut k = Vec::with_capacity(5 + fact_id.len());
+    k.extend_from_slice(b"fact:");
+    k.extend_from_slice(fact_id.as_bytes());
+    k
+}
+
 impl KnowledgeBase {
     /// Upsert a Fact for the given `(subject, predicate, object)` triple.
     ///
@@ -104,6 +117,15 @@ impl KnowledgeBase {
         embedding: Option<Vec<f32>>,
     ) -> Result<FactUpsert> {
         let fact_id = fact_id_for(subject, predicate, object);
+
+        // Serialize concurrent upserts of the same triple.  Without
+        // this, two callers can both observe the same prior count and
+        // each apply `prior + n`, losing one batch of observations.
+        // Lock key is the fact_id namespace so this nests cleanly with
+        // [`KnowledgeBase::batch_upsert_facts`], which acquires the same
+        // namespace.
+        let lock_key = fact_lock_key(&fact_id);
+        let _rmw_guard = self.rmw_locks.lock(&lock_key).await;
 
         // Idempotency lookup via the fact_id hash index.
         if let Some((nid, props)) = self
@@ -297,6 +319,22 @@ impl KnowledgeBase {
                     }
                 }
             }
+        }
+
+        // Serialize against concurrent upserts of the same Facts.
+        // We acquire one stripe per distinct `fact_id` and hold the
+        // guards for the whole call so Phase 1 / 2 / 3 see a coherent
+        // snapshot per Fact.  Sorting by lock key gives a deterministic
+        // acquisition order so two overlapping batches cannot deadlock.
+        // Aligns with the single-call path
+        // [`KnowledgeBase::upsert_fact_by_triple`], which locks in the
+        // same namespace.
+        let mut lock_keys: Vec<Vec<u8>> =
+            unique_fids.iter().map(|fid| fact_lock_key(fid)).collect();
+        lock_keys.sort();
+        let mut _rmw_guards = Vec::with_capacity(lock_keys.len());
+        for k in &lock_keys {
+            _rmw_guards.push(self.rmw_locks.lock(k).await);
         }
 
         // Phase 1: batched MATCH to discover which (deduped) fact_ids
@@ -802,6 +840,14 @@ impl KnowledgeBase {
         if key.is_empty() {
             return Ok(false);
         }
+
+        // Serialize concurrent invalidations for the same entity name.
+        // Without this, two callers can both read `prior_count` and
+        // each write `prior + 1`, losing one invalidation increment.
+        let mut lock_key = Vec::with_capacity(7 + key.len());
+        lock_key.extend_from_slice(b"entity:");
+        lock_key.extend_from_slice(key.as_bytes());
+        let _rmw_guard = self.rmw_locks.lock(&lock_key).await;
 
         // Fetch (or implicitly create) the Entity by name.
         let session = self.db.session();

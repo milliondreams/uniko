@@ -86,6 +86,12 @@ pub struct KnowledgeBase {
     /// modality on first occurrence), so a single shared mutex is the
     /// simplest correct choice.
     pub(crate) kb_stats_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Per-key striped locks shared by every RMW site that reads a row,
+    /// mutates it Rust-side, and writes it back.  See
+    /// [`crate::locks`] for the design rationale.  Sites use distinct
+    /// key namespaces (`fact:…`, `entity:…`, `node:…`) so collisions
+    /// across sites are themselves harmless.
+    pub(crate) rmw_locks: Arc<crate::locks::StripedLocks>,
 }
 
 impl KnowledgeBase {
@@ -125,6 +131,7 @@ impl KnowledgeBase {
             db: Arc::new(db),
             config,
             kb_stats_lock: Arc::new(tokio::sync::Mutex::new(())),
+            rmw_locks: Arc::new(crate::locks::StripedLocks::from_env()),
         }
         .finalize_init()
         .await
@@ -194,6 +201,7 @@ impl KnowledgeBase {
             db: Arc::new(db),
             config,
             kb_stats_lock: Arc::new(tokio::sync::Mutex::new(())),
+            rmw_locks: Arc::new(crate::locks::StripedLocks::from_env()),
         }
         .finalize_init()
         .await
@@ -276,6 +284,7 @@ impl KnowledgeBase {
             db: Arc::new(db),
             config,
             kb_stats_lock: Arc::new(tokio::sync::Mutex::new(())),
+            rmw_locks: Arc::new(crate::locks::StripedLocks::from_env()),
         }
         .finalize_init()
         .await
