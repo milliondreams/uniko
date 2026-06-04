@@ -18,12 +18,18 @@ pub type EmbeddingVec = Vec<f32>;
 
 /// Convert a UTC datetime to uni-db's wire-form temporal value.
 ///
-/// Writing `Value::String(dt.to_rfc3339())` into a `DataType::DateTime`
-/// column is silently rejected by uni-db's post-commit flush check —
-/// the transaction commits, but the row is omitted from the per-label
-/// persisted table, leaving it invisible to label-anchored MATCH.  All
-/// uniko write paths that target a DateTime property MUST go through
-/// this helper instead.
+/// This is the canonical, type-safe way to write a `DataType::DateTime`
+/// property: it carries full nanosecond precision and a normalized UTC
+/// offset. Prefer it over `Value::String(dt.to_rfc3339())` + uni-db's
+/// write-time string→DateTime coercion (added in uni-db 2.0, issue #68),
+/// which round-trips through the `datetime()` parser and is not
+/// guaranteed to preserve sub-second precision.
+///
+/// Historically this helper was *mandatory*: pre-2.0, a String written
+/// to a DateTime column committed but was silently dropped at flush
+/// (row omitted from the per-label table). #68 fixed that — strings are
+/// now coerced or loudly rejected — but the typed path here remains the
+/// preferred one.
 #[must_use]
 pub fn datetime_value(dt: chrono::DateTime<chrono::Utc>) -> uni_db::Value {
     uni_db::Value::Temporal(uni_db::common::TemporalValue::DateTime {
