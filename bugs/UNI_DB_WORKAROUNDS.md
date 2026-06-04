@@ -64,7 +64,7 @@ upstream would let us delete the listed sites.
 
 | # | Root cause | Filed | Workaround sites it drives |
 |---|------------|-------|----------------------------|
-| RC1 | **`WHERE` on `DateTime`/Temporal properties is unsupported** (only `ORDER BY` on Temporal works); planner returns Temporal as RFC-3339 *strings* | not filed | `memory/episode.rs:175`, `memory/recall/mod.rs:1112` (phase2_temporal), `memory/consolidation.rs:805`, `bench/query.rs:329` |
+| RC1 | **`WHERE` on `DateTime` predicates** ✅ **FIXED in 2.0.0**; ⚠️ planner still returns Temporal as RFC-3339 *strings* on read (unfixed) | not filed | **predicate workaround removed**: `memory/episode.rs` migrated to `WHERE … >= $earliest AND <= $now` (`recall/mod.rs` phase2 already used `WHERE`). **Read-side string parsing remains** (values still come back as strings): `consolidation.rs:805`, `bench/query.rs:329/362`. |
 | RC2 | **No server-side atomic `SET` / no serializable commit (last-writer-wins) / no row lock / no CAS** | [`rmw-primitives-wishlist.md`](uni-db-rmw-primitives-wishlist.md) | entire `store/locks.rs` (`StripedLocks`) + 6 RMW call sites; `store/facts.rs` Fact phase-split + Rust-side count arithmetic; `cortex/topics.rs` BELONGS_TO dup-swallow |
 | RC3 | **`MERGE` runs a per-row executor loop** (no bulk fast-path) | `#69` — 🟡 **substantially fixed @ 2.0.0** (uni `ab405408a`; single-node shape skips per-row planning) | `extract/ner/dedup.rs` 4-phase entity upsert — **removal candidate pending bench**, see §0 (2026-06-03) |
 | RC4 | **`MERGE`'s internal CREATE checks NOT NULL before `ON CREATE SET`** | not filed | `store/nodes.rs:239` `merge_node` get-then-create split |
@@ -146,7 +146,7 @@ uni-db-shaped but a defensible design choice).
 
 | Site | uni-db issue | Workaround | Evidence | Status |
 |------|--------------|-----------|----------|--------|
-| `src/episode.rs:175` `find_previous_episode` | RC1: no `WHERE` on DateTime | `ORDER BY e.timestamp DESC LIMIT 1`, then apply the `[earliest, now]` window in Rust | comment | not filed |
+| `src/episode.rs` `find_previous_episode` | RC1: `WHERE` on DateTime ✅ **fixed 2.0** | **migrated** — `WHERE e.timestamp >= $earliest AND <= $now` + `ORDER BY … LIMIT 1`; Rust window filter removed | — | resolved |
 | `src/recall/mod.rs:1112` `phase2_temporal` | RC1: no DateTime predicate; can't express proximity-in-window | 3-arm `UNION ALL` with per-arm `WITH…LIMIT` (a single trailing LIMIT would starve an arm); Fact arm via custom `btic_overlaps()` UDF; flat score 1.0 | inferred | not filed |
 | `src/recall/mod.rs:1247` `phase2_graph_activation` | spreading activation / weighted PPR not expressible in Cypher; `UNWIND/MATCH` hydration loses order | host-side `kb.personalized_pagerank_weighted(...)`, second `UNWIND $nids` round-trip to hydrate, **re-sort in Rust** | comment + inferred | not filed |
 | `src/recall/intent.rs:480` + `recall/mod.rs:1485` `entity_type_match` | exact string equality on `name`; no possessive/punctuation normalization → `{name:"Caroline's"}` silently returns nothing | `normalize_entity_text` strips trailing punct + `'s` in Rust before binding; `entity_type_match` `format!`-inlines `target_type` with manual `'` escaping | comment | not filed |

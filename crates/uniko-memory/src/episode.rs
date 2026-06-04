@@ -172,10 +172,9 @@ pub async fn record_episode(
 ///
 /// Returns `(node_id, timestamp)` or `None` when no candidate exists.
 ///
-/// Implementation note: uni-db's Cypher does not yet support `WHERE`
-/// on `DateTime` properties via `datetime()` coercion in the embedded
-/// planner, so the time filter is applied in Rust after fetching the
-/// agent's most recent episode by graph adjacency.
+/// uni-db 2.0 supports `WHERE` predicates on `DateTime`, so the
+/// `[earliest, now]` window is filtered in Cypher; `ORDER BY … LIMIT 1`
+/// then returns the most recent match directly.
 async fn find_previous_episode(
     kb: &KnowledgeBase,
     agent_id: &str,
@@ -183,10 +182,8 @@ async fn find_previous_episode(
 ) -> Result<Option<(NodeId, DateTime<Utc>)>, UnikoError> {
     let earliest = now - chrono::Duration::milliseconds(FOLLOWED_BY_WINDOW_MS);
 
-    // Fetch the most recent episode by ordering on the DateTime field —
-    // ORDER BY works on Temporal columns even though predicate-side
-    // comparisons don't.
     let cypher = "MATCH (e:Episode)-[:RECORDED_BY]->(p:Participant {participant_id: $aid}) \
+                  WHERE e.timestamp >= $earliest AND e.timestamp <= $now \
                   RETURN e \
                   ORDER BY e.timestamp DESC \
                   LIMIT 1";
@@ -195,6 +192,8 @@ async fn find_previous_episode(
     let result = session
         .query_with(cypher)
         .param("aid", agent_id)
+        .param("earliest", datetime_value(earliest))
+        .param("now", datetime_value(now))
         .fetch_all()
         .await?;
 
@@ -207,10 +206,6 @@ async fn find_previous_episode(
         UnikoError::Storage("Episode.timestamp missing".into())
     })?;
     let ts = crate::value_convert::require_datetime(ts_value, "Episode.timestamp")?;
-
-    if ts < earliest || ts > now {
-        return Ok(None);
-    }
     Ok(Some((vid, ts)))
 }
 
