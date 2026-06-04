@@ -12,7 +12,6 @@ missing atomicity. Spot-checked against source; each entry marks whether it is
 > This is the index. The deep repros live alongside it in `bugs/`:
 > [`uni-db-edge-id-vid-planner.md`](uni-db-edge-id-vid-planner.md),
 > [`uni-db-rmw-primitives-wishlist.md`](uni-db-rmw-primitives-wishlist.md),
-> [`unidb-similar-to-fts-zero-score/`](unidb-similar-to-fts-zero-score/),
 > [`unidb-slow-pattern-in-where/`](unidb-slow-pattern-in-where/),
 > [`unidb-persistence-loss/`](unidb-persistence-loss/).
 
@@ -46,8 +45,8 @@ green (CUDA path + `nextest` not yet run at time of writing).
 
 | Issue | Verdict | Fix / evidence | uniko impact |
 |-------|---------|----------------|--------------|
-| **#39** `similar_to()`→0.0 on FTS | ✅ **FIXED** | uni `d11ac2cbc` "Closes #39" — `fts_search_batch` now passes `QueryContext`, so unflushed L0 data is scored (`similar_to_expr.rs:663`). uni's 4 regression tests pass. | **No workaround to remove.** uniko's FTS leg uses `CALL uni.fts.query` (`fulltext.rs:28`), which was *never* broken by #39. The RRF-in-Rust in `hybrid.rs` is a deliberate tiered-ranking design, not a #39 workaround — **RC5 was over-attributed; corrected below.** Retire the `unidb-similar-to-fts-zero-score/` repro. |
-| **#55** `get_edges` scales w/ graph | ✅ **FIXED** (scaling) | uni `48f3a4ed3` + `0d2a2cebc` + `e711c87e0` short-circuit irrelevant frozen CSR segments. `get_edges_scaling_repro` plateaus (does **not** grow linearly across +3000 nodes). | **No live code to remove.** The `store/tests/perf/` repros are now redundant with uni's own #55 regression test. ⚠️ A constant post-first-flush latency step remains (uni's deferred follow-up). |
+| **#39** `similar_to()`→0.0 on FTS | ✅ **FIXED** | uni `d11ac2cbc` "Closes #39" — `fts_search_batch` now passes `QueryContext`, so unflushed L0 data is scored (`similar_to_expr.rs:663`). uni's 4 regression tests pass. | **No workaround to remove.** uniko's FTS leg uses `CALL uni.fts.query` (`fulltext.rs:28`), which was *never* broken by #39. The RRF-in-Rust in `hybrid.rs` is a deliberate tiered-ranking design, not a #39 workaround — **RC5 was over-attributed; corrected below.** Repro `unidb-similar-to-fts-zero-score/` **retired 2026-06-03**. |
+| **#55** `get_edges` scales w/ graph | ✅ **FIXED** (scaling) | uni `48f3a4ed3` + `0d2a2cebc` + `e711c87e0` short-circuit irrelevant frozen CSR segments. `get_edges_scaling_repro` plateaus (does **not** grow linearly across +3000 nodes). | **No live code to remove.** `store/tests/perf/` repros **retired 2026-06-03** — re-verified on 2.0.0: `get_edges` 4.4× & plateaus, `observed_in_growth` 1.7× (was ~5×). ⚠️ A constant post-first-flush latency step remains (uni's deferred follow-up). |
 | **#69** `MERGE` per-row loop | ❌ **NOT fixed** *(@1.3.0 — superseded by 2026-06-03 / 2.0.0 above)* | `execute_merge` (uni `write.rs:1458`) is still `for row in rows` with a per-row plan in `execute_merge_match`. The UNWIND-IN-list/HashJoin commits fix MATCH read legs only, **not** MERGE; no uni test asserts bulk MERGE. | At 1.3.0: **keep** the 4-phase entity upsert. At 2.0.0 (`ab405408a`): now a removal candidate — see top of §0. |
 
 **Adoption prerequisite.** uni HEAD bumped `uni-xervo` 0.12→0.13 (commit `41e4fc263`).
@@ -70,7 +69,7 @@ upstream would let us delete the listed sites.
 | RC3 | **`MERGE` runs a per-row executor loop** (no bulk fast-path) | `#69` — 🟡 **substantially fixed @ 2.0.0** (uni `ab405408a`; single-node shape skips per-row planning) | `extract/ner/dedup.rs` 4-phase entity upsert — **removal candidate pending bench**, see §0 (2026-06-03) |
 | RC4 | **`MERGE`'s internal CREATE checks NOT NULL before `ON CREATE SET`** | not filed | `store/nodes.rs:239` `merge_node` get-then-create split |
 | RC5 | **`similar_to()` returns `0.0` on a FullText-indexed field** (BM25 path works) | `#39` — ✅ **FIXED** (uni `d11ac2cbc`) | **none** — over-attributed; `hybrid.rs` uses `CALL uni.fts.query` (never broken), see §0 |
-| RC6 | **`get_edges` latency scales with total graph size, not out-degree** (no CSR adjacency) | `#55` — ✅ **FIXED** scaling (uni `48f3a4ed3`); const post-flush step remains | `extract` denormalized ABOUT edges are recall-expressiveness (keep); `store/tests/perf/` repros now redundant |
+| RC6 | **`get_edges` latency scales with total graph size, not out-degree** (no CSR adjacency) | `#55` — ✅ **FIXED** scaling (uni `48f3a4ed3`); const post-flush step remains | `extract` denormalized ABOUT edges are recall-expressiveness (keep); `store/tests/perf/` repros **retired** (re-verified 2.0.0) |
 | RC7 | **`UNWIND … MATCH WHERE id(n)=p` only gets the HashJoin rewrite under specific shapes**; without a label hint the planner does a multi-label scan per row (~18 ms/row) | `rustic-ai/uni-db#53`, `#54` | `extract/ner/dedup.rs` (`:Entity` label hint, `id()`-equality shape); `store/storage/batch.rs` |
 | RC8 | **`id(r)` on a relationship lowers to `r._vid`** (planner bug) | [`edge-id-vid-planner.md`](uni-db-edge-id-vid-planner.md) | `store/storage/edges.rs:341` (`delete_edge`), `:398` (`update_edge`) |
 | RC9 | **Typed `List<T>` column with no producer → Arrow inference coerces `List<Float32>`→`List<Utf8>`** | not filed (matches known inference fallback) | `store/schema/chunks.rs:30` defers typed columns into a JSON bag |
@@ -92,12 +91,12 @@ BGE-small ORT mutex, GPT/o-series temperature handling, LLM retry/backoff,
 
 | uni-db issue | Symptom | Where it bites |
 |--------------|---------|----------------|
-| `#39` ✅ FIXED | `similar_to()` → `0.0` on FullText field | RC5; repro `unidb-similar-to-fts-zero-score/` — passes on uni HEAD, **retire** |
+| `#39` ✅ FIXED | `similar_to()` → `0.0` on FullText field | RC5; repro `unidb-similar-to-fts-zero-score/` — **retired 2026-06-03** |
 | `#40` | `flush()` "non-nullable column" on empty labels | bench repro (now deleted from tree) |
 | `#49` | auto-embed insert latency O(n) when label also has a `DateTime` prop | bench repro (deleted) |
 | `#50` | `DataType::Bytes` unavailable | RC13; `bench/ingest.rs:203` (`TODO(uni-db#50)`) |
 | `#53`/`#54` | `UNWIND…MATCH WHERE id()=p` HashJoin rewrite only under specific shapes; UNWIND-edge ~100× slow | RC3/RC7; `store/tests/bug_repros/unwind_edge_repro.rs` |
-| `#55` ✅ FIXED (scaling) | `get_edges` scales with graph size not out-degree | RC6; `store/tests/perf/get_edges_scaling*` — redundant w/ uni's own test, **retire** |
+| `#55` ✅ FIXED (scaling) | `get_edges` scales with graph size not out-degree | RC6; `store/tests/perf/` — **retired 2026-06-03** (re-verified 2.0.0) |
 | `#56` | label disjunction `(n:A|B)` no-op, then `union_schema` panic on differing column counts | `store/tests/bug_repros/label_disjunction*` (uni-db has since fixed) |
 | `#69` ❌ STILL OPEN | `MERGE` per-row executor loop (verified uni `write.rs:1458`, 2026-05-31) | RC3; `extract/ner/dedup.rs` — keep workaround |
 
@@ -125,12 +124,14 @@ uni-db-shaped but a defensible design choice).
 | `src/operations/facts.rs:634` `extract_btic`, `:662` `find_stale_open_facts` | lossy `toString`→RFC3339 roundtrip on BTIC `valid_at`; `Value` has no `FromValue` | bare property projection + structural extraction of `Value::Temporal(Btic)` in Rust | comment | not filed (borderline) |
 | naming convention (repo-wide) | RC11: index on prop named `ext_id` breaks `flush()` | name all external ids `<label>_id` | comment | filed ([persistence-loss](unidb-persistence-loss/)) |
 
-**Repros (`tests/bug_repros/`, `tests/perf/`) — documentation, no live workaround:**
+**Repros (`tests/bug_repros/`) — documentation, no live workaround:**
 `unwind_edge_repro.rs` (#53, UNWIND-edge ~100× slow, assertion disabled pending fix) ·
 `label_disjunction_repro.rs` / `label_disjunction_union_schema_panic.rs` (#56, since fixed) ·
-`schema_apply_duplicate_index_repro.rs` (`SchemaBuilder::apply` re-appends indexes ~2^N; hit 60,969 in prod) ·
-`get_edges_scaling_repro.rs` + `_autoembed_repro.rs` (#55 — ✅ **fixed on uni HEAD**, now plateaus; redundant w/ uni's own regression test, retire) ·
-`observed_in_growth_repro.rs` (#55 follow-up: edge-create time grew ~5× within one conversation; re-measure on uni HEAD).
+`schema_apply_duplicate_index_repro.rs` (`SchemaBuilder::apply` re-appends indexes ~2^N; hit 60,969 in prod).
+
+> The `tests/perf/` group (`get_edges_scaling_repro.rs`, `_autoembed_repro.rs`,
+> `observed_in_growth_repro.rs`) was **retired 2026-06-03** — #55/#53/#54 verified
+> fixed on 2.0.0 (`get_edges` 4.4×/plateau, `observed_in_growth` 1.7×, was ~5×).
 
 ### uniko-extract
 
