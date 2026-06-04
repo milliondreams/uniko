@@ -270,15 +270,16 @@ pub async fn apply_entity_upsert(
     let phase2_create_ms = phase2_start.elapsed().as_millis();
 
     // ── Phase 3: batched UPDATE for found entities.
-    // The :Entity label hint is load-bearing: without it the planner
-    // falls back to a multi-label scan per row, costing ~18 ms/row even
-    // on a small KB. Investigated 2026-05-20.
+    // uni-db 2.0 (#53/#54) rewrites `UNWIND … MATCH WHERE id(n) = col`
+    // into a HashJoin, so the id()-equality match no longer needs an
+    // :Entity label hint to avoid the per-row multi-label scan that
+    // previously cost ~18 ms/row (investigated 2026-05-20, fixed upstream).
     let phase3_start = std::time::Instant::now();
     let update_count = updates_list.len();
     if !updates_list.is_empty() {
         let update_cypher = "\
             UNWIND $updates AS u \
-            MATCH (n:Entity) WHERE id(n) = u.nid \
+            MATCH (n) WHERE id(n) = u.nid \
             SET n.frequency = u.new_frequency, \
                 n.last_seen = $now, \
                 n.confidence = u.new_confidence";
