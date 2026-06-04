@@ -199,9 +199,11 @@ pub async fn ingest_into_kb_with_observer(
             total_entities += result.extracted_entities.len();
             total_observations += result.extracted_observations.len();
 
-            // Create Artifact node for image turns.
-            // TODO(uni-db#50): Store actual image bytes in a blob field once
-            // DataType::Bytes is available.
+            // Create Artifact node for image turns: caption+query as the
+            // searchable text proxy. (uni-db #50 / DataType::Bytes landed in
+            // 2.0 and ArtifactContent persists raw bytes; populating image
+            // bytes here would require fetching img_url — out of scope for the
+            // bench, which only has URLs, not the image files.)
             if turn.img_url.is_some() {
                 let caption = turn.blip_caption.as_deref().unwrap_or("");
                 let query_text = turn.query.as_deref().unwrap_or("");

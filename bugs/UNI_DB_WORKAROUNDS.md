@@ -76,7 +76,7 @@ upstream would let us delete the listed sites.
 | RC10 | **Writing `Value::String(rfc3339)` into a `DateTime` column is silently dropped at flush** (row invisible to label-MATCH) | not filed | `store/types.rs:19` mandatory `datetime_value()` helper |
 | RC11 | **A scalar index on a property literally named `ext_id` makes `flush()` fail** (Lance duplicate field) | [`unidb-persistence-loss/`](unidb-persistence-loss/) | naming convention: all external ids are `<label>_id` (`fact_id`, `participant_id`, …) |
 | RC12 | **Locy rule runtime may not execute stdlib rules** in the pinned uni-db version | not filed | `cortex/procedures.rs` Locy→Cypher fallback; `memory/rules/stdlib.rs:117` best-effort `create_rule` |
-| RC13 | **Missing scalar `DataType`s** (`Int16`, `Bytes`) | `Bytes` = `uni-db#50` | `store/schema/artifacts.rs:32` (Int16→Int32); `bench/ingest.rs:203` (image bytes → text only) |
+| RC13 | **Missing scalar `DataType`s** — `Bytes` ✅ **FIXED** (`#50`, 2.0.0); `Int16` ❌ still missing | `Bytes` = `#50` (done) | `Bytes`: **adopted** — `store/schema/artifact_content.rs` uses `DataType::Bytes` (`bytes`, `audio_fingerprint`); `bench/ingest.rs` TODO de-referenced. `Int16`: `store/schema/artifacts.rs:32` (channels still `Int32`) — **keep** |
 | RC14 | **`MERGE`-an-edge between two known ids isn't expressible** (requires both endpoints by `id()` in one pattern) | not filed | `store/migrations.rs:90` manual two-step; `cortex/topics.rs` `create_edge`+dup-swallow |
 
 **Out of scope but logged for completeness** (these are ONNX/ORT embedding-runtime
@@ -94,7 +94,7 @@ BGE-small ORT mutex, GPT/o-series temperature handling, LLM retry/backoff,
 | `#39` ✅ FIXED | `similar_to()` → `0.0` on FullText field | RC5; repro `unidb-similar-to-fts-zero-score/` — **retired 2026-06-03** |
 | `#40` | `flush()` "non-nullable column" on empty labels | bench repro (now deleted from tree) |
 | `#49` | auto-embed insert latency O(n) when label also has a `DateTime` prop | bench repro (deleted) |
-| `#50` | `DataType::Bytes` unavailable | RC13; `bench/ingest.rs:203` (`TODO(uni-db#50)`) |
+| `#50` ✅ FIXED | `DataType::Bytes` unavailable | RC13; **adopted** in `store/schema/artifact_content.rs`; `bench/ingest.rs` TODO de-referenced |
 | `#53`/`#54` | `UNWIND…MATCH WHERE id()=p` HashJoin rewrite only under specific shapes; UNWIND-edge ~100× slow | RC3/RC7; `store/tests/bug_repros/unwind_edge_repro.rs` |
 | `#55` ✅ FIXED (scaling) | `get_edges` scales with graph size not out-degree | RC6; `store/tests/perf/` — **retired 2026-06-03** (re-verified 2.0.0) |
 | `#56` | label disjunction `(n:A|B)` no-op, then `union_schema` panic on differing column counts | `store/tests/bug_repros/label_disjunction*` (uni-db has since fixed) |
@@ -175,7 +175,7 @@ uni-db-shaped but a defensible design choice).
 |------|--------------|-----------|----------|--------|
 | `src/cypher_main.rs:212` | Cypher parser rejects a trailing `;` | strip trailing `;` from the REPL buffer | comment | not filed |
 | `src/events.rs:10` + `src/ingest.rs:264` | `xervo.embed()` discards the provider `usage` field → no real embedding token counts | estimate embed tokens as `chars/4` | comment (cites `feedback_no_edit_uni`) | not filed (needs uni-db patch) |
-| `src/ingest.rs:203` | RC13: `DataType::Bytes` unavailable | store only caption/query text in the Artifact node, no image bytes | comment `TODO(uni-db#50)` | filed (`#50`) |
+| `src/ingest.rs:203` | RC13: `DataType::Bytes` ✅ fixed (`#50`) | caption/query text proxy; raw image bytes unimplemented (needs img_url fetch, not a uni-db limitation) | comment (de-referenced) | `#50` done |
 | `src/insert_microbench_main.rs:215` | `SchemaBuilder`↔`LabelBuilder` chained-API type-juggling | apply schema one label at a time (separate `.apply()` per label) | comment | not filed (ergonomics) |
 | `src/main.rs:524` `verify_label_visible` etc. (callers `:338`,`:343`,`:487`) | label-scan invisibility: vertices reachable via edges/`id()` but invisible to `MATCH (n:Label)` (conv-26 symptom) | defensive runtime re-query by label + `tracing::warn!` when label-scan returns 0 (detection, not a fix) | comment | repro (examples below) |
 | `src/longmemeval_main.rs:34` | default allocator underperforms under concurrent writes | install `uni_db::MiMalloc` global allocator (~3× on uni-db `concurrent_mutations`, commit `65399a2b`) | comment | not filed (perf) |
