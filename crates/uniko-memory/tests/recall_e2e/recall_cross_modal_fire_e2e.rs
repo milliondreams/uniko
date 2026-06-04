@@ -14,11 +14,17 @@ use uniko_memory::recall::phase2_expand;
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 
-const DIM: usize = 768;
+/// Embedding dimension of the default schema — Artifact's `*_embedding`
+/// columns are sized to `UnikoConfig::default().embedding.dimensions`, so
+/// derive it rather than hardcoding (which silently breaks if the default
+/// embedder changes).
+fn dim() -> usize {
+    UnikoConfig::default().embedding.dimensions
+}
 
 /// Unit-norm vector with `1.0` at `slot` and `0.0` elsewhere.
 fn one_hot(slot: usize) -> Vec<f32> {
-    let mut v = vec![0.0_f32; DIM];
+    let mut v = vec![0.0_f32; dim()];
     v[slot] = 1.0;
     v
 }

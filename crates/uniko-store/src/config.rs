@@ -678,7 +678,7 @@ impl Default for UnikoConfig {
             catalog_path: None,
             schema_path: None,
             observation_rules_path: None,
-            embedding: EmbeddingConfig::nomic_v15(),
+            embedding: EmbeddingConfig::bge_small_en_v15(),
             reranker: RerankerConfig::default(),
             nlp: NlpConfig::default(),
             vector_algorithm: VectorAlgorithm::HnswSq {
@@ -846,9 +846,10 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let c = UnikoConfig::default();
-        // Embedding defaults to Nomic v1.5 / 768d
-        assert_eq!(c.embedding.model_id, "NomicEmbedTextV15");
-        assert_eq!(c.embedding.dimensions, 768);
+        // Embedding defaults to BGE-small-en-v1.5 / 384d (the embedder we
+        // actually run; see config/catalog.json + the canonical bench).
+        assert_eq!(c.embedding.model_id, "BGESmallENV15");
+        assert_eq!(c.embedding.dimensions, 384);
         assert_eq!(c.embedding.batch_size, 32);
         // Vector defaults to HnswSq / Cosine
         assert_eq!(

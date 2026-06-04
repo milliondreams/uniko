@@ -70,7 +70,10 @@ pub(crate) async fn apply_message_writes_in_tx(
     );
     props.insert("timestamp".into(), ts_value);
     if std::env::var("UNIKO_BENCH_NO_MSG_EMBED").is_ok() {
-        let zero_vec: Vec<Value> = (0..384).map(|_| Value::Float(0.0)).collect();
+        // Placeholder embedding sized to the configured embedder's
+        // dimension (was hardcoded 384, which mismatched any non-384 model).
+        let dims = kb.config().embedding.dimensions;
+        let zero_vec: Vec<Value> = (0..dims).map(|_| Value::Float(0.0)).collect();
         props.insert("embedding".into(), Value::List(zero_vec));
     }
     let message_nid = kb.create_node_in_tx(tx, "Message", &props).await?;
