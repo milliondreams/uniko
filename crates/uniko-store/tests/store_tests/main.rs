@@ -7,6 +7,10 @@
 //!
 //! Run: `cargo nextest run -p uniko-store --test store_tests`
 
+// Deep nested async future layout (lance dataset/IO cache via uni-db 2.0)
+// exceeds rustc's default recursion limit of 128 when evaluating `Send`.
+#![recursion_limit = "256"]
+
 mod blob_store_roundtrip;
 mod btic_tests;
 mod locy_tests;

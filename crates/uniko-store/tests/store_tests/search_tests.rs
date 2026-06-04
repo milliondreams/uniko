@@ -15,6 +15,16 @@ async fn test_kb() -> KnowledgeBase {
         .expect("in-memory KB")
 }
 
+/// The embedding dimension the default schema actually uses (driven by
+/// `UnikoConfig::default().embedding`, currently nomic/768d). Tests size
+/// their vectors to this so they match the `Message.embedding` column
+/// regardless of which model the default config selects — a hardcoded 384
+/// silently passed in isolation but failed under parallel runs once the
+/// vector index enforced the column dimension.
+fn embed_dim() -> usize {
+    UnikoConfig::default().embedding.dimensions
+}
+
 // ── Vector search ──
 
 #[tokio::test]
@@ -35,7 +45,7 @@ async fn test_vector_search_empty_embedding() {
 async fn test_vector_search_basic() {
     let kb = test_kb().await;
 
-    // Insert messages with embeddings (384-dim per schema).
+    // Insert messages with embeddings sized to the schema's embedding dim.
     for i in 0..5u8 {
         let mut props = HashMap::new();
         props.insert("message_id".into(), Value::String(format!("vs-{i}")));
@@ -48,14 +58,14 @@ async fn test_vector_search_basic() {
             Value::String("2024-01-01T00:00:00Z".into()),
         );
         // Create a simple embedding: all zeros except position i.
-        let mut emb = vec![0.0f32; 384];
+        let mut emb = vec![0.0f32; embed_dim()];
         emb[i as usize] = 1.0;
         props.insert("embedding".into(), Value::Vector(emb));
         kb.create_node("Message", &props).await.unwrap();
     }
 
     // Search with an embedding close to message 0.
-    let mut query_vec = vec![0.0f32; 384];
+    let mut query_vec = vec![0.0f32; embed_dim()];
     query_vec[0] = 1.0;
 
     // The API should not error even if the index hasn't been built yet.
@@ -80,7 +90,7 @@ async fn test_multi_type_vector_search() {
     let kb = test_kb().await;
 
     // Insert a Message and a Fact with embeddings.
-    let mut emb = vec![0.0f32; 384];
+    let mut emb = vec![0.0f32; embed_dim()];
     emb[0] = 1.0;
 
     let mut mp = HashMap::new();
@@ -172,7 +182,7 @@ async fn test_hybrid_search_basic() {
     let kb = test_kb().await;
 
     // Insert messages with both content and embeddings.
-    let mut emb = vec![0.0f32; 384];
+    let mut emb = vec![0.0f32; embed_dim()];
     emb[0] = 1.0;
 
     let mut props = HashMap::new();
