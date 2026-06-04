@@ -1,10 +1,8 @@
 //! Debug retrieval ranking for missed single-hop questions.
 //!
-//! Run: cargo nextest run -p uniko-bench --test recall_debug --nocapture --run-ignored all
+//! Run: cargo nextest run -p uniko-bench --test diagnostics recall_debug --nocapture --run-ignored all
 
-mod common;
-
-use common::load_kb;
+use crate::common::load_kb;
 use uniko_memory::recall::{RecallConfig, recall};
 
 #[tokio::test]

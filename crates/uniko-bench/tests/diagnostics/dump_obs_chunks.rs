@@ -1,10 +1,8 @@
 //! Dump all observation chunks to a file for analysis.
 //!
-//! Run: cargo nextest run -p uniko-bench --test dump_obs_chunks --nocapture --run-ignored all
+//! Run: cargo nextest run -p uniko-bench --test diagnostics dump_obs_chunks --nocapture --run-ignored all
 
-mod common;
-
-use common::load_kb;
+use crate::common::load_kb;
 
 #[tokio::test]
 #[ignore]
