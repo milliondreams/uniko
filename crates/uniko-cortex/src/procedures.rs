@@ -112,6 +112,12 @@ pub async fn promote_procedures_once(
         Value::Int(detection_threshold),
     );
 
+    // The Cypher fallback is load-bearing on uni-db 2.0: invoking a
+    // registered Locy rule by bare name via `execute_rule` →
+    // `session.locy_with("sequence_detector")` fails to parse ("expected
+    // locy_query") — 2.0 treats the argument as a Locy *query*, not a
+    // rule name. Until uniko's rule-invocation path is fixed (see
+    // bugs/UNI_DB_WORKAROUNDS.md RC12), keep falling back to direct Cypher.
     let records = match kb.execute_rule("sequence_detector", &params).await {
         Ok(r) => r,
         Err(UnikoError::Locy(msg)) => {
