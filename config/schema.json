@@ -1,135 +1,135 @@
 {
   "schema_version": 1,
   "labels": {
-    "Rule": {
-      "id": 6,
-      "created_at": "2026-06-04T04:12:22.030132094Z",
-      "state": "Active"
-    },
-    "Participant": {
-      "id": 22,
-      "created_at": "2026-06-04T04:12:22.030161212Z",
-      "state": "Active"
-    },
-    "KnowledgeBaseStats": {
-      "id": 1,
-      "created_at": "2026-06-04T04:12:22.030115262Z",
-      "state": "Active"
-    },
-    "Session": {
-      "id": 19,
-      "created_at": "2026-06-04T04:12:22.030156103Z",
-      "state": "Active"
-    },
-    "Organization": {
-      "id": 3,
-      "created_at": "2026-06-04T04:12:22.030126962Z",
-      "state": "Active"
-    },
-    "Entity": {
-      "id": 12,
-      "created_at": "2026-06-04T04:12:22.030141557Z",
-      "state": "Active"
-    },
     "Observation": {
       "id": 11,
-      "created_at": "2026-06-04T04:12:22.030140434Z",
-      "state": "Active"
-    },
-    "Task": {
-      "id": 20,
-      "created_at": "2026-06-04T04:12:22.030157387Z",
-      "state": "Active"
-    },
-    "Chunk": {
-      "id": 13,
-      "created_at": "2026-06-04T04:12:22.030142796Z",
-      "state": "Active"
-    },
-    "ArtifactContent": {
-      "id": 14,
-      "created_at": "2026-06-04T04:12:22.030144166Z",
-      "state": "Active"
-    },
-    "Procedure": {
-      "id": 7,
-      "created_at": "2026-06-04T04:12:22.030133244Z",
-      "state": "Active"
-    },
-    "DeadLetter": {
-      "id": 4,
-      "created_at": "2026-06-04T04:12:22.030128160Z",
-      "state": "Active"
-    },
-    "Topic": {
-      "id": 9,
-      "created_at": "2026-06-04T04:12:22.030138022Z",
-      "state": "Active"
-    },
-    "Episode": {
-      "id": 16,
-      "created_at": "2026-06-04T04:12:22.030151789Z",
-      "state": "Active"
-    },
-    "Action": {
-      "id": 17,
-      "created_at": "2026-06-04T04:12:22.030153208Z",
-      "state": "Active"
-    },
-    "Message": {
-      "id": 18,
-      "created_at": "2026-06-04T04:12:22.030154685Z",
+      "created_at": "2026-06-04T05:17:48.077664965Z",
       "state": "Active"
     },
     "Team": {
       "id": 2,
-      "created_at": "2026-06-04T04:12:22.030124924Z",
+      "created_at": "2026-06-04T05:17:48.077642996Z",
       "state": "Active"
     },
-    "Artifact": {
-      "id": 15,
-      "created_at": "2026-06-04T04:12:22.030145425Z",
+    "Chunk": {
+      "id": 13,
+      "created_at": "2026-06-04T05:17:48.077668854Z",
       "state": "Active"
     },
-    "ConsolidationCycle": {
-      "id": 5,
-      "created_at": "2026-06-04T04:12:22.030131037Z",
+    "KnowledgeBaseStats": {
+      "id": 1,
+      "created_at": "2026-06-04T05:17:48.077632698Z",
       "state": "Active"
     },
     "Summary": {
       "id": 8,
-      "created_at": "2026-06-04T04:12:22.030134425Z",
+      "created_at": "2026-06-04T05:17:48.077656125Z",
       "state": "Active"
     },
-    "Fact": {
-      "id": 10,
-      "created_at": "2026-06-04T04:12:22.030139262Z",
+    "Rule": {
+      "id": 6,
+      "created_at": "2026-06-04T05:17:48.077652679Z",
+      "state": "Active"
+    },
+    "Entity": {
+      "id": 12,
+      "created_at": "2026-06-04T05:17:48.077666900Z",
+      "state": "Active"
+    },
+    "Organization": {
+      "id": 3,
+      "created_at": "2026-06-04T05:17:48.077645320Z",
+      "state": "Active"
+    },
+    "ConsolidationCycle": {
+      "id": 5,
+      "created_at": "2026-06-04T05:17:48.077651010Z",
+      "state": "Active"
+    },
+    "Action": {
+      "id": 17,
+      "created_at": "2026-06-04T05:17:48.077683565Z",
       "state": "Active"
     },
     "Goal": {
       "id": 21,
-      "created_at": "2026-06-04T04:12:22.030158986Z",
+      "created_at": "2026-06-04T05:17:48.077692579Z",
+      "state": "Active"
+    },
+    "ArtifactContent": {
+      "id": 14,
+      "created_at": "2026-06-04T05:17:48.077670934Z",
+      "state": "Active"
+    },
+    "Message": {
+      "id": 18,
+      "created_at": "2026-06-04T05:17:48.077685719Z",
+      "state": "Active"
+    },
+    "Session": {
+      "id": 19,
+      "created_at": "2026-06-04T05:17:48.077688046Z",
+      "state": "Active"
+    },
+    "Task": {
+      "id": 20,
+      "created_at": "2026-06-04T05:17:48.077690234Z",
+      "state": "Active"
+    },
+    "Participant": {
+      "id": 22,
+      "created_at": "2026-06-04T05:17:48.077695328Z",
+      "state": "Active"
+    },
+    "DeadLetter": {
+      "id": 4,
+      "created_at": "2026-06-04T05:17:48.077646955Z",
+      "state": "Active"
+    },
+    "Episode": {
+      "id": 16,
+      "created_at": "2026-06-04T05:17:48.077681408Z",
+      "state": "Active"
+    },
+    "Artifact": {
+      "id": 15,
+      "created_at": "2026-06-04T05:17:48.077673095Z",
+      "state": "Active"
+    },
+    "Topic": {
+      "id": 9,
+      "created_at": "2026-06-04T05:17:48.077661401Z",
+      "state": "Active"
+    },
+    "Fact": {
+      "id": 10,
+      "created_at": "2026-06-04T05:17:48.077663163Z",
+      "state": "Active"
+    },
+    "Procedure": {
+      "id": 7,
+      "created_at": "2026-06-04T05:17:48.077654339Z",
       "state": "Active"
     }
   },
   "edge_types": {
-    "APPLIED_RULE": {
-      "id": 4,
+    "PROMOTED": {
+      "id": 5,
       "src_labels": [
         "ConsolidationCycle"
       ],
       "dst_labels": [
-        "Rule"
+        "Procedure"
       ],
       "state": "Active"
     },
-    "COVERS": {
-      "id": 10,
+    "DERIVED_BY": {
+      "id": 19,
       "src_labels": [
-        "Rule"
+        "Fact"
       ],
       "dst_labels": [
-        "Episode"
+        "Rule"
       ],
       "state": "Active"
     },
@@ -143,37 +143,88 @@
       ],
       "state": "Active"
     },
-    "DERIVED_FROM": {
-      "id": 18,
+    "ABOUT": {
+      "id": 21,
       "src_labels": [
+        "Observation",
         "Fact",
-        "Procedure",
-        "Artifact"
+        "Chunk"
       ],
       "dst_labels": [
-        "Episode",
-        "Action",
-        "Artifact"
+        "Entity",
+        "Participant"
       ],
       "state": "Active"
     },
-    "OBSERVED_DURING": {
-      "id": 22,
+    "HAS_CHUNK": {
+      "id": 25,
       "src_labels": [
-        "Observation"
+        "Artifact",
+        "Message",
+        "Session"
       ],
       "dst_labels": [
-        "Episode"
+        "Chunk"
       ],
       "state": "Active"
     },
-    "INVOLVES": {
-      "id": 30,
+    "MODIFIED_BY": {
+      "id": 27,
       "src_labels": [
-        "Episode"
+        "Artifact"
       ],
       "dst_labels": [
         "Action"
+      ],
+      "state": "Active"
+    },
+    "PART_OF_TEAM": {
+      "id": 2,
+      "src_labels": [
+        "Participant"
+      ],
+      "dst_labels": [
+        "Team"
+      ],
+      "state": "Active"
+    },
+    "CREATED_BY": {
+      "id": 28,
+      "src_labels": [
+        "Artifact"
+      ],
+      "dst_labels": [
+        "Action"
+      ],
+      "state": "Active"
+    },
+    "PRODUCED": {
+      "id": 33,
+      "src_labels": [
+        "Action"
+      ],
+      "dst_labels": [
+        "Artifact"
+      ],
+      "state": "Active"
+    },
+    "PARENT_GOAL": {
+      "id": 47,
+      "src_labels": [
+        "Goal"
+      ],
+      "dst_labels": [
+        "Goal"
+      ],
+      "state": "Active"
+    },
+    "FOLLOWED_BY": {
+      "id": 29,
+      "src_labels": [
+        "Episode"
+      ],
+      "dst_labels": [
+        "Episode"
       ],
       "state": "Active"
     },
@@ -187,6 +238,40 @@
       ],
       "state": "Active"
     },
+    "MENTIONS": {
+      "id": 24,
+      "src_labels": [
+        "Message",
+        "Chunk",
+        "Action",
+        "Artifact",
+        "Episode"
+      ],
+      "dst_labels": [
+        "Entity"
+      ],
+      "state": "Active"
+    },
+    "PARTICIPATED_IN": {
+      "id": 40,
+      "src_labels": [
+        "Participant"
+      ],
+      "dst_labels": [
+        "Session"
+      ],
+      "state": "Active"
+    },
+    "SUBTASK_OF": {
+      "id": 43,
+      "src_labels": [
+        "Task"
+      ],
+      "dst_labels": [
+        "Task"
+      ],
+      "state": "Active"
+    },
     "PART_OF": {
       "id": 46,
       "src_labels": [
@@ -197,13 +282,44 @@
       ],
       "state": "Active"
     },
-    "HAS_CONTENT": {
-      "id": 26,
+    "TEAM_IN_ORG": {
+      "id": 1,
       "src_labels": [
-        "Artifact"
+        "Team"
       ],
       "dst_labels": [
-        "ArtifactContent"
+        "Organization"
+      ],
+      "state": "Active"
+    },
+    "SHARED_FROM": {
+      "id": 16,
+      "src_labels": [
+        "Fact"
+      ],
+      "dst_labels": [
+        "Fact"
+      ],
+      "state": "Active"
+    },
+    "BELONGS_TO": {
+      "id": 15,
+      "src_labels": [
+        "Entity",
+        "Fact"
+      ],
+      "dst_labels": [
+        "Topic"
+      ],
+      "state": "Active"
+    },
+    "RECORDED_BY": {
+      "id": 31,
+      "src_labels": [
+        "Episode"
+      ],
+      "dst_labels": [
+        "Participant"
       ],
       "state": "Active"
     },
@@ -218,6 +334,67 @@
       ],
       "state": "Active"
     },
+    "OPERATES_ON": {
+      "id": 13,
+      "src_labels": [
+        "Procedure"
+      ],
+      "dst_labels": [
+        "Entity"
+      ],
+      "state": "Active"
+    },
+    "OBSERVED_DURING": {
+      "id": 22,
+      "src_labels": [
+        "Observation"
+      ],
+      "dst_labels": [
+        "Episode"
+      ],
+      "state": "Active"
+    },
+    "USED_IN": {
+      "id": 12,
+      "src_labels": [
+        "Procedure"
+      ],
+      "dst_labels": [
+        "Task"
+      ],
+      "state": "Active"
+    },
+    "TRIGGERED_BY": {
+      "id": 34,
+      "src_labels": [
+        "Action",
+        "Episode"
+      ],
+      "dst_labels": [
+        "Message"
+      ],
+      "state": "Active"
+    },
+    "INVALIDATES": {
+      "id": 17,
+      "src_labels": [
+        "Fact"
+      ],
+      "dst_labels": [
+        "Fact"
+      ],
+      "state": "Active"
+    },
+    "ADDRESSED_TO": {
+      "id": 38,
+      "src_labels": [
+        "Message"
+      ],
+      "dst_labels": [
+        "Participant"
+      ],
+      "state": "Active"
+    },
     "CREATED": {
       "id": 7,
       "src_labels": [
@@ -225,6 +402,26 @@
       ],
       "dst_labels": [
         "Fact"
+      ],
+      "state": "Active"
+    },
+    "DEPENDS_ON": {
+      "id": 44,
+      "src_labels": [
+        "Task"
+      ],
+      "dst_labels": [
+        "Task"
+      ],
+      "state": "Active"
+    },
+    "OWNED_BY": {
+      "id": 48,
+      "src_labels": [
+        "Goal"
+      ],
+      "dst_labels": [
+        "Participant"
       ],
       "state": "Active"
     },
@@ -243,149 +440,23 @@
       ],
       "state": "Active"
     },
-    "SUPPORTED_BY": {
-      "id": 20,
+    "PROCESSED": {
+      "id": 9,
       "src_labels": [
-        "Fact"
+        "ConsolidationCycle"
       ],
       "dst_labels": [
         "Observation"
       ],
       "state": "Active"
     },
-    "ABOUT": {
-      "id": 21,
+    "INVOLVES": {
+      "id": 30,
       "src_labels": [
-        "Observation",
-        "Fact",
-        "Chunk"
-      ],
-      "dst_labels": [
-        "Entity",
-        "Participant"
-      ],
-      "state": "Active"
-    },
-    "NEXT": {
-      "id": 36,
-      "src_labels": [
-        "Message"
-      ],
-      "dst_labels": [
-        "Message"
-      ],
-      "state": "Active"
-    },
-    "DEPENDS_ON": {
-      "id": 44,
-      "src_labels": [
-        "Task"
-      ],
-      "dst_labels": [
-        "Task"
-      ],
-      "state": "Active"
-    },
-    "ASSIGNED_TO": {
-      "id": 45,
-      "src_labels": [
-        "Task"
-      ],
-      "dst_labels": [
-        "Participant"
-      ],
-      "state": "Active"
-    },
-    "TRIGGERED_BY": {
-      "id": 34,
-      "src_labels": [
-        "Action",
         "Episode"
       ],
       "dst_labels": [
-        "Message"
-      ],
-      "state": "Active"
-    },
-    "PARENT_GOAL": {
-      "id": 47,
-      "src_labels": [
-        "Goal"
-      ],
-      "dst_labels": [
-        "Goal"
-      ],
-      "state": "Active"
-    },
-    "OWNED_BY": {
-      "id": 48,
-      "src_labels": [
-        "Goal"
-      ],
-      "dst_labels": [
-        "Participant"
-      ],
-      "state": "Active"
-    },
-    "ADDRESSED_TO": {
-      "id": 38,
-      "src_labels": [
-        "Message"
-      ],
-      "dst_labels": [
-        "Participant"
-      ],
-      "state": "Active"
-    },
-    "OPERATES_ON": {
-      "id": 13,
-      "src_labels": [
-        "Procedure"
-      ],
-      "dst_labels": [
-        "Entity"
-      ],
-      "state": "Active"
-    },
-    "HAS_CHUNK": {
-      "id": 25,
-      "src_labels": [
-        "Artifact",
-        "Message",
-        "Session"
-      ],
-      "dst_labels": [
-        "Chunk"
-      ],
-      "state": "Active"
-    },
-    "CREATED_BY": {
-      "id": 28,
-      "src_labels": [
-        "Artifact"
-      ],
-      "dst_labels": [
         "Action"
-      ],
-      "state": "Active"
-    },
-    "INVALIDATED": {
-      "id": 6,
-      "src_labels": [
-        "ConsolidationCycle"
-      ],
-      "dst_labels": [
-        "Fact"
-      ],
-      "state": "Active"
-    },
-    "SHARED_FROM": {
-      "id": 16,
-      "src_labels": [
-        "Fact"
-      ],
-      "dst_labels": [
-        "Fact"
       ],
       "state": "Active"
     },
@@ -399,84 +470,13 @@
       ],
       "state": "Active"
     },
-    "PARTICIPATED_IN": {
-      "id": 40,
+    "ASSIGNED_TO": {
+      "id": 45,
       "src_labels": [
+        "Task"
+      ],
+      "dst_labels": [
         "Participant"
-      ],
-      "dst_labels": [
-        "Session"
-      ],
-      "state": "Active"
-    },
-    "FOLLOWED_BY": {
-      "id": 29,
-      "src_labels": [
-        "Episode"
-      ],
-      "dst_labels": [
-        "Episode"
-      ],
-      "state": "Active"
-    },
-    "DERIVED_BY": {
-      "id": 19,
-      "src_labels": [
-        "Fact"
-      ],
-      "dst_labels": [
-        "Rule"
-      ],
-      "state": "Active"
-    },
-    "BELONGS_TO": {
-      "id": 15,
-      "src_labels": [
-        "Entity",
-        "Fact"
-      ],
-      "dst_labels": [
-        "Topic"
-      ],
-      "state": "Active"
-    },
-    "USED_IN": {
-      "id": 12,
-      "src_labels": [
-        "Procedure"
-      ],
-      "dst_labels": [
-        "Task"
-      ],
-      "state": "Active"
-    },
-    "SUBTASK_OF": {
-      "id": 43,
-      "src_labels": [
-        "Task"
-      ],
-      "dst_labels": [
-        "Task"
-      ],
-      "state": "Active"
-    },
-    "PROMOTED": {
-      "id": 5,
-      "src_labels": [
-        "ConsolidationCycle"
-      ],
-      "dst_labels": [
-        "Procedure"
-      ],
-      "state": "Active"
-    },
-    "MODIFIED_BY": {
-      "id": 27,
-      "src_labels": [
-        "Artifact"
-      ],
-      "dst_labels": [
-        "Action"
       ],
       "state": "Active"
     },
@@ -491,13 +491,23 @@
       ],
       "state": "Active"
     },
-    "INVOLVED": {
-      "id": 8,
+    "HAS_CONTENT": {
+      "id": 26,
       "src_labels": [
-        "ConsolidationCycle"
+        "Artifact"
       ],
       "dst_labels": [
-        "Episode"
+        "ArtifactContent"
+      ],
+      "state": "Active"
+    },
+    "NEXT": {
+      "id": 36,
+      "src_labels": [
+        "Message"
+      ],
+      "dst_labels": [
+        "Message"
       ],
       "state": "Active"
     },
@@ -508,16 +518,6 @@
       ],
       "dst_labels": [
         "Organization"
-      ],
-      "state": "Active"
-    },
-    "FOR_GOAL": {
-      "id": 41,
-      "src_labels": [
-        "Session"
-      ],
-      "dst_labels": [
-        "Goal"
       ],
       "state": "Active"
     },
@@ -533,23 +533,37 @@
       ],
       "state": "Active"
     },
-    "PART_OF_TEAM": {
-      "id": 2,
+    "INVALIDATED": {
+      "id": 6,
       "src_labels": [
-        "Participant"
+        "ConsolidationCycle"
       ],
       "dst_labels": [
-        "Team"
+        "Fact"
       ],
       "state": "Active"
     },
-    "RECORDED_BY": {
-      "id": 31,
+    "COVERS": {
+      "id": 10,
       "src_labels": [
-        "Episode"
+        "Rule"
       ],
       "dst_labels": [
-        "Participant"
+        "Episode"
+      ],
+      "state": "Active"
+    },
+    "DERIVED_FROM": {
+      "id": 18,
+      "src_labels": [
+        "Fact",
+        "Procedure",
+        "Artifact"
+      ],
+      "dst_labels": [
+        "Episode",
+        "Action",
+        "Artifact"
       ],
       "state": "Active"
     },
@@ -563,70 +577,371 @@
       ],
       "state": "Active"
     },
-    "PRODUCED": {
-      "id": 33,
-      "src_labels": [
-        "Action"
-      ],
-      "dst_labels": [
-        "Artifact"
-      ],
-      "state": "Active"
-    },
-    "INVALIDATES": {
-      "id": 17,
-      "src_labels": [
-        "Fact"
-      ],
-      "dst_labels": [
-        "Fact"
-      ],
-      "state": "Active"
-    },
-    "TEAM_IN_ORG": {
-      "id": 1,
-      "src_labels": [
-        "Team"
-      ],
-      "dst_labels": [
-        "Organization"
-      ],
-      "state": "Active"
-    },
-    "PROCESSED": {
-      "id": 9,
+    "APPLIED_RULE": {
+      "id": 4,
       "src_labels": [
         "ConsolidationCycle"
+      ],
+      "dst_labels": [
+        "Rule"
+      ],
+      "state": "Active"
+    },
+    "INVOLVED": {
+      "id": 8,
+      "src_labels": [
+        "ConsolidationCycle"
+      ],
+      "dst_labels": [
+        "Episode"
+      ],
+      "state": "Active"
+    },
+    "SUPPORTED_BY": {
+      "id": 20,
+      "src_labels": [
+        "Fact"
       ],
       "dst_labels": [
         "Observation"
       ],
       "state": "Active"
     },
-    "MENTIONS": {
-      "id": 24,
+    "FOR_GOAL": {
+      "id": 41,
       "src_labels": [
-        "Message",
-        "Chunk",
-        "Action",
-        "Artifact",
-        "Episode"
+        "Session"
       ],
       "dst_labels": [
-        "Entity"
+        "Goal"
       ],
       "state": "Active"
     }
   },
   "properties": {
-    "Topic": {
-      "fact_count": {
+    "FOLLOWED_BY": {
+      "gap_ms": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "KnowledgeBaseStats": {
+      "stats_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "modality_presence": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "updated_at": {
+        "type": "DateTime",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "blob_storage": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "HAS_CONTENT": {
+      "role": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Action": {
+      "duration_ms": {
         "type": "Int64",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
+      "error": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "started_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "action_type": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "action_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "output": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "status": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "input": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "ended_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "SHARED_FROM": {
+      "shared_by": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "shared_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Entity": {
+      "entity_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "last_invalidation_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "invalidation_count": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "unstable": {
+        "type": "Bool",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "confidence": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "name": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "frequency": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "first_seen": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "entity_type": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "last_seen": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "SUPPORTED_BY": {
+      "weight": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "NEXT": {
+      "gap_ms": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Team": {
+      "team_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "name": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "purpose": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "ArtifactContent": {
+      "bytes": {
+        "type": "Bytes",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "mime": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "created_at": {
+        "type": "DateTime",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "uri": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "audio_fingerprint": {
+        "type": "Bytes",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "size": {
+        "type": "Int64",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "perceptual_hash": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "content_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Topic": {
       "entity_count": {
         "type": "Int64",
         "nullable": true,
@@ -645,6 +960,13 @@
         "state": "Active",
         "generation_expression": null
       },
+      "topic_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
       "summary": {
         "type": "String",
         "nullable": true,
@@ -659,46 +981,7 @@
         "state": "Active",
         "generation_expression": null
       },
-      "topic_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "KnowledgeBaseStats": {
-      "modality_presence": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "stats_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "blob_storage": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "updated_at": {
-        "type": "DateTime",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "MENTIONS": {
-      "count": {
+      "fact_count": {
         "type": "Int64",
         "nullable": true,
         "added_in": 1,
@@ -706,57 +989,36 @@
         "generation_expression": null
       }
     },
-    "Procedure": {
-      "avg_outcome_delta": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "procedure_id": {
+    "Episode": {
+      "episode_id": {
         "type": "String",
         "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "precondition_rule": {
-        "type": "String",
+      "importance": {
+        "type": "Float64",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "parameters": {
+      "delta": {
         "type": "CypherValue",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "use_count": {
-        "type": "Int64",
+      "state": {
+        "type": "CypherValue",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "created_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "last_used_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "name": {
+      "action_type": {
         "type": "String",
         "nullable": false,
         "added_in": 1,
@@ -774,13 +1036,22 @@
         "state": "Active",
         "generation_expression": null
       },
-      "steps": {
-        "type": "CypherValue",
+      "outcome": {
+        "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
+      "timestamp": {
+        "type": "DateTime",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Task": {
       "description": {
         "type": "String",
         "nullable": true,
@@ -788,30 +1059,27 @@
         "state": "Active",
         "generation_expression": null
       },
-      "effectiveness": {
-        "type": "Float64",
+      "embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "success_count": {
-        "type": "Int64",
-        "nullable": true,
+      "title": {
+        "type": "String",
+        "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "failure_count": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "preconditions": {
-        "type": "CypherValue",
-        "nullable": true,
+      "task_id": {
+        "type": "String",
+        "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
@@ -822,9 +1090,51 @@
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
+      },
+      "completed_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "priority": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "created_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
       }
     },
-    "Team": {
+    "Participant": {
+      "participant_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "first_seen": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "metadata": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
       "name": {
         "type": "String",
         "nullable": true,
@@ -832,14 +1142,164 @@
         "state": "Active",
         "generation_expression": null
       },
-      "team_id": {
+      "last_seen": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "kind": {
         "type": "String",
         "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "purpose": {
+      "capabilities": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "HAS_CHUNK": {
+      "index": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "DeadLetter": {
+      "created_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "next_retry_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "step": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "node_ref": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "error": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "retry_count": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "max_retries": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Observation": {
+      "visibility": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "subject": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "temporal_anchor": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "confidence": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "observed_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "observation_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "object": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "content": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "predicate": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "temporal_phrase": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
@@ -847,8 +1307,8 @@
         "generation_expression": null
       }
     },
-    "FOLLOWED_BY": {
-      "gap_ms": {
+    "MENTIONS": {
+      "count": {
         "type": "Int64",
         "nullable": true,
         "added_in": 1,
@@ -856,18 +1316,9 @@
         "generation_expression": null
       }
     },
-    "SUPPORTED_BY": {
-      "weight": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "COVERS": {
-      "correct": {
-        "type": "Int64",
+    "INVALIDATES": {
+      "reason": {
+        "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
@@ -890,194 +1341,66 @@
         "generation_expression": null
       }
     },
-    "HAS_CONTENT": {
-      "role": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Fact": {
-      "subject": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "fact_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "source_rule": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "visibility": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "observation_count": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "confidence": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "valid_at": {
-        "type": "Btic",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "object": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "predicate": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Message": {
-      "message_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "content_type": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "timestamp": {
-        "type": "DateTime",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "content": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "SHARED_FROM": {
-      "shared_at": {
+    "Goal": {
+      "deadline": {
         "type": "DateTime",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "shared_by": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Chunk": {
-      "source_model_version": {
-        "type": "String",
+      "completed_at": {
+        "type": "DateTime",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "end": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "index": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "chunk_type": {
+      "description": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "metadata": {
+      "created_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "title": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "metrics": {
         "type": "CypherValue",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "speaker": {
+      "owner_id": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "text": {
+      "goal_id": {
         "type": "String",
         "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "guardrails": {
+        "type": "CypherValue",
+        "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
@@ -1093,8 +1416,40 @@
         "state": "Active",
         "generation_expression": null
       },
-      "language": {
+      "status": {
         "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "DERIVED_FROM": {
+      "derivation_kind": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "derived_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Artifact": {
+      "size": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "height": {
+        "type": "Int32",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
@@ -1107,42 +1462,283 @@
         "state": "Active",
         "generation_expression": null
       },
-      "start": {
+      "page_count": {
+        "type": "Int32",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "modality_meta": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "text_embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "image_embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "content": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "frame_count": {
+        "type": "Int32",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "width": {
+        "type": "Int32",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "video_embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "duration_ms": {
         "type": "Int64",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "token_count": {
-        "type": "Int64",
+      "path": {
+        "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "chunk_id": {
+      "artifact_id": {
         "type": "String",
         "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "symbol_name": {
+      "channels": {
+        "type": "Int32",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "origin": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "audio_embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "hash": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "heading": {
+      "multimodal_embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "fps": {
+        "type": "Float32",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "updated_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "language": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "modality": {
+      "sample_rate": {
+        "type": "Int32",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "kind": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "created_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Rule": {
+      "coverage": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "validated_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "status": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "recall": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "created_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "natural_language": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "rule_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "name": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "confidence": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "source_type": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "source": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "precision": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "last_scored_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "version": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "MODIFIED_BY": {
+      "diff_summary": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
@@ -1166,25 +1762,37 @@
         "generation_expression": null
       }
     },
-    "HAS_CHUNK": {
-      "index": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Artifact": {
-      "hash": {
+    "Chunk": {
+      "modality": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "origin": {
-        "type": "CypherValue",
+      "start": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "end": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "text": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "token_count": {
+        "type": "Int64",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
@@ -1197,18 +1805,56 @@
         "state": "Active",
         "generation_expression": null
       },
-      "text_embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
+      "heading": {
+        "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "video_embedding": {
+      "speaker": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "chunk_type": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "index": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "symbol_name": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "chunk_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "metadata": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "embedding": {
         "type": {
           "Vector": {
             "dimensions": 768
@@ -1226,78 +1872,60 @@
         "state": "Active",
         "generation_expression": null
       },
-      "width": {
-        "type": "Int32",
+      "source_model_version": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "SENT_BY": {
+      "role": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Fact": {
+      "object": {
+        "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "multimodal_embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "created_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "modality_meta": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "audio_embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "size": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "kind": {
+      "subject": {
         "type": "String",
         "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "duration_ms": {
-        "type": "Int64",
+      "valid_at": {
+        "type": "Btic",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "page_count": {
-        "type": "Int32",
+      "visibility": {
+        "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "image_embedding": {
+      "source_rule": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "embedding": {
         "type": {
           "Vector": {
             "dimensions": 768
@@ -1308,64 +1936,38 @@
         "state": "Active",
         "generation_expression": null
       },
-      "height": {
-        "type": "Int32",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "channels": {
-        "type": "Int32",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "sample_rate": {
-        "type": "Int32",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "fps": {
-        "type": "Float32",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "artifact_id": {
+      "predicate": {
         "type": "String",
         "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "path": {
+      "fact_id": {
         "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "confidence": {
+        "type": "Float64",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "frame_count": {
-        "type": "Int32",
+      "observation_count": {
+        "type": "Int64",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
-      },
-      "updated_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "content": {
-        "type": "String",
+      }
+    },
+    "COVERS": {
+      "correct": {
+        "type": "Int64",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
@@ -1391,9 +1993,9 @@
         "state": "Active",
         "generation_expression": null
       },
-      "level": {
+      "summary_id": {
         "type": "String",
-        "nullable": true,
+        "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
@@ -1405,711 +2007,32 @@
         "state": "Active",
         "generation_expression": null
       },
-      "summary_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Entity": {
-      "first_seen": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "entity_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "last_invalidation_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "unstable": {
-        "type": "Bool",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "name": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "entity_type": {
+      "level": {
         "type": "String",
         "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "last_seen": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "frequency": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "confidence": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "invalidation_count": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "NEXT": {
-      "gap_ms": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "SENT_BY": {
-      "role": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Session": {
-      "session_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "summary": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "topic": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "started_at": {
-        "type": "DateTime",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "ended_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Episode": {
-      "delta": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "episode_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "state": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "action_type": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "timestamp": {
-        "type": "DateTime",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "importance": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "outcome": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Participant": {
-      "last_seen": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "metadata": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "participant_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "first_seen": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "kind": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "name": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "capabilities": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Observation": {
-      "content": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "confidence": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "temporal_phrase": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "observed_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "visibility": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "temporal_anchor": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "subject": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "predicate": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "object": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "observation_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "DeadLetter": {
-      "step": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "next_retry_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "created_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "error": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "retry_count": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "node_ref": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "max_retries": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Goal": {
-      "status": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "title": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "owner_id": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "goal_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "description": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "deadline": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "guardrails": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "metrics": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "completed_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "created_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "INVALIDATES": {
-      "reason": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Task": {
-      "title": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "status": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "description": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "completed_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "task_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "created_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "priority": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "MODIFIED_BY": {
-      "diff_summary": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "Action": {
-      "output": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "action_type": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "duration_ms": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "error": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "started_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "ended_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "embedding": {
-        "type": {
-          "Vector": {
-            "dimensions": 768
-          }
-        },
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "input": {
-        "type": "CypherValue",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "action_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "status": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      }
-    },
-    "ArtifactContent": {
-      "bytes": {
-        "type": "Bytes",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "created_at": {
-        "type": "DateTime",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "size": {
-        "type": "Int64",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "perceptual_hash": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "uri": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "audio_fingerprint": {
-        "type": "Bytes",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "content_id": {
-        "type": "String",
-        "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "mime": {
-        "type": "String",
-        "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       }
     },
     "ConsolidationCycle": {
-      "cycle_id": {
-        "type": "String",
-        "nullable": false,
+      "drift_alerts": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "procedures_promoted": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "episodes_involved": {
+        "type": "Int64",
+        "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
@@ -2128,30 +2051,9 @@
         "state": "Active",
         "generation_expression": null
       },
-      "observations_processed": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
       "agent_id": {
         "type": "String",
         "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "completed_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "episodes_involved": {
-        "type": "Int64",
-        "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
@@ -2163,8 +2065,22 @@
         "state": "Active",
         "generation_expression": null
       },
-      "procedures_promoted": {
+      "cycle_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "observations_processed": {
         "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "completed_at": {
+        "type": "DateTime",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
@@ -2176,33 +2092,127 @@
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
-      },
-      "drift_alerts": {
-        "type": "Int64",
-        "nullable": true,
+      }
+    },
+    "Session": {
+      "started_at": {
+        "type": "DateTime",
+        "nullable": false,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
-      }
-    },
-    "DERIVED_FROM": {
-      "derivation_kind": {
+      },
+      "summary": {
         "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       },
-      "derived_at": {
+      "session_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "ended_at": {
         "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "topic": {
+        "type": "String",
         "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
       }
     },
-    "Rule": {
-      "name": {
+    "Message": {
+      "embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "message_id": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "content": {
+        "type": "String",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "timestamp": {
+        "type": "DateTime",
+        "nullable": false,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "content_type": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      }
+    },
+    "Procedure": {
+      "use_count": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "steps": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "last_used_at": {
+        "type": "DateTime",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "preconditions": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "procedure_id": {
         "type": "String",
         "nullable": false,
         "added_in": 1,
@@ -2216,6 +2226,66 @@
         "state": "Active",
         "generation_expression": null
       },
+      "parameters": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "embedding": {
+        "type": {
+          "Vector": {
+            "dimensions": 768
+          }
+        },
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "effectiveness": {
+        "type": "Float64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "description": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "success_count": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "precondition_rule": {
+        "type": "String",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "failure_count": {
+        "type": "Int64",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
+      "avg_outcome_delta": {
+        "type": "CypherValue",
+        "nullable": true,
+        "added_in": 1,
+        "state": "Active",
+        "generation_expression": null
+      },
       "status": {
         "type": "String",
         "nullable": true,
@@ -2223,79 +2293,9 @@
         "state": "Active",
         "generation_expression": null
       },
-      "last_scored_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "coverage": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "version": {
-        "type": "Int64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "confidence": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "validated_at": {
-        "type": "DateTime",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "rule_id": {
+      "name": {
         "type": "String",
         "nullable": false,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "source": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "natural_language": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "recall": {
-        "type": "Float64",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "source_type": {
-        "type": "String",
-        "nullable": true,
-        "added_in": 1,
-        "state": "Active",
-        "generation_expression": null
-      },
-      "precision": {
-        "type": "Float64",
-        "nullable": true,
         "added_in": 1,
         "state": "Active",
         "generation_expression": null
