@@ -154,9 +154,7 @@ impl KnowledgeBase {
             {
                 let session = self.db.session();
                 let r = session
-                    .query_with(
-                        "MATCH (f:Fact) WHERE id(f) = $vid RETURN f.valid_at AS valid_at",
-                    )
+                    .query_with("MATCH (f:Fact) WHERE id(f) = $vid RETURN f.valid_at AS valid_at")
                     .param("vid", nid)
                     .fetch_all()
                     .await?;

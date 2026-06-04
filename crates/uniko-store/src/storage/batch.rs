@@ -233,9 +233,7 @@ impl KnowledgeBase {
             }
             let bulk_edges: Vec<(Vid, Vid, HashMap<String, Value>)> = edges
                 .iter()
-                .map(|(s, d, props)| {
-                    (Vid::new(*s as u64), Vid::new(*d as u64), props.clone())
-                })
+                .map(|(s, d, props)| (Vid::new(*s as u64), Vid::new(*d as u64), props.clone()))
                 .collect();
             tx.bulk_insert_edges(edge_type, bulk_edges).await?;
             let t_query = t_start.elapsed().as_micros();

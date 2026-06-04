@@ -42,7 +42,10 @@ async fn fresh_db() -> Uni {
         .property_nullable("entity_type", uni_db::DataType::String)
         .property_nullable("frequency", uni_db::DataType::Int64)
         .property_nullable("confidence", uni_db::DataType::Float64)
-        .index("entity_id", uni_db::IndexType::Scalar(uni_db::ScalarType::Hash))
+        .index(
+            "entity_id",
+            uni_db::IndexType::Scalar(uni_db::ScalarType::Hash),
+        )
         .done()
         .apply()
         .await
@@ -126,7 +129,10 @@ async fn four_phase(db: &Uni, rows: &[Row]) {
         .unwrap();
     let mut existing_nid: HashMap<String, i64> = HashMap::new();
     for row in existing.rows() {
-        existing_nid.insert(row.get::<String>("eid").unwrap(), row.get::<i64>("nid").unwrap());
+        existing_nid.insert(
+            row.get::<String>("eid").unwrap(),
+            row.get::<i64>("nid").unwrap(),
+        );
     }
 
     // Partition into new vs existing.
@@ -199,7 +205,10 @@ async fn bench_entity_upsert_merge_vs_four_phase() {
 
     eprintln!("\n=== RC3: entity upsert — 4-phase vs UNWIND-MERGE ===");
     eprintln!("(median of {REPS} reps, fresh DB per rep, ms)\n");
-    eprintln!("{:>6}  {:>9}  {:>10}  {:>10}  {:>7}", "batch", "existing", "4-phase", "merge", "merge/4p");
+    eprintln!(
+        "{:>6}  {:>9}  {:>10}  {:>10}  {:>7}",
+        "batch", "existing", "4-phase", "merge", "merge/4p"
+    );
 
     for (batch, ratio) in configs {
         let n_existing = (batch as f64 * ratio) as usize;
@@ -276,7 +285,10 @@ async fn bench_phase3_label_vs_nolabel_multilabel() {
         s.label("Entity")
             .property("entity_id", uni_db::DataType::String)
             .property_nullable("frequency", uni_db::DataType::Int64)
-            .index("entity_id", uni_db::IndexType::Scalar(uni_db::ScalarType::Hash))
+            .index(
+                "entity_id",
+                uni_db::IndexType::Scalar(uni_db::ScalarType::Hash),
+            )
             .done()
             .apply()
             .await
@@ -301,33 +313,49 @@ async fn bench_phase3_label_vs_nolabel_multilabel() {
             let tx = db.session().tx().await.unwrap();
             tx.query_with(&format!("UNWIND $r AS x CREATE (n:L{i} {{k: x.k}})"))
                 .param("r", Value::List(rows))
-                .fetch_all().await.unwrap();
+                .fetch_all()
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
         }
         // Create Entity nodes, collect their ids.
-        let erows: Vec<Value> = (0..ENTITIES).map(|j| {
-            let mut m = HashMap::new();
-            m.insert("eid".to_string(), Value::String(format!("e{j}")));
-            Value::Map(m)
-        }).collect();
+        let erows: Vec<Value> = (0..ENTITIES)
+            .map(|j| {
+                let mut m = HashMap::new();
+                m.insert("eid".to_string(), Value::String(format!("e{j}")));
+                Value::Map(m)
+            })
+            .collect();
         let tx = db.session().tx().await.unwrap();
         let created = tx.query_with("UNWIND $r AS x CREATE (n:Entity {entity_id: x.eid, frequency: 1}) RETURN id(n) AS nid")
             .param("r", Value::List(erows)).fetch_all().await.unwrap();
-        let nids: Vec<i64> = created.rows().iter().map(|r| r.get::<i64>("nid").unwrap()).collect();
+        let nids: Vec<i64> = created
+            .rows()
+            .iter()
+            .map(|r| r.get::<i64>("nid").unwrap())
+            .collect();
         tx.commit().await.unwrap();
 
-        let upd: Vec<Value> = nids.iter().map(|&nid| {
-            let mut m = HashMap::new();
-            m.insert("nid".to_string(), Value::Int(nid));
-            Value::Map(m)
-        }).collect();
+        let upd: Vec<Value> = nids
+            .iter()
+            .map(|&nid| {
+                let mut m = HashMap::new();
+                m.insert("nid".to_string(), Value::Int(nid));
+                Value::Map(m)
+            })
+            .collect();
 
         // WITH label.
         {
             let tx = db.session().tx().await.unwrap();
             let t = Instant::now();
-            tx.query_with("UNWIND $u AS u MATCH (n:Entity) WHERE id(n) = u.nid SET n.frequency = 2")
-                .param("u", Value::List(upd.clone())).fetch_all().await.unwrap();
+            tx.query_with(
+                "UNWIND $u AS u MATCH (n:Entity) WHERE id(n) = u.nid SET n.frequency = 2",
+            )
+            .param("u", Value::List(upd.clone()))
+            .fetch_all()
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
             with_label.push(t.elapsed().as_secs_f64() * 1000.0);
         }
@@ -336,7 +364,10 @@ async fn bench_phase3_label_vs_nolabel_multilabel() {
             let tx = db.session().tx().await.unwrap();
             let t = Instant::now();
             tx.query_with("UNWIND $u AS u MATCH (n) WHERE id(n) = u.nid SET n.frequency = 3")
-                .param("u", Value::List(upd.clone())).fetch_all().await.unwrap();
+                .param("u", Value::List(upd.clone()))
+                .fetch_all()
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
             no_label.push(t.elapsed().as_secs_f64() * 1000.0);
         }
@@ -346,8 +377,11 @@ async fn bench_phase3_label_vs_nolabel_multilabel() {
     with_label.sort_by(|a, b| a.partial_cmp(b).unwrap());
     no_label.sort_by(|a, b| a.partial_cmp(b).unwrap());
     eprintln!("\n=== RC7: Phase-3 UPDATE-by-id, {N_LABELS} labels, {ENTITIES} updates ===");
-    eprintln!("WITH :Entity : {:.1} ms (median)", with_label[REPS/2]);
-    eprintln!("NO label     : {:.1} ms (median)", no_label[REPS/2]);
-    eprintln!("ratio nolabel/label: {:.2}x", no_label[REPS/2] / with_label[REPS/2]);
+    eprintln!("WITH :Entity : {:.1} ms (median)", with_label[REPS / 2]);
+    eprintln!("NO label     : {:.1} ms (median)", no_label[REPS / 2]);
+    eprintln!(
+        "ratio nolabel/label: {:.2}x",
+        no_label[REPS / 2] / with_label[REPS / 2]
+    );
     eprintln!("(>>1 → RC7 regressed; dropping the label hurt)\n");
 }

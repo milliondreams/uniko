@@ -568,6 +568,10 @@ pub(crate) fn validate_property_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Cypher property fragments paired with their bound `(param_name, value)`
+/// list — the output of [`build_kv_pairs`].
+type KvPairs = (Vec<String>, Vec<(String, uni_db::Value)>);
+
 /// Build property fragments + bound parameters.
 ///
 /// `fmt(key, param_name)` formats each fragment — e.g. `format!("{key}:
@@ -578,7 +582,7 @@ fn build_kv_pairs<F>(
     properties: &std::collections::HashMap<String, uni_db::Value>,
     offset: usize,
     fmt: F,
-) -> Result<(Vec<String>, Vec<(String, uni_db::Value)>)>
+) -> Result<KvPairs>
 where
     F: Fn(&str, &str) -> String,
 {

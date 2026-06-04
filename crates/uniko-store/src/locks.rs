@@ -161,12 +161,9 @@ mod tests {
         let locks = Arc::new(StripedLocks::new(256));
         let g1 = locks.lock(b"key-one").await;
         // Should not block even though `g1` is held.
-        let g2 = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            locks.lock(b"key-two"),
-        )
-        .await
-        .expect("distinct keys must not block on the same stripe");
+        let g2 = tokio::time::timeout(std::time::Duration::from_millis(50), locks.lock(b"key-two"))
+            .await
+            .expect("distinct keys must not block on the same stripe");
         drop(g2);
         drop(g1);
     }

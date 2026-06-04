@@ -781,11 +781,7 @@ async fn test_batch_upsert_facts_concurrent_no_lost_count() {
     }
 
     // Read back the surviving Fact's observation_count.
-    let fact_id = uniko_store::operations::facts::fact_id_for(
-        &subject,
-        &predicate,
-        Some(&object),
-    );
+    let fact_id = uniko_store::operations::facts::fact_id_for(&subject, &predicate, Some(&object));
     let (_nid, props) = kb
         .get_node_by_ext_id("Fact", "fact_id", &fact_id)
         .await

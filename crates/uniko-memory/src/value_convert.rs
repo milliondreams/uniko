@@ -74,10 +74,7 @@ pub(crate) fn extract_optional_dt(row: &uni_db::Row, column: &str) -> Option<Dat
 /// Returns [`UnikoError::Storage`] if the value is not a Temporal /
 /// String, or the millis fall outside the supported range, or the
 /// RFC-3339 parse fails.
-pub(crate) fn require_datetime(
-    value: &Value,
-    context: &str,
-) -> Result<DateTime<Utc>, UnikoError> {
+pub(crate) fn require_datetime(value: &Value, context: &str) -> Result<DateTime<Utc>, UnikoError> {
     match value {
         Value::Temporal(t) => {
             let millis = t

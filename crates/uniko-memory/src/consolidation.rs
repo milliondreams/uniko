@@ -795,7 +795,11 @@ async fn fetch_unprocessed_observations(
         .fetch_all()
         .await?;
 
-    Ok(result.rows().iter().filter_map(try_parse_observation).collect())
+    Ok(result
+        .rows()
+        .iter()
+        .filter_map(try_parse_observation)
+        .collect())
 }
 
 /// Decode one Observation row into [`UnprocessedObs`].  Returns `None`

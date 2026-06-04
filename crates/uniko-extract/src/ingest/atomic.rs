@@ -278,14 +278,12 @@ async fn extract_entities_and_nlp(
     }
 
     // 3. ONNX NER + per-sentence NLP cascade.
-    // `nlp_ms` is rebound inside the `onnx` block below; without the
-    // feature it stays at 0. `mut` is only required on `onnx` builds.
-    #[cfg(feature = "onnx")]
-    let mut nlp_ms: u128 = 0;
+    // On `onnx` builds the cascade block yields `(nlp_results, nlp_ms)`;
+    // without the feature `nlp_ms` stays 0.
     #[cfg(not(feature = "onnx"))]
     let nlp_ms: u128 = 0;
     #[cfg(feature = "onnx")]
-    let nlp_results = {
+    let (nlp_results, nlp_ms) = {
         let nlp_start = std::time::Instant::now();
         let result = match crate::nlp::NlpPipeline::try_new(kb).await {
             Some(pipeline) => match pipeline.analyze_sentences(&msg.content).await {
@@ -307,8 +305,7 @@ async fn extract_entities_and_nlp(
                 None
             }
         };
-        nlp_ms = nlp_start.elapsed().as_millis();
-        result
+        (result, nlp_start.elapsed().as_millis())
     };
     #[cfg(not(feature = "onnx"))]
     {

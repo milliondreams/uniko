@@ -1707,10 +1707,7 @@ where
 
 /// Merge a row batch into the per-variant `scored` accumulator, keeping
 /// the max score per node id.
-fn merge_scored_rows(
-    rows: &[uni_db::Row],
-    scored: &mut HashMap<NodeId, (String, String, f64)>,
-) {
+fn merge_scored_rows(rows: &[uni_db::Row], scored: &mut HashMap<NodeId, (String, String, f64)>) {
     for row in rows {
         let nid: i64 = row.get("nid").unwrap_or(0);
         let lbl: String = row.get("lbl").unwrap_or_default();

@@ -22,7 +22,8 @@ struct Patterns {
     proper_noun: Regex,
 }
 
-static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| Patterns {
+static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| {
+    Patterns {
     url: Regex::new(r"https?://[^\s<>\[\]()]+").unwrap(),
     email: Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").unwrap(),
     date_iso: Regex::new(
@@ -43,6 +44,7 @@ static PATTERNS: LazyLock<Patterns> = LazyLock::new(|| Patterns {
     .unwrap(),
     quoted: Regex::new(r#""([^"]{2,60})""#).unwrap(),
     proper_noun: Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b").unwrap(),
+}
 });
 
 /// Extract entities from text using rule-based regex patterns.

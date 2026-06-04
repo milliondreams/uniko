@@ -148,11 +148,7 @@ struct Accum {
 
 /// `mean(sum, count)` returns `sum / count` or `0.0` when `count == 0`.
 fn mean(sum: f64, count: usize) -> f64 {
-    if count > 0 {
-        sum / count as f64
-    } else {
-        0.0
-    }
+    if count > 0 { sum / count as f64 } else { 0.0 }
 }
 
 impl Accum {

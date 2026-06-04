@@ -225,9 +225,8 @@ impl KnowledgeBase {
         // and each create their own node, producing duplicate rows.
         // The lock also covers the subsequent update path so a later
         // RMW on the same logical row is consistent.
-        let mut lock_key = Vec::with_capacity(
-            5 + label.len() + 1 + ext_id_field.len() + 1 + ext_id.len(),
-        );
+        let mut lock_key =
+            Vec::with_capacity(5 + label.len() + 1 + ext_id_field.len() + 1 + ext_id.len());
         lock_key.extend_from_slice(b"node:");
         lock_key.extend_from_slice(label.as_bytes());
         lock_key.push(0);

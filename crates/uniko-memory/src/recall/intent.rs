@@ -468,10 +468,12 @@ async fn analyze_query(kb: &KnowledgeBase, query: &str) -> QueryAnalysis {
 /// NER in that case.
 #[cfg(feature = "onnx")]
 async fn analyze_query_onnx(kb: &KnowledgeBase, query: &str) -> Option<QueryAnalysis> {
-    let pipeline = uniko_extract::nlp::NlpPipeline::try_new(kb).await.or_else(|| {
-        tracing::warn!("NLP pipeline unavailable for query analysis");
-        None
-    })?;
+    let pipeline = uniko_extract::nlp::NlpPipeline::try_new(kb)
+        .await
+        .or_else(|| {
+            tracing::warn!("NLP pipeline unavailable for query analysis");
+            None
+        })?;
     let result = pipeline.analyze(query).await.ok()?;
     let labels = uniko_extract::nlp::assets::label_maps();
 

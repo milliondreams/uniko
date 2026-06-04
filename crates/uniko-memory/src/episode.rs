@@ -202,10 +202,10 @@ async fn find_previous_episode(
     };
     let node: uni_db::Node = row.get("e")?;
     let vid = node.vid.as_u64() as i64;
-    let ts_value = node.properties.get("timestamp").ok_or_else(|| {
-        UnikoError::Storage("Episode.timestamp missing".into())
-    })?;
+    let ts_value = node
+        .properties
+        .get("timestamp")
+        .ok_or_else(|| UnikoError::Storage("Episode.timestamp missing".into()))?;
     let ts = crate::value_convert::require_datetime(ts_value, "Episode.timestamp")?;
     Ok(Some((vid, ts)))
 }
-
