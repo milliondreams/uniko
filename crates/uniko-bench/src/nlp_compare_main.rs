@@ -8,6 +8,11 @@
 //! `NlpPipeline::try_new` can resolve the `nlp/default` catalog alias.
 //! Each variant runs against a fresh tmp KB so model loads are clean.
 
+// mimalloc as global allocator — measured ~3x throughput on uni-db's
+// concurrent_mutations benchmark (uni-db commit 65399a2b).
+#[global_allocator]
+static GLOBAL: uni_db::MiMalloc = uni_db::MiMalloc;
+
 use std::path::PathBuf;
 use std::time::Instant;
 

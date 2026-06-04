@@ -17,6 +17,11 @@
 //! Every model / device / recall / cost knob lives in the bench-config
 //! JSON; CLI carries only what changes per invocation.
 
+// mimalloc as global allocator — measured ~3x throughput on uni-db's
+// concurrent_mutations benchmark (uni-db commit 65399a2b).
+#[global_allocator]
+static GLOBAL: uni_db::MiMalloc = uni_db::MiMalloc;
+
 use uniko_bench::{
     IngestObserver, bench_config::BenchConfig, data, eval, events, ingest, pricing as pricing_mod,
     query, report,

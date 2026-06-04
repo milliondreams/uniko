@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjPath;
-use object_store::{ObjectStore, PutPayload};
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 
 use crate::blob_store::{BlobStore, PutOutcome, fs_relative_path};
 use crate::error::{Result, UnikoError};
@@ -117,7 +117,7 @@ impl BlobStore for S3BlobStore {
         let key = self.key(content_id)?;
         // Idempotency: skip upload if HEAD shows matching size.
         if let Ok(meta) = self.inner.head(&key).await
-            && meta.size == bytes.len()
+            && meta.size == bytes.len() as u64
         {
             return Ok(PutOutcome {
                 bytes_inline: None,

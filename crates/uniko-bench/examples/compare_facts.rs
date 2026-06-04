@@ -5,6 +5,11 @@
 //! much cleaner the LLM triples are.  Reports per-KB Fact counts,
 //! mean cluster size, and the top-N most-supported triples.
 
+// Deep nested async future layout (datafusion 53 / lance 7 via uni-db 2.0)
+// exceeds rustc's default recursion limit of 128 when computing the
+// `main` async block's layout; raise it for this example crate.
+#![recursion_limit = "256"]
+
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 

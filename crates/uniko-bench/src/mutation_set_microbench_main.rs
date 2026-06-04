@@ -11,6 +11,11 @@
 //!
 //! Run: cargo run -p uniko-bench --release --bin mutation-set-microbench
 
+// mimalloc as global allocator — measured ~3x throughput on uni-db's
+// concurrent_mutations benchmark (uni-db commit 65399a2b).
+#[global_allocator]
+static GLOBAL: uni_db::MiMalloc = uni_db::MiMalloc;
+
 use std::collections::HashMap;
 use std::time::Instant;
 

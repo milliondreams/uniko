@@ -80,7 +80,7 @@ fn title_case(s: &str) -> String {
         .map(|w| {
             let mut chars = w.chars();
             match chars.next() {
-                Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str().to_lowercase().as_str(),
                 None => String::new(),
             }
         })
