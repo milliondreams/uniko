@@ -77,7 +77,7 @@ upstream would let us delete the listed sites.
 | RC11 | **A scalar index on a property literally named `ext_id` makes `flush()` fail** (Lance duplicate field) | [`unidb-persistence-loss/`](unidb-persistence-loss/) | naming convention: all external ids are `<label>_id` (`fact_id`, `participant_id`, …) |
 | RC12 | **Locy rule runtime may not execute stdlib rules** in the pinned uni-db version | not filed | `cortex/procedures.rs` Locy→Cypher fallback; `memory/rules/stdlib.rs:117` best-effort `create_rule` |
 | RC13 | **Missing scalar `DataType`s** — `Bytes` ✅ **FIXED** (`#50`, 2.0.0); `Int16` ❌ still missing | `Bytes` = `#50` (done) | `Bytes`: **adopted** — `store/schema/artifact_content.rs` uses `DataType::Bytes` (`bytes`, `audio_fingerprint`); `bench/ingest.rs` TODO de-referenced. `Int16`: `store/schema/artifacts.rs:32` (channels still `Int32`) — **keep** |
-| RC14 | **`MERGE`-an-edge between two known ids isn't expressible** (requires both endpoints by `id()` in one pattern) | not filed | `store/migrations.rs:90` manual two-step; `cortex/topics.rs` `create_edge`+dup-swallow |
+| RC14 | **`MERGE`-an-edge between two `id()`-addressed endpoints** ✅ **FIXED in 2.0** | not filed | **both removed 2026-06-03**: `store/migrations.rs` manual two-step → `MERGE (a)-[:HAS_CONTENT…]->(c)`; `cortex/topics.rs` `create_edge`+dup-swallow → `MERGE (m)-[:BELONGS_TO]->(t)`. Hot batched edge paths keep plain CREATE (no dup possible; edge-MERGE has per-row planning cost) |
 
 **Out of scope but logged for completeness** (these are ONNX/ORT embedding-runtime
 or LLM-provider limits, *not* graph-DB bugs): embed-batch chunking to dodge ORT
@@ -116,7 +116,7 @@ uni-db-shaped but a defensible design choice).
 | `src/locks.rs` `StripedLocks` + sites in `storage/mod.rs:80‑287`, `storage/nodes.rs:223` (`merge_node`), `kb_stats.rs:179` (`bump_modality_presence`), `operations/facts.rs:121` (`upsert_fact_by_triple`), `:324` (`batch_upsert_facts`), `:844` (`record_entity_invalidation`) | RC2: last-writer-wins, no atomic SET/row-lock/CAS | in-process striped async mutex serializes every read-modify-write critical section by key | comment | filed ([wishlist](uni-db-rmw-primitives-wishlist.md)) |
 | `src/storage/edges.rs:341` `delete_edge`, `:398` `update_edge` | RC8: `id(r)` lowers to `r._vid` | query the internal `r._eid` column directly | comment | filed ([doc](uni-db-edge-id-vid-planner.md)) |
 | `src/storage/nodes.rs:239` `merge_node` | RC4: MERGE CREATE checks NOT NULL before `ON CREATE SET` | split into explicit get-then-(update\|create) | comment | not filed |
-| `src/storage/migrations.rs:90` | RC14: edge-MERGE between two ids not expressible | perform the MERGE manually (both endpoints by `id()`) | comment | not filed |
+| `src/storage/migrations.rs` | RC14: edge-MERGE ✅ fixed 2.0 | **migrated** to `MERGE (a)-[:HAS_CONTENT…]->(c)` (read kept only for the report counter) | — | resolved |
 | `src/schema/chunks.rs:30` | RC9: `List<Float32>`→`List<Utf8>` inference fallback | defer typed positional columns; stuff modality scalars into one `CypherValue` JSON `metadata` bag | comment | not filed |
 | `src/schema/artifacts.rs:32` | RC13: no `Int16` | declare `channels` as `Int32` | comment | not filed |
 | `src/search/hybrid.rs:79` + `fulltext.rs`/`vector.rs` | ~~RC5~~ **NOT a #39 workaround** (corrected 2026-05-31) | separate vector leg + `CALL uni.fts.query` leg fused via Rust RRF (`rrf_fuse`) with tier weights — a deliberate ranking design; the FTS leg never used the broken `similar_to`-on-FTS path | design | #39 ✅ fixed, but unrelated |
@@ -165,7 +165,7 @@ uni-db-shaped but a defensible design choice).
 |------|--------------|-----------|----------|--------|
 | `src/procedures.rs:115` + `:374` `fallback_sequence_query` | RC12: Locy `execute_rule("sequence_detector")` may fail | on `Locy` error, re-run the same detection as hand-written Cypher (`MATCH (e1)-[:FOLLOWED_BY]->(e2) … count(*) … WHERE n>=$thr`) | comment | not filed |
 | `src/procedures.rs:126` + `:408` `pick_string`/`pick_i64` | Locy vs Cypher return paths use different/unstable column names | probe a candidate-key list in priority order (`["e1.action_type","key_0","a","action_a"]`); coerce `Float`→`i64` | inferred | not filed |
-| `src/topics.rs:330` `upsert_topic` BELONGS_TO | RC14: no idempotent edge-MERGE; `create_edge` is a bare CREATE → duplicate edges on re-run | blindly `create_edge`, catch `UnikoError::Storage` whose message contains `"duplicate"`/`"already"`, treat as success (string-match on error text) | inferred | not filed |
+| `src/topics.rs` `upsert_topic` BELONGS_TO | RC14: idempotent edge-MERGE ✅ fixed 2.0 | **migrated** to `MERGE (m)-[:BELONGS_TO]->(t)`; the string-match-on-error dup-swallow is gone | — | resolved |
 | `src/procedures.rs:222`/`:447` `match_procedures` / `precondition_matches` | can't evaluate a per-row stored predicate string inside the query | Cypher filters only `status='active'`; precondition match done row-by-row in Rust against the in-memory `state` map | inferred | design (MVP evaluator) |
 | `src/topics.rs:17`/`:235` `run_lpa` | `CALL uni.algo.louvain` requires materializing a graph projection | reimplement community detection as weighted Label Propagation in Rust over a co-occurrence adjacency list | comment | design (perf/scale choice; swap to Louvain past ~50K entities) |
 

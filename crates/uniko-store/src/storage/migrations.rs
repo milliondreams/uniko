@@ -87,11 +87,8 @@ impl KnowledgeBase {
                 })
                 .await?;
 
-            // MERGE the HAS_CONTENT edge so re-runs don't create
-            // duplicates. uni-db requires both endpoints addressed by
-            // id() in a single MERGE pattern. We perform it manually:
-            // OPTIONAL MATCH for existing edge, CREATE if absent.
             let tx = session.tx().await?;
+            // Detect a prior migration (for the report counter only).
             let existing_edge = tx
                 .query_with(
                     "MATCH (a:Artifact)-[r:HAS_CONTENT]->(c:ArtifactContent) \
@@ -102,17 +99,19 @@ impl KnowledgeBase {
                 .fetch_all()
                 .await?;
 
-            if existing_edge.rows().is_empty() {
-                tx.query_with(
-                    "MATCH (a:Artifact), (c:ArtifactContent) \
-                     WHERE id(a) = $a AND id(c) = $c \
-                     CREATE (a)-[:HAS_CONTENT {role: 'primary'}]->(c)",
-                )
-                .param("a", vid)
-                .param("c", content_nid)
-                .fetch_all()
-                .await?;
-            }
+            // uni-db 2.0 supports MERGE on a relationship between two
+            // id()-addressed endpoints, so the write is idempotent in one
+            // statement (was a manual conditional CREATE before edge-MERGE
+            // was expressible).
+            tx.query_with(
+                "MATCH (a:Artifact), (c:ArtifactContent) \
+                 WHERE id(a) = $a AND id(c) = $c \
+                 MERGE (a)-[:HAS_CONTENT {role: 'primary'}]->(c)",
+            )
+            .param("a", vid)
+            .param("c", content_nid)
+            .fetch_all()
+            .await?;
 
             // Strip the legacy content field.
             tx.query_with(
