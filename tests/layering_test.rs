@@ -6,6 +6,13 @@
 //! cortex P5/P6 post-cycle, see `crates/uniko-cortex/src/lib.rs`).
 //! `uniko-api` re-exports the public surface from cortex + memory.
 //!
+//! The "Layer N" labels in crate docs describe cognitive altitude
+//! (store < pipes/extract < memory < cortex), NOT build order — cortex
+//! is "Layer 5" yet sits below memory in this graph. That is by design:
+//! consolidation (P4) is the heartbeat and P5/P6 are its subscribers,
+//! so memory drives cortex rather than cortex polling memory. Do not
+//! "fix" the direction to match the layer numbers.
+//!
 //! Each test pins the set of intra-workspace dependencies a crate is
 //! allowed to declare in `[dependencies]`. Add a crate to the allow
 //! list deliberately — `uniko-bench` and dev-deps are out of scope.
@@ -80,7 +87,10 @@ fn test_uniko_cortex_depends_only_on_store() {
     // Cortex is a sibling of extract — both build directly on store.
     // The consolidation worker in `uniko-memory` calls into cortex
     // (P5/P6), which is why memory depends on cortex but not the
-    // other way around.
+    // other way around. If cortex ever needs memory APIs at runtime
+    // (e.g. MCTS planning calling recall), don't add the dep here —
+    // that's a true cycle; invert via a sweep trait defined in memory
+    // and injected at the composition root instead.
     assert_only_deps("uniko-cortex", "crates/uniko-cortex", &["uniko-store"]);
 }
 

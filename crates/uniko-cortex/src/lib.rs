@@ -3,8 +3,15 @@
 //! Procedure promotion, topic detection, MCTS planning, rule induction,
 //! working memory traversal, and NL-to-Cypher translation.
 //!
-//! Depends on `uniko-store` only.  Sibling of `uniko-memory` — the
-//! consolidation worker calls into cortex (P5/P6) post-cycle.
+//! Depends on `uniko-store` only.  "Layer 5" is cognitive altitude, not
+//! build order: in the dependency graph this crate is a sibling of
+//! `uniko-extract`, and `uniko-memory` sits *above* it — memory's
+//! consolidation worker (P4, the heartbeat) calls `promote_procedures_once`
+//! and `detect_topics_once` after successful consolidation cycles. P5/P6
+//! are subscribers to P4, which is why memory depends on cortex and not
+//! the other way around. If cortex ever needs memory's runtime APIs
+//! (e.g. MCTS planning calling recall), invert via a sweep trait defined
+//! in memory rather than adding a dependency here.
 
 pub mod procedures;
 pub mod topics;

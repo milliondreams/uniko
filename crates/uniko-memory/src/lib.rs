@@ -3,7 +3,19 @@
 //! PipelineSystem orchestration, recall cascade (3-phase with coverage gating),
 //! consolidation (fact derivation, contradiction, drift), and stdlib rules.
 //!
-//! Depends on `uniko-extract` only. This is the memory management brain.
+//! Depends on `uniko-cortex`, `uniko-extract`, `uniko-pipes`, and
+//! `uniko-store`. The cortex dependency is deliberate even though cortex
+//! is "Layer 5": layer numbers describe cognitive altitude, not build
+//! order. Consolidation (P4) is the heartbeat — the consolidation worker
+//! triggers cortex sweeps (P5 procedure promotion + P6 topic detection)
+//! after successful cycles, because the trigger policy (per-agent cycle
+//! counters, min-interval throttling) is keyed off consolidation success
+//! and lives in the worker loop. See `pipeline::consolidation_worker`.
+//!
+//! Revisit this direction only if cortex ever needs uniko-memory APIs at
+//! runtime (e.g. MCTS planning calling recall) — that would create a true
+//! cycle, and the fix is to invert: define a sweep trait here and inject
+//! cortex's implementation at the composition root.
 
 // Bumped from the default 128 to clear E0275 overflow when checking
 // `Send` on the `consolidation_worker.run()` future in
