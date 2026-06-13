@@ -11,6 +11,10 @@ default = []
 gpu-cuda = ["uni-db/gpu-cuda"]
 # Enable Apple Metal/CoreML acceleration in uni-db (macOS only).
 gpu-metal = ["uni-db/gpu-metal"]
+# Diagnostic-only: capture bulk-write batches in a process-global buffer
+# so benchmarks can replay them (see `storage::batch_record`). Compiles
+# the recording hooks to no-ops when absent; never enable in production.
+batch-record = []
 
 [dependencies]
 uni-db = { workspace = true }

@@ -37,6 +37,14 @@ path = "src/update_microbench_main.rs"
 name = "mutation-set-microbench"
 path = "src/mutation_set_microbench_main.rs"
 
+[[bin]]
+name = "bulk-vs-unwind"
+path = "src/bulk_vs_unwind_main.rs"
+
+[[bin]]
+name = "nlp-parity"
+path = "src/nlp_parity_main.rs"
+
 [features]
 # GPU on by default for the bench: NLP cascade, BGE embedder, and the
 # cross-encoder reranker all see meaningful speedups under CUDA.
@@ -51,8 +59,11 @@ uniko-memory = { workspace = true, features = ["onnx"] }
 uniko-extract = { workspace = true, features = ["onnx"] }
 uniko-cortex = { workspace = true }
 uniko-pipes = { workspace = true }
-uniko-store = { workspace = true }
+uniko-store = { workspace = true, features = ["batch-record"] }
 uni-db = { workspace = true }
+# Direct dep so the nlp-parity bin can name xervo's `NlpModel` trait and
+# `NlpRequest`/`NlpTasks` types (uni-db does not re-export them).
+uni-xervo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

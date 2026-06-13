@@ -72,6 +72,11 @@ impl KnowledgeBase {
             }
         }
 
+        // Capture the batch for the bulk-vs-UNWIND benchmark (no-op
+        // unless the `batch-record` feature is on and recording is
+        // enabled). The thunk clones the rows only when recording.
+        super::batch_record::record_node_batch(label, || items.to_vec());
+
         // Route through `tx.bulk_insert_vertices` (uni-db public API).
         // Same rationale as `batch_create_edges_inner_in_tx`'s bulk
         // arm: skip Cypher parse + plan + per-row executor wrapping,
@@ -209,6 +214,13 @@ impl KnowledgeBase {
         if edges.is_empty() {
             return Ok(Vec::new());
         }
+
+        // Capture the batch for the bulk-vs-UNWIND benchmark (no-op
+        // unless the `batch-record` feature is on and recording is
+        // enabled). The thunk clones per-edge props only when recording.
+        super::batch_record::record_edge_batch(edge_type, || {
+            edges.iter().map(|(_, _, p)| p.clone()).collect()
+        });
 
         // ── Fast path: `tx.bulk_insert_edges` (uni-db public API).
         //

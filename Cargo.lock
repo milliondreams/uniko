@@ -1602,9 +1602,9 @@ dependencies = [
 
 [[package]]
 name = "chrono"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -2351,7 +2351,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -11459,7 +11459,7 @@ checksum = "eeba86d422ce181a719445e51872fa30f1f7413b62becb52e95ec91aa262d85c"
 
 [[package]]
 name = "uni-algo"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11478,7 +11478,7 @@ dependencies = [
 
 [[package]]
 name = "uni-btic"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "serde",
@@ -11487,7 +11487,7 @@ dependencies = [
 
 [[package]]
 name = "uni-bulk"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11503,7 +11503,7 @@ dependencies = [
 
 [[package]]
 name = "uni-common"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow-schema",
@@ -11524,7 +11524,7 @@ dependencies = [
 
 [[package]]
 name = "uni-crdt"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "fxhash",
  "rmp-serde",
@@ -11537,7 +11537,7 @@ dependencies = [
 
 [[package]]
 name = "uni-cypher"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "pest",
  "pest_derive",
@@ -11548,7 +11548,7 @@ dependencies = [
 
 [[package]]
 name = "uni-db"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11603,7 +11603,7 @@ dependencies = [
 
 [[package]]
 name = "uni-fork"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11619,7 +11619,7 @@ dependencies = [
 
 [[package]]
 name = "uni-locy"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "candle-core",
@@ -11633,7 +11633,7 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin"
-version = "1.9.0"
+version = "2.1.0"
 dependencies = [
  "arc-swap",
  "arrow",
@@ -11666,7 +11666,7 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-apoc-core"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -11685,7 +11685,7 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-builtin"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -11712,7 +11712,7 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-custom"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -11733,7 +11733,7 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-host"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11767,7 +11767,7 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-rhai"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -11787,7 +11787,7 @@ dependencies = [
 
 [[package]]
 name = "uni-query"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -11834,7 +11834,7 @@ dependencies = [
 
 [[package]]
 name = "uni-query-functions"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -11864,7 +11864,7 @@ dependencies = [
 
 [[package]]
 name = "uni-sidecar"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -11873,7 +11873,7 @@ dependencies = [
 
 [[package]]
 name = "uni-store"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -11881,6 +11881,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "async-trait",
+ "blake3",
  "bytes",
  "chrono",
  "dashmap",
@@ -11913,9 +11914,9 @@ dependencies = [
 
 [[package]]
 name = "uni-xervo"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a04a989a640ea65d67512310ac6c837df1bd009b5c88412655f292825f796bac"
+checksum = "dc6e28bf2c003230f108da0bfe12e6b0324520b96187fe8be532d3b56d4f2a5b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -12040,6 +12041,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uni-db",
+ "uni-xervo",
  "uniko-cortex",
  "uniko-extract",
  "uniko-memory",

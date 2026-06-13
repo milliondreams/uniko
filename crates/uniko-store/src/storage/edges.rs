@@ -206,6 +206,10 @@ impl KnowledgeBase {
         // SENT_BY — always one edge, with `role` property.
         let mut sent_props: HashMap<String, Value> = HashMap::with_capacity(1);
         sent_props.insert("role".into(), Value::String(sender_role.to_string()));
+        // Capture for the bulk-vs-UNWIND benchmark (no-op without the
+        // `batch-record` feature). Message edges bypass `batch.rs`, so
+        // they need their own capture hook at each sub-call.
+        super::batch_record::record_edge_batch("SENT_BY", || vec![sent_props.clone()]);
         tx.bulk_insert_edges(
             "SENT_BY",
             vec![(
@@ -217,6 +221,7 @@ impl KnowledgeBase {
         .await?;
 
         // IN_SESSION — always one edge, no properties.
+        super::batch_record::record_edge_batch("IN_SESSION", || vec![HashMap::new()]);
         tx.bulk_insert_edges(
             "IN_SESSION",
             vec![(
@@ -229,6 +234,9 @@ impl KnowledgeBase {
 
         // ADDRESSED_TO — 0..N edges, batched in one call.
         if !recipient_nids.is_empty() {
+            super::batch_record::record_edge_batch("ADDRESSED_TO", || {
+                vec![HashMap::new(); recipient_nids.len()]
+            });
             let edges: Vec<(Vid, Vid, HashMap<String, Value>)> = recipient_nids
                 .iter()
                 .map(|&r| (Vid::new(msg_nid as u64), Vid::new(r as u64), HashMap::new()))
@@ -240,6 +248,7 @@ impl KnowledgeBase {
         if let Some(prev_nid) = prev_msg_nid {
             let mut next_props: HashMap<String, Value> = HashMap::with_capacity(1);
             next_props.insert("gap_ms".into(), Value::Int(0));
+            super::batch_record::record_edge_batch("NEXT", || vec![next_props.clone()]);
             tx.bulk_insert_edges(
                 "NEXT",
                 vec![(

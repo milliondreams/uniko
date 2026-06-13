@@ -21,6 +21,11 @@ pub mod types;
 pub use error::{Result, UnikoError};
 #[doc(inline)]
 pub use storage::KnowledgeBase;
+// Diagnostic batch-recording surface, only present with the
+// `batch-record` feature (used by the bulk-vs-UNWIND benchmark).
+#[cfg(feature = "batch-record")]
+#[doc(inline)]
+pub use storage::batch_record::{RecordedBatch, enable_batch_recording, take_recorded_batches};
 pub use types::*;
 
 // Re-export `ModelRuntime` so callers can name the type without

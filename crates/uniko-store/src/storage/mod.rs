@@ -5,6 +5,7 @@
 //! exclusively through this struct.
 
 pub mod batch;
+pub mod batch_record;
 pub mod blob;
 pub mod edges;
 pub mod filter;
