@@ -810,20 +810,13 @@ fn try_parse_observation(row: &uni_db::Row) -> Option<UnprocessedObs> {
     let nid = row.get::<i64>("nid").ok()?;
     let subject = row.get::<String>("subject").ok()?;
     let predicate = row.get::<String>("predicate").ok()?;
-    let parse_rfc3339 = |s: String| {
-        DateTime::parse_from_rfc3339(&s)
-            .ok()
-            .map(|dt| dt.with_timezone(&Utc))
-    };
-    let observed_at = row
-        .get::<String>("observed_at")
-        .ok()
-        .and_then(parse_rfc3339)
-        .unwrap_or_else(Utc::now);
-    let temporal_anchor = row
-        .get::<String>("temporal_anchor")
-        .ok()
-        .and_then(parse_rfc3339);
+    // uni-db 2.1.0 returns DateTime props as `Value::Temporal`, not as
+    // RFC-3339 strings (uni `4583ee870`).  `extract_optional_dt` reads
+    // the `Value::Temporal` form and still accepts a legacy string, so
+    // it correctly handles both stored shapes.
+    let observed_at =
+        crate::value_convert::extract_optional_dt(row, "observed_at").unwrap_or_else(Utc::now);
+    let temporal_anchor = crate::value_convert::extract_optional_dt(row, "temporal_anchor");
     Some(UnprocessedObs {
         node_id: nid,
         subject,

@@ -115,7 +115,7 @@ pub async fn add_rule(kb: &KnowledgeBase, params: AddRuleParams) -> Result<NodeI
         return Err(UnikoError::Storage("add_rule: name is required".into()));
     }
     // Validate Locy source up-front so a bad rule never creates a node.
-    kb.create_rule(&params.source)?;
+    kb.create_rule(&params.source).await?;
 
     let rule_id = params.rule_id.unwrap_or_else(new_id);
     let confidence = params.initial_confidence.unwrap_or(0.5);
@@ -180,7 +180,7 @@ pub async fn apply_decay_cycle(
             new_status = STATUS_PRUNED.into();
             // Best-effort remove from the runtime; the node stays for
             // provenance.
-            if let Err(e) = kb.delete_rule(&r.name) {
+            if let Err(e) = kb.delete_rule(&r.name).await {
                 tracing::debug!(name = %r.name, error = %e, "delete_rule during prune failed");
             }
             report.pruned += 1;

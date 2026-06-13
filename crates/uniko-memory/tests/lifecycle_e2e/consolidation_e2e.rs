@@ -428,17 +428,19 @@ async fn majority_contradiction_invalidates_old_fact() {
         .expect("node");
     let _ = row;
 
-    // uni-db stringifies Temporal columns when packaged inside a Node
-    // returned via Cypher.  An open BTIC ends with `+inf)`; a closed
-    // BTIC contains a real datetime as `hi`.
-    let vat_display = match node.properties.get("valid_at") {
-        Some(Value::String(s)) => s.clone(),
-        other => panic!("expected stringified BTIC valid_at, got {other:?}"),
-    };
-    assert!(
-        !vat_display.contains("+inf)"),
-        "old fact BTIC was not closed: {vat_display}",
-    );
+    // uni-db 2.1.0 returns a Node's Temporal columns as structured
+    // `Value::Temporal(Btic{..})` (uni `4583ee870`), no longer
+    // stringified.  A closed BTIC has a finite `hi`; an open one has
+    // `hi == POS_INF`.  The majority contradiction must have closed it.
+    match node.properties.get("valid_at") {
+        Some(Value::Temporal(uni_db::common::TemporalValue::Btic { hi, .. })) => {
+            assert!(
+                *hi < uni_db::common::uni_btic::btic::POS_INF,
+                "old fact BTIC was not closed (hi == POS_INF): hi={hi}",
+            );
+        }
+        other => panic!("expected Temporal(Btic) valid_at, got {other:?}"),
+    }
 }
 
 #[tokio::test]

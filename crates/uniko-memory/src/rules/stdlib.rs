@@ -116,7 +116,7 @@ pub async fn register_stdlib_rules(kb: &KnowledgeBase) -> Result<(), UnikoError>
 
         // Register in uni-db's Locy runtime (best-effort — may fail if
         // Locy syntax is not supported by the current uni-db version).
-        if let Err(e) = kb.create_rule(source) {
+        if let Err(e) = kb.create_rule(source).await {
             tracing::debug!(
                 rule = name,
                 error = %e,

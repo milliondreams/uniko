@@ -235,9 +235,14 @@ impl KnowledgeBase {
         lock_key.extend_from_slice(ext_id.as_bytes());
         let _rmw_guard = self.rmw_locks.lock(&lock_key).await;
 
-        // Two-step upsert to avoid NOT NULL constraint violations during
-        // MERGE's internal CREATE (uni-db evaluates constraints before
-        // ON CREATE SET runs).
+        // Explicit get-then-(update|create) rather than a single MERGE.
+        // uni-db has no atomic CAS and SSI does not catch insert-phantoms
+        // (an empty match registers no read-set conflict), so a bare
+        // MERGE on a non-UNIQUE key would still let two concurrent first
+        // upserts both create — the `rmw_locks` guard above serializes the
+        // window. (The older reason — MERGE's CREATE checking NOT NULL
+        // before ON CREATE SET — is fixed in uni 2.1.0; the RMW lock is
+        // what keeps this split, not that.)
         if let Some((existing_id, _)) = self.get_node_by_ext_id(label, ext_id_field, ext_id).await?
         {
             if !properties.is_empty() {

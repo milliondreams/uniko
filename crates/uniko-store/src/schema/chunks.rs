@@ -28,9 +28,9 @@ pub(crate) fn register_labels<'a>(
         // ingests always set it explicitly. The image/audio/video
         // positioning fields (`bbox`, `time_start_ms`, etc.) land with
         // Track B together with the binary chunkers that populate them —
-        // declaring them now without a producer trips a uni-db Arrow
-        // inference fallback (`List<Float32>` → `List<Utf8>`) on every
-        // chunk insert.
+        // we defer declaring them until there's a producer. (The uni-db
+        // `List<Float32>` → `List<Utf8>` Arrow-inference fallback that
+        // once forced this is fixed in 2.1.0; deferring is now a choice.)
         .property_nullable("modality", DataType::String)
         // Tracks which derivation model produced this chunk. NULL for
         // non-derived chunks (e.g., direct text chunking).
@@ -38,8 +38,10 @@ pub(crate) fn register_labels<'a>(
         // Modality-specific scalars (page_number, time bounds, bbox, …)
         // ride in this JSON bag until a Cypher query needs to filter on
         // one — at which point that field gets promoted to its own
-        // typed column. Avoids the speculative typed-column path that
-        // tripped the uni-db List<T> Arrow-inference fallback.
+        // typed column. A deliberate flexible-schema choice: keeps the
+        // common-case text chunk lean and avoids a schema migration per
+        // new modality field. (The uni-db `List<T>` inference fallback
+        // that originally motivated it is fixed in 2.1.0.)
         .property_nullable("metadata", DataType::CypherValue)
         .property_nullable(
             "embedding",

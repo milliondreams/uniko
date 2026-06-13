@@ -17,10 +17,11 @@ impl KnowledgeBase {
     /// # Errors
     ///
     /// Returns [`UnikoError::Locy`] if the source has syntax errors.
-    pub fn create_rule(&self, source: &str) -> Result<()> {
+    pub async fn create_rule(&self, source: &str) -> Result<()> {
         self.db
             .rules()
             .register(source)
+            .await
             .map_err(|e| UnikoError::Locy(e.to_string()))
     }
 
@@ -67,10 +68,11 @@ impl KnowledgeBase {
     /// # Errors
     ///
     /// Returns [`UnikoError::Locy`] on failure.
-    pub fn delete_rule(&self, name: &str) -> Result<bool> {
+    pub async fn delete_rule(&self, name: &str) -> Result<bool> {
         self.db
             .rules()
             .remove(name)
+            .await
             .map_err(|e| UnikoError::Locy(e.to_string()))
     }
 

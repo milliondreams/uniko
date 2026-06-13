@@ -22,6 +22,7 @@ async fn test_create_and_list_rules() {
          WHERE p.kind = 'agent' \
          YIELD KEY p.participant_id AS pid",
     )
+    .await
     .expect("rule registration");
 
     let rules = kb.list_rules();
@@ -42,9 +43,10 @@ async fn test_delete_rule() {
          MATCH (p:Participant) \
          YIELD KEY p.participant_id AS pid",
     )
+    .await
     .unwrap();
 
-    let removed = kb.delete_rule("del_rule").unwrap();
+    let removed = kb.delete_rule("del_rule").await.unwrap();
     assert!(removed);
 
     let rules = kb.list_rules();

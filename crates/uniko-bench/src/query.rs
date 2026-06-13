@@ -301,6 +301,27 @@ pub async fn generate_answer_with_usage(
     })
 }
 
+/// Read a row column as a `YYYY-MM-DD` date string.
+///
+/// uni-db 2.1.0 returns DateTime properties as `Value::Temporal` (uni
+/// `4583ee870`); older / string-typed rows still arrive as an RFC-3339
+/// `Value::String`. Handle both: format the temporal epoch, else split
+/// the string on `'T'`. The model only needs the date for relative-date
+/// resolution.
+fn row_date(row: &uni_db::Row, column: &str) -> Option<String> {
+    use uni_db::Value;
+    let idx = row.columns().iter().position(|c| c == column)?;
+    match row.values().get(idx)? {
+        Value::Temporal(t) => {
+            let millis = t.epoch_millis()?;
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
+                .map(|d| d.format("%Y-%m-%d").to_string())
+        }
+        Value::String(s) if !s.is_empty() => Some(s.split('T').next().unwrap_or(s).to_string()),
+        _ => None,
+    }
+}
+
 /// Resolve the originating Session.started_at for each recalled node.
 ///
 /// Walks the same edge set as `longmemeval::query::extract_session_ids`
@@ -325,10 +346,7 @@ pub async fn fetch_session_dates(kb: &KnowledgeBase, node_ids: &[i64]) -> HashMa
         );
         if let Ok(res) = session.query_with(&q).fetch_all().await {
             for row in res.rows() {
-                if let Ok(ts) = row.get::<String>("ts") {
-                    // uni-db formats DateTime as "YYYY-MM-DDTHH:MM:SS±HHMM"; the
-                    // model only needs the date for relative-date resolution.
-                    let date = ts.split('T').next().unwrap_or(&ts).to_string();
+                if let Some(date) = row_date(row, "ts") {
                     out.insert(nid, date);
                     break;
                 }
@@ -359,8 +377,7 @@ pub async fn fetch_temporal_anchors(kb: &KnowledgeBase, node_ids: &[i64]) -> Has
         );
         if let Ok(res) = session.query_with(&q).fetch_all().await {
             for row in res.rows() {
-                if let Ok(ts) = row.get::<String>("ts") {
-                    let date = ts.split('T').next().unwrap_or(&ts).to_string();
+                if let Some(date) = row_date(row, "ts") {
                     out.insert(nid, date);
                     break;
                 }
