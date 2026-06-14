@@ -4,7 +4,15 @@
 //! and Locy runtime for the uniko cognitive memory system.
 //!
 //! This is the lowest layer. It depends only on uni-db and external utility crates.
-//! All other uniko crates access storage through this layer.
+//!
+//! Intended boundary: all other uniko crates access the graph through this
+//! layer's typed API, so uni-db stays an implementation detail. That seal is
+//! **not yet complete** — [`KnowledgeBase::db`] is still a public escape hatch
+//! and several higher crates reach uni-db directly through it (issue #2,
+//! sealing in progress: parameterized read queries are being consolidated here
+//! and a CI gate will forbid `use uni_db` outside this crate). Treat new
+//! direct uni-db usage outside `uniko-store` as debt to migrate, not a pattern
+//! to copy.
 
 pub mod blob_store;
 pub mod config;

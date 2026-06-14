@@ -125,6 +125,26 @@ pub enum Phase1Strategy {
     Off,
 }
 
+/// Access-control scope for a recall.
+///
+/// Modelled as an explicit enum rather than `Option<Viewer>` so that
+/// bypassing the access-control filter is a *named*, greppable choice
+/// (`ViewerScope::Unrestricted`) instead of a silent `None` — the recall
+/// path is otherwise fail-open (see issue #5). [`Default`] is
+/// `Unrestricted` to preserve behaviour for internal/bench callers that
+/// have no viewer; production callers that serve a specific participant
+/// should pass [`ViewerScope::As`].
+#[derive(Debug, Clone, Default)]
+pub enum ViewerScope {
+    /// No access-control filtering — the caller is trusted (internal
+    /// consolidation, benchmarks, admin). Fail-open by explicit choice.
+    #[default]
+    Unrestricted,
+    /// Filter the returned bundle to what this [`crate::policy::Viewer`]
+    /// is allowed to see (private/team/org visibility).
+    As(crate::policy::Viewer),
+}
+
 /// Recall query configuration.
 #[derive(Debug, Clone)]
 pub struct RecallConfig {
@@ -189,6 +209,14 @@ pub struct RecallConfig {
     /// BTIC-overlap + BTree-range queries across Fact / Observation /
     /// Episode and folds the hits into the RRF pool.  Default `true`.
     pub phase2_temporal_enabled: bool,
+    /// Reference instant for resolving *relative* temporal phrases in the
+    /// query ("last May", "two weeks ago"). `None` falls back to
+    /// `Utc::now()`. Set this to the conversation/question anchor when
+    /// recalling against a historical corpus — otherwise the Phase-2
+    /// temporal channel computes a window around *now* that never overlaps
+    /// old data, silently disabling the channel for the primary benchmark
+    /// case. Threaded into [`crate::recall::intent::build_intent_at`].
+    pub reference_ts: Option<chrono::DateTime<chrono::Utc>>,
     /// Enable the graph-spreading-activation channel in Phase 2.  When
     /// the query has any entity refs, runs weighted PPR over the entity
     /// graph and folds the activated nodes into the RRF pool.  Default
@@ -216,6 +244,12 @@ pub struct RecallConfig {
     /// Mirror of [`Self::enable_image_channel`] for the multimodal
     /// joint-space column (Cohere v4 / Gemini Embed 2).
     pub enable_multimodal_channel: bool,
+    /// Access-control scope. When [`ViewerScope::As`], `recall()` filters
+    /// the returned bundle through [`crate::policy::filter_bundle`] so the
+    /// viewer only sees Facts/Observations their visibility admits. Default
+    /// [`ViewerScope::Unrestricted`] (no filtering) — set this for any
+    /// caller serving a specific participant. See issue #5.
+    pub viewer: ViewerScope,
 }
 
 impl Default for RecallConfig {
@@ -247,6 +281,7 @@ impl Default for RecallConfig {
             phase2_mmr_lambda: 0.7,
             phase2_mmr_duplicate_threshold: 0.85,
             phase2_temporal_enabled: true,
+            reference_ts: None,
             phase2_graph_enabled: true,
             phase2_graph_damping: 0.85,
             phase2_graph_max_iter: 30,
@@ -258,6 +293,7 @@ impl Default for RecallConfig {
             enable_audio_channel: false,
             enable_video_channel: false,
             enable_multimodal_channel: false,
+            viewer: ViewerScope::Unrestricted,
         }
     }
 }
@@ -308,6 +344,9 @@ impl RecallConfig {
             phase2_mmr_lambda: cfg.phase2_mmr_lambda,
             phase2_mmr_duplicate_threshold: cfg.phase2_mmr_duplicate_threshold,
             phase2_temporal_enabled: cfg.phase2_temporal_enabled,
+            // Per-query anchor, not a KB-level setting; callers set it on
+            // the RecallConfig they pass to `recall()`.
+            reference_ts: None,
             phase2_graph_enabled: cfg.phase2_graph_enabled,
             phase2_graph_damping: cfg.phase2_graph_damping,
             phase2_graph_max_iter: cfg.phase2_graph_max_iter,
@@ -324,6 +363,7 @@ impl RecallConfig {
             enable_audio_channel: false,
             enable_video_channel: false,
             enable_multimodal_channel: false,
+            viewer: ViewerScope::Unrestricted,
         }
     }
 }
@@ -392,11 +432,42 @@ pub async fn recall(
     query: &str,
     config: &RecallConfig,
 ) -> Result<ContextBundle, UnikoError> {
+    let mut bundle = recall_unfiltered(kb, query, config).await?;
+    // Access-control gate (issue #5). Fail-open is an explicit, named
+    // choice (`ViewerScope::Unrestricted`), not a silent default omission.
+    match &config.viewer {
+        ViewerScope::As(viewer) => {
+            crate::policy::filter_bundle(kb, &mut bundle, viewer).await?;
+        }
+        ViewerScope::Unrestricted => {
+            if bundle
+                .items
+                .iter()
+                .any(|i| matches!(i.node_type.as_str(), "Fact" | "Observation"))
+            {
+                tracing::warn!(
+                    "recall() returning policy-scoped items UNFILTERED \
+                     (ViewerScope::Unrestricted) — set RecallConfig.viewer to scope visibility"
+                );
+            }
+        }
+    }
+    Ok(bundle)
+}
+
+/// The recall cascade proper, before any access-control filtering.
+/// `recall()` wraps this and applies [`ViewerScope`].
+async fn recall_unfiltered(
+    kb: &KnowledgeBase,
+    query: &str,
+    config: &RecallConfig,
+) -> Result<ContextBundle, UnikoError> {
     if query.is_empty() {
         return Ok(empty_bundle());
     }
 
-    let intent = build_intent(kb, query, &config.query_variants).await?;
+    let intent =
+        intent::build_intent_at(kb, query, &config.query_variants, config.reference_ts).await?;
     tracing::debug!(
         variant_count = intent.variants.len(),
         entity_refs = ?intent.entity_refs,
@@ -1488,16 +1559,21 @@ async fn entity_type_match(
     target_type: &str,
 ) -> bool {
     let session = kb.db().session();
-    let q = format!(
-        "MATCH (n) WHERE id(n) = {nid} \
-         OPTIONAL MATCH (n)-[:MENTIONS|ABOUT]->(e1:Entity {{entity_type: '{t}'}}) \
-         OPTIONAL MATCH (n)<-[:ABOUT]-(:Observation)-[:ABOUT]->(e2:Entity {{entity_type: '{t}'}}) \
-         RETURN (n.entity_type = '{t}' OR e1 IS NOT NULL OR e2 IS NOT NULL) AS hit \
-         LIMIT 1",
-        nid = node_id,
-        t = target_type.replace('\'', "\\'"),
-    );
-    match session.query_with(&q).fetch_all().await {
+    // Bind both the node id and the target type as parameters — never
+    // interpolate values into Cypher (issue #2: this site previously
+    // hand-escaped quotes, an injection-prone substitute for binding).
+    let q = "MATCH (n) WHERE id(n) = $nid \
+         OPTIONAL MATCH (n)-[:MENTIONS|ABOUT]->(e1:Entity {entity_type: $t}) \
+         OPTIONAL MATCH (n)<-[:ABOUT]-(:Observation)-[:ABOUT]->(e2:Entity {entity_type: $t}) \
+         RETURN (n.entity_type = $t OR e1 IS NOT NULL OR e2 IS NOT NULL) AS hit \
+         LIMIT 1";
+    match session
+        .query_with(q)
+        .param("nid", node_id)
+        .param("t", target_type)
+        .fetch_all()
+        .await
+    {
         Ok(result) => result
             .rows()
             .first()
@@ -1557,8 +1633,11 @@ async fn run_recall_for_variant(
     };
 
     for chunk_type in ["session", "observation"] {
+        // `sources`/`queries`/`fusion` are structural (column lists + fusion
+        // method) and must be interpolated; the chunk_type VALUE is bound as a
+        // parameter, never inlined (issue #2).
         let cypher = format!(
-            "MATCH (m:Chunk) WHERE m.chunk_type = '{chunk_type}' \
+            "MATCH (m:Chunk) WHERE m.chunk_type = $ctype \
              RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                     m.text AS content, \
                     similar_to({sources}, {queries}{fusion}) AS score \
@@ -1566,6 +1645,7 @@ async fn run_recall_for_variant(
         );
 
         let mut builder = session.query_with(&cypher);
+        builder = builder.param("ctype", chunk_type);
         builder = builder.param("lim", config.per_variant_limit as i64);
         if needs_qvec {
             builder = builder.param("qvec", uni_db::Value::Vector(qvec.to_vec()));

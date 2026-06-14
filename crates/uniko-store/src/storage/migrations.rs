@@ -13,6 +13,7 @@ use chrono::Utc;
 use uni_db::Value;
 
 use crate::error::Result;
+use crate::schema::constants::edges as edge_consts;
 use crate::storage::KnowledgeBase;
 use crate::storage::blob::MergeContent;
 use crate::types::{NodeId, datetime_value};
@@ -204,6 +205,156 @@ impl KnowledgeBase {
         Ok(count)
     }
 
+    /// Migrate every `:Entity` to the canonical `entity_id` scheme (issue #1).
+    ///
+    /// Historically three writers used three divergent id schemes for the same
+    /// logical entity (`type:name`, `hash(name,UPPER_TYPE)`, and bare `name`).
+    /// This recomputes `entity_id = id::entity_id(name, canonical_type)` and
+    /// normalizes the stored `entity_type` to the shared lowercase vocabulary
+    /// for every Entity, then **merges** rows that collapse to the same
+    /// canonical id: a single survivor keeps the row, its inbound `MENTIONS`
+    /// and `ABOUT` edges and outbound `BELONGS_TO` edges are repointed from the
+    /// duplicates, `frequency`/`invalidation_count` are summed, and the
+    /// duplicates are deleted.
+    ///
+    /// Because `Topic.topic_id` is derived from member `entity_id`s, all
+    /// `:Topic` nodes are dropped so they re-derive on the next topic-detection
+    /// pass.
+    ///
+    /// Operator-invoked (like [`KnowledgeBase::migrate_artifact_content`]); not
+    /// auto-run at open. Idempotent — a second run finds every id already
+    /// canonical and merges nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn migrate_entity_ids_to_canonical(&self) -> Result<MigrationReport> {
+        let session = self.db.session();
+        let rows = session
+            .query_with(
+                "MATCH (e:Entity) RETURN id(e) AS vid, e.name AS name, \
+                 e.entity_type AS etype, e.entity_id AS eid, \
+                 coalesce(e.frequency, 0) AS freq, \
+                 coalesce(e.invalidation_count, 0) AS invc",
+            )
+            .fetch_all()
+            .await?;
+
+        // Group current rows by their target canonical id.
+        struct Ent {
+            vid: NodeId,
+            freq: i64,
+            invc: i64,
+            current_eid: String,
+        }
+        let mut groups: HashMap<String, (String /*ctype*/, Vec<Ent>)> = HashMap::new();
+        let mut report = MigrationReport::default();
+        for row in rows.rows() {
+            report.scanned += 1;
+            let vid: NodeId = row.get("vid")?;
+            let name: String = match row.value("name") {
+                Some(Value::String(s)) => s.clone(),
+                _ => continue, // nameless entity — cannot canonicalize
+            };
+            let etype = match row.value("etype") {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let ctype = canonical_entity_type(&etype);
+            let canonical_eid = crate::id::entity_id(&name, ctype);
+            let current_eid = match row.value("eid") {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let freq: i64 = row.get("freq").unwrap_or(0);
+            let invc: i64 = row.get("invc").unwrap_or(0);
+            groups
+                .entry(canonical_eid)
+                .or_insert_with(|| (ctype.to_string(), Vec::new()))
+                .1
+                .push(Ent {
+                    vid,
+                    freq,
+                    invc,
+                    current_eid,
+                });
+        }
+
+        for (canonical_eid, (ctype, mut members)) in groups {
+            // Deterministic survivor = lowest vid.
+            members.sort_by_key(|m| m.vid);
+            let survivor = members[0].vid;
+            let total_freq: i64 = members.iter().map(|m| m.freq).sum();
+            let total_invc: i64 = members.iter().map(|m| m.invc).sum();
+            let already_canonical = members.len() == 1 && members[0].current_eid == canonical_eid;
+
+            let tx = session.tx().await?;
+            // Repoint the known Entity edge types from each duplicate onto the
+            // survivor, then delete the duplicate.
+            for dup in members.iter().skip(1) {
+                for (etype, inbound) in [
+                    (edge_consts::MENTIONS, true),
+                    (edge_consts::ABOUT, true),
+                    (edge_consts::BELONGS_TO, false),
+                ] {
+                    let cypher = if inbound {
+                        format!(
+                            "MATCH (x)-[r:{etype}]->(d) WHERE id(d) = $d \
+                             MATCH (s) WHERE id(s) = $s \
+                             MERGE (x)-[:{etype}]->(s) DELETE r"
+                        )
+                    } else {
+                        format!(
+                            "MATCH (d)-[r:{etype}]->(x) WHERE id(d) = $d \
+                             MATCH (s) WHERE id(s) = $s \
+                             MERGE (s)-[:{etype}]->(x) DELETE r"
+                        )
+                    };
+                    tx.query_with(&cypher)
+                        .param("d", dup.vid)
+                        .param("s", survivor)
+                        .fetch_all()
+                        .await?;
+                }
+                tx.query_with("MATCH (d) WHERE id(d) = $d DETACH DELETE d")
+                    .param("d", dup.vid)
+                    .fetch_all()
+                    .await?;
+            }
+
+            // Canonicalize the survivor.
+            tx.query_with(
+                "MATCH (s) WHERE id(s) = $s \
+                 SET s.entity_id = $eid, s.entity_type = $etype, \
+                     s.frequency = $freq, s.invalidation_count = $invc",
+            )
+            .param("s", survivor)
+            .param("eid", Value::String(canonical_eid))
+            .param("etype", Value::String(ctype))
+            .param("freq", Value::Int(total_freq))
+            .param("invc", Value::Int(total_invc))
+            .fetch_all()
+            .await?;
+            tx.commit().await?;
+
+            if already_canonical {
+                report.already_migrated += 1;
+            } else {
+                report.migrated += 1;
+            }
+        }
+
+        // Topic ids are derived from member entity_ids — drop Topics so they
+        // re-derive on the next detection pass.
+        let tx = session.tx().await?;
+        tx.query_with("MATCH (t:Topic) DETACH DELETE t")
+            .fetch_all()
+            .await?;
+        tx.commit().await?;
+
+        Ok(report)
+    }
+
     /// Backfill `Chunk.modality = 'text'` for rows where it is NULL.
     /// Per §8.2. Idempotent.
     ///
@@ -250,6 +401,34 @@ fn mean_pool(vectors: &[Vec<f32>]) -> Option<Vec<f32>> {
         *a /= n;
     }
     Some(acc)
+}
+
+/// Normalize any historical or current `entity_type` string to the shared
+/// canonical lowercase vocabulary (issue #1). Maps the legacy uppercase
+/// abbreviations the action path used (`PERSON`, `ORG`, …), the lowercase
+/// forms the dedup path used (`person`, `organization`, …), and `other`/empty
+/// to a single value each. Unknown values pass through lowercased.
+fn canonical_entity_type(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "person" => "person",
+        "organization" | "org" => "organization",
+        "location" | "loc" => "location",
+        "date" => "date",
+        "numeric" | "num" => "numeric",
+        "event" => "event",
+        "product" => "product",
+        "work_of_art" => "work_of_art",
+        "group" => "group",
+        "url" => "url",
+        "email" => "email",
+        "measurement" => "measurement",
+        "preference" => "preference",
+        "quoted_string" => "quoted_string",
+        "code_symbol" => "code_symbol",
+        "code_import" => "code_import",
+        // `other`, `misc`, empty, and anything unrecognized.
+        _ => "misc",
+    }
 }
 
 /// Coarse MIME guess from the legacy `Artifact.kind` value. Text-only

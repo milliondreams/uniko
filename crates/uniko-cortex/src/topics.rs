@@ -330,21 +330,31 @@ async fn upsert_topic(
     // uni-db 2.0 supports edge-MERGE, so BELONGS_TO is idempotent on
     // re-run — no duplicate edges. Replaces the old bare `create_edge`
     // plus swallow-the-"duplicate"/"already" storage-error dance.
-    let session = kb.db().session();
-    let tx = session.tx().await?;
     let cypher = format!(
         "MATCH (m), (t) WHERE id(m) = $m AND id(t) = $t \
          MERGE (m)-[:{}]->(t)",
         edges::BELONGS_TO
     );
-    for member in members {
-        tx.query_with(&cypher)
-            .param("m", member.node_id)
-            .param("t", topic_node)
-            .fetch_all()
-            .await?;
-    }
-    tx.commit().await?;
+    let member_ids: Vec<_> = members.iter().map(|m| m.node_id).collect();
+    kb.transact_with_retry(uni_db::RetryOptions::default(), move |tx| {
+        let cypher = cypher.clone();
+        let member_ids = member_ids.clone();
+        async move {
+            let r = async {
+                for mid in member_ids {
+                    tx.query_with(&cypher)
+                        .param("m", mid)
+                        .param("t", topic_node)
+                        .fetch_all()
+                        .await?;
+                }
+                Ok(())
+            }
+            .await;
+            (tx, r)
+        }
+    })
+    .await?;
 
     Ok(!existing)
 }

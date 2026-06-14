@@ -665,16 +665,28 @@ async fn test_record_entity_invalidation_concurrent_no_lost_count() {
         let _ = h.await.unwrap();
     }
 
-    // Read back the final invalidation_count.
-    let (_nid, props) = kb
-        .get_node_by_ext_id("Entity", "entity_id", entity)
+    // Read back the final invalidation_count. invalidation identifies the
+    // entity by `name` (its entity_id is the canonical hash, not the bare
+    // name), so look it up by name and assert exactly one row carries the
+    // full count.
+    let session = kb.db().session();
+    let r = session
+        .query_with(
+            "MATCH (e:Entity {name: $n}) \
+             RETURN count(e) AS rows, \
+                    sum(coalesce(e.invalidation_count, 0)) AS total",
+        )
+        .param("n", entity)
+        .fetch_all()
         .await
-        .unwrap()
-        .expect("entity must exist");
-    let final_count = props
-        .get("invalidation_count")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+        .unwrap();
+    let row = r.rows().first().expect("entity must exist");
+    assert_eq!(
+        row.get::<i64>("rows").unwrap(),
+        1,
+        "concurrent invalidations must not create duplicate Entity rows",
+    );
+    let final_count: i64 = row.get("total").unwrap();
     assert_eq!(
         final_count, SPAWNS,
         "lost invalidation_count: final {final_count} != {SPAWNS}",
@@ -830,6 +842,300 @@ async fn test_batch_create_edges_fast_rejects_invalid_property_name() {
         matches!(err, uniko_store::UnikoError::Schema(_)),
         "expected Schema error, got {err:?}"
     );
+
+    kb.shutdown().await.unwrap();
+}
+
+// ── #3: typed SSI errors + reachable retry ──
+
+/// A retriable uni-db SSI conflict must cross the `?` boundary as a
+/// `UnikoError::Conflict` (retriable), not an opaque `Storage(String)`.
+///
+/// Induced via uni-db's read-write antidependency interleave: `tx_a`
+/// reads `ctr`, a concurrent `tx_b` writes+commits `ctr`, then `tx_a`
+/// writes and commits — which must abort with `SerializationConflict`.
+/// uniko runs with `ssi_enabled` (uni-db default), so this is live.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_ssi_conflict_maps_to_retriable_conflict_error() {
+    let kb = test_kb().await;
+    let mut seed = HashMap::new();
+    seed.insert("participant_id".into(), Value::String("ctr".into()));
+    seed.insert("kind".into(), Value::String("agent".into()));
+    seed.insert("n".into(), Value::Int(0));
+    kb.create_node("Participant", &seed).await.unwrap();
+
+    let session_a = kb.db().session();
+    let tx_a = session_a.tx().await.unwrap();
+    // tx_a reads ctr — recorded in its read-set.
+    tx_a.query_with("MATCH (p:Participant {participant_id: 'ctr'}) RETURN p.n")
+        .fetch_all()
+        .await
+        .unwrap();
+
+    // A concurrent transaction writes ctr and commits.
+    {
+        let session_b = kb.db().session();
+        let tx_b = session_b.tx().await.unwrap();
+        tx_b.execute_with("MATCH (p:Participant {participant_id: 'ctr'}) SET p.n = 100")
+            .run()
+            .await
+            .unwrap();
+        tx_b.commit().await.unwrap();
+    }
+
+    // tx_a now writes and commits — a read-write antidependency on ctr
+    // forces an abort. Map the raw uni-db error through uniko's `From`.
+    tx_a.execute_with("CREATE (:Participant {participant_id: 'ctr2', kind: 'agent'})")
+        .run()
+        .await
+        .unwrap();
+    let commit_err = tx_a
+        .commit()
+        .await
+        .expect_err("antidependency commit must abort under SSI");
+    let mapped: uniko_store::UnikoError = commit_err.into();
+    assert!(
+        matches!(mapped, uniko_store::UnikoError::Conflict(_)),
+        "expected retriable Conflict, got: {mapped:?}"
+    );
+    assert!(mapped.is_retriable(), "Conflict must report is_retriable()");
+
+    kb.shutdown().await.unwrap();
+}
+
+/// #1 migration: `migrate_entity_ids_to_canonical` recomputes every
+/// Entity's id to the canonical scheme, MERGES rows that collapse to the
+/// same id (summing frequency, repointing edges onto one survivor), and
+/// drops Topics for re-derivation. Idempotent.
+#[tokio::test]
+async fn test_migrate_entity_ids_merges_divergent_schemes() {
+    let kb = test_kb().await;
+
+    // Two legacy rows for the same logical entity (alice/person) under the
+    // old divergent schemes: dedup's `type:name` and action's uppercase id.
+    let mut a = HashMap::new();
+    a.insert("entity_id".into(), Value::String("person:alice".into()));
+    a.insert("name".into(), Value::String("alice".into()));
+    a.insert("entity_type".into(), Value::String("person".into()));
+    a.insert("frequency".into(), Value::Int(2));
+    let nid_a = kb.create_node("Entity", &a).await.unwrap();
+
+    let mut b = HashMap::new();
+    b.insert("entity_id".into(), Value::String("ent_deadbeef".into()));
+    b.insert("name".into(), Value::String("alice".into()));
+    b.insert("entity_type".into(), Value::String("PERSON".into())); // legacy upper
+    b.insert("frequency".into(), Value::Int(3));
+    let nid_b = kb.create_node("Entity", &b).await.unwrap();
+
+    // A distinct entity that must survive untouched (different name).
+    let mut c = HashMap::new();
+    c.insert("entity_id".into(), Value::String("org:acme".into()));
+    c.insert("name".into(), Value::String("acme".into()));
+    c.insert("entity_type".into(), Value::String("organization".into()));
+    kb.create_node("Entity", &c).await.unwrap();
+
+    // MENTIONS edges onto BOTH rows (from distinct messages) — after the
+    // merge both must land on the single survivor. (The repoint code path is
+    // identical for ABOUT and BELONGS_TO.)
+    let ts = uniko_store::types::datetime_value(chrono::Utc::now());
+    let mut m1 = HashMap::new();
+    m1.insert("message_id".into(), Value::String("m1".into()));
+    m1.insert("content".into(), Value::String("hi alice".into()));
+    m1.insert("timestamp".into(), ts.clone());
+    let msg1 = kb.create_node("Message", &m1).await.unwrap();
+    kb.create_edge("MENTIONS", msg1, nid_a, &HashMap::new())
+        .await
+        .unwrap();
+    let mut m2 = HashMap::new();
+    m2.insert("message_id".into(), Value::String("m2".into()));
+    m2.insert("content".into(), Value::String("bye alice".into()));
+    m2.insert("timestamp".into(), ts);
+    let msg2 = kb.create_node("Message", &m2).await.unwrap();
+    kb.create_edge("MENTIONS", msg2, nid_b, &HashMap::new())
+        .await
+        .unwrap();
+
+    // A Topic that must be dropped.
+    let mut t = HashMap::new();
+    t.insert("topic_id".into(), Value::String("topic_x".into()));
+    t.insert("name".into(), Value::String("a topic".into()));
+    kb.create_node("Topic", &t).await.unwrap();
+
+    let report = kb.migrate_entity_ids_to_canonical().await.unwrap();
+    assert_eq!(report.scanned, 3);
+
+    let session = kb.db().session();
+    // alice collapsed to ONE row with summed frequency.
+    let canonical = uniko_store::id::entity_id("alice", "person");
+    let r = session
+        .query_with(
+            "MATCH (e:Entity {name: 'alice'}) \
+             RETURN count(e) AS c, sum(coalesce(e.frequency,0)) AS f, \
+                    collect(DISTINCT e.entity_id) AS ids",
+        )
+        .fetch_all()
+        .await
+        .unwrap();
+    let row = r.rows().first().unwrap();
+    assert_eq!(
+        row.get::<i64>("c").unwrap(),
+        1,
+        "alice rows must collapse to 1"
+    );
+    assert_eq!(row.get::<i64>("f").unwrap(), 5, "frequency must sum (2+3)");
+
+    // Both edges repointed onto the single survivor.
+    let surv = session
+        .query_with("MATCH (e:Entity {name: 'alice'}) RETURN id(e) AS vid")
+        .fetch_all()
+        .await
+        .unwrap();
+    let survivor: i64 = surv.rows().first().unwrap().get("vid").unwrap();
+    assert!(survivor == nid_a || survivor == nid_b);
+    let edges = session
+        .query_with(
+            "MATCH (:Message)-[r:MENTIONS]->(e:Entity {name: 'alice'}) \
+             RETURN count(r) AS m",
+        )
+        .fetch_all()
+        .await
+        .unwrap();
+    let er = edges.rows().first().unwrap();
+    assert_eq!(
+        er.get::<i64>("m").unwrap(),
+        2,
+        "both MENTIONS edges must repoint to the single survivor"
+    );
+
+    // Canonical id is set; Topics dropped.
+    let idrow = session
+        .query_with("MATCH (e:Entity {name:'alice'}) RETURN e.entity_id AS eid")
+        .fetch_all()
+        .await
+        .unwrap();
+    assert_eq!(
+        idrow.rows().first().unwrap().get::<String>("eid").unwrap(),
+        canonical
+    );
+    let topics = session
+        .query_with("MATCH (t:Topic) RETURN count(t) AS c")
+        .fetch_all()
+        .await
+        .unwrap();
+    assert_eq!(topics.rows().first().unwrap().get::<i64>("c").unwrap(), 0);
+
+    // Idempotent: a second pass migrates nothing new.
+    let report2 = kb.migrate_entity_ids_to_canonical().await.unwrap();
+    assert_eq!(report2.migrated, 0, "second run must be a no-op");
+
+    kb.shutdown().await.unwrap();
+}
+
+/// #6: `merge_artifact_content` must be idempotent under contention.
+/// 16 concurrent callers with the same `content_id` must resolve to one
+/// `ArtifactContent` row (not N duplicates) and all return the same id.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_merge_artifact_content_concurrent_single_row() {
+    use uniko_store::storage::blob::MergeContent;
+    let kb = test_kb().await;
+    let content_id = KnowledgeBase::sha256_hex(b"the same content");
+
+    const SPAWNS: usize = 16;
+    let mut handles = Vec::new();
+    for _ in 0..SPAWNS {
+        let kb_c = kb.clone();
+        let cid = content_id.clone();
+        handles.push(tokio::spawn(async move {
+            kb_c.merge_artifact_content(MergeContent {
+                content_id: cid,
+                bytes: Some(b"the same content".to_vec()),
+                uri: None,
+                mime: "text/plain".into(),
+                size: 16,
+                perceptual_hash: None,
+                audio_fingerprint: None,
+            })
+            .await
+            .unwrap()
+        }));
+    }
+    let mut ids = Vec::new();
+    for h in handles {
+        ids.push(h.await.unwrap());
+    }
+    let first = ids[0];
+    assert!(
+        ids.iter().all(|&id| id == first),
+        "merge_artifact_content produced distinct node ids under contention: {ids:?}",
+    );
+
+    let session = kb.db().session();
+    let q = session
+        .query_with("MATCH (c:ArtifactContent {content_id: $cid}) RETURN count(c) AS c")
+        .param("cid", content_id)
+        .fetch_all()
+        .await
+        .unwrap();
+    let count: i64 = q.rows().first().unwrap().get("c").unwrap();
+    assert_eq!(
+        count, 1,
+        "merge_artifact_content created {count} duplicate rows"
+    );
+
+    kb.shutdown().await.unwrap();
+}
+
+/// `transact_with_retry` must converge concurrent read-modify-write
+/// increments under SSI contention with no lost updates: 16 writers each
+/// do `n = n + 1`; conflicting commits are retried until the final value
+/// equals the writer count.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_transact_with_retry_converges_under_contention() {
+    let kb = test_kb().await;
+    let mut seed = HashMap::new();
+    seed.insert("participant_id".into(), Value::String("hot".into()));
+    seed.insert("kind".into(), Value::String("agent".into()));
+    seed.insert("n".into(), Value::Int(0));
+    kb.create_node("Participant", &seed).await.unwrap();
+
+    const WRITERS: i64 = 16;
+    let mut handles = Vec::new();
+    for _ in 0..WRITERS {
+        let kb_c = kb.clone();
+        handles.push(tokio::spawn(async move {
+            kb_c.transact_with_retry(
+                uni_db::RetryOptions {
+                    max_attempts: 200,
+                    ..Default::default()
+                },
+                move |tx| async move {
+                    let r = async {
+                        tx.execute_with(
+                            "MATCH (p:Participant {participant_id: 'hot'}) SET p.n = p.n + 1",
+                        )
+                        .run()
+                        .await?;
+                        Ok(())
+                    }
+                    .await;
+                    (tx, r)
+                },
+            )
+            .await
+        }));
+    }
+    for h in handles {
+        h.await.unwrap().unwrap();
+    }
+
+    let session = kb.db().session();
+    let q = session
+        .query_with("MATCH (p:Participant {participant_id: 'hot'}) RETURN p.n AS n")
+        .fetch_all()
+        .await
+        .unwrap();
+    let n: i64 = q.rows().first().unwrap().get("n").unwrap();
+    assert_eq!(n, WRITERS, "lost updates under contention: n={n}");
 
     kb.shutdown().await.unwrap();
 }

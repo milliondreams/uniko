@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use uni_db::Value;
 
 use uniko_memory::policy::{Viewer, filter_bundle, visibility_admits};
-use uniko_memory::recall::{ContextBundle, RecallItem, RecallTier};
+use uniko_memory::recall::{
+    ContextBundle, RecallConfig, RecallItem, RecallTier, ViewerScope, recall,
+};
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
@@ -154,4 +156,81 @@ async fn filter_bundle_leaves_non_policy_items_alone() {
         .expect("filter");
     let types: Vec<&str> = bundle.items.iter().map(|i| i.node_type.as_str()).collect();
     assert_eq!(types, vec!["Message"]);
+}
+
+/// Seed a Fact with distinctive `object` text plus a visibility scope.
+async fn mk_fact_with_object(
+    kb: &KnowledgeBase,
+    fid: &str,
+    object: &str,
+    visibility: Option<&str>,
+) -> i64 {
+    let mut props = HashMap::new();
+    props.insert("subject".into(), Value::String("project".into()));
+    props.insert("predicate".into(), Value::String("status_is".into()));
+    props.insert("object".into(), Value::String(object.into()));
+    if let Some(v) = visibility {
+        props.insert("visibility".into(), Value::String(v.into()));
+    }
+    kb.merge_node(labels::FACT, "fact_id", fid, &props)
+        .await
+        .expect("fact")
+}
+
+/// #5: `recall()` must apply access control when given a viewer. A
+/// `private:alice` Fact that surfaces for an unrestricted recall must be
+/// excluded when the same recall runs as viewer `bob`; a public Fact
+/// stays. Proves recall() actually invokes `filter_bundle` (the fail-open
+/// gap). Skips if the recall infra can't surface Facts in this env.
+#[tokio::test]
+async fn recall_applies_viewer_scope_filter() {
+    let kb = kb().await;
+    let _alice = mk_participant(&kb, "alice").await;
+    let _bob = mk_participant(&kb, "bob").await;
+
+    let query = "quarterly revenue outlook";
+    mk_fact_with_object(&kb, "f-public", query, Some("public")).await;
+    mk_fact_with_object(&kb, "f-private", query, Some("private:alice")).await;
+
+    let unrestricted = RecallConfig {
+        viewer: ViewerScope::Unrestricted,
+        ..RecallConfig::default()
+    };
+    let res = recall(&kb, query, &unrestricted).await;
+    if matches!(res, Err(uniko_store::UnikoError::Embedding(_))) {
+        eprintln!("skipping: embedding unavailable");
+        return;
+    }
+    let open_bundle = res.expect("unrestricted recall");
+    let private_nid = fact_id(&kb, "f-private").await;
+    let private_in_open = open_bundle.items.iter().any(|i| i.node_id == private_nid);
+    if !private_in_open {
+        eprintln!("skipping: recall did not surface Facts in this env (no embeddings/index)");
+        return;
+    }
+
+    // As viewer bob, the private:alice fact must be filtered out; public stays.
+    let public_nid = fact_id(&kb, "f-public").await;
+    let scoped = RecallConfig {
+        viewer: ViewerScope::As(Viewer::new(&kb, "bob").await.expect("viewer")),
+        ..RecallConfig::default()
+    };
+    let scoped_bundle = recall(&kb, query, &scoped).await.expect("scoped recall");
+    assert!(
+        !scoped_bundle.items.iter().any(|i| i.node_id == private_nid),
+        "private:alice Fact must be excluded for viewer bob"
+    );
+    assert!(
+        scoped_bundle.items.iter().any(|i| i.node_id == public_nid),
+        "public Fact must remain visible to viewer bob"
+    );
+}
+
+/// Resolve a Fact's internal node id by its `fact_id`.
+async fn fact_id(kb: &KnowledgeBase, fid: &str) -> i64 {
+    kb.get_node_by_ext_id(labels::FACT, "fact_id", fid)
+        .await
+        .expect("lookup")
+        .expect("fact exists")
+        .0
 }

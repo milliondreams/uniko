@@ -191,6 +191,60 @@ async fn record_procedure_use_demotes_and_repromotes() {
     assert_eq!(st, STATUS_ACTIVE, "should be re-promoted after wins");
 }
 
+/// #7 GATE: invoking the registered `sequence_detector` rule by name via
+/// the QUERY goal-query form (`kb.query_rule`) must return rows — proving
+/// the rule-by-name path works WITHOUT the hand-written Cypher fallback.
+/// If this fails, the fallback must stay (see RC12).
+#[tokio::test]
+async fn query_rule_sequence_detector_returns_rows() {
+    let kb = kb().await;
+    seed_participant(&kb, "gate").await;
+
+    let base = Utc::now() - Duration::hours(1);
+    for i in 0..2 {
+        record_seq(
+            &kb,
+            "gate",
+            "investigate",
+            "implement",
+            base + Duration::minutes(i * 5),
+        )
+        .await
+        .expect("record_seq");
+    }
+
+    // promote registers the rule; call it once so the rule is in the runtime.
+    promote_procedures_once(&kb, "gate", LifecycleConfig::default())
+        .await
+        .expect("promote (registers the rule)");
+
+    let mut params: HashMap<String, Value> = HashMap::new();
+    params.insert("agent_id".into(), Value::String("gate".into()));
+    let rows = kb
+        .query_rule(
+            "sequence_detector",
+            &["action_a", "action_b", "success_count"],
+            &params,
+        )
+        .await
+        .expect("query_rule must succeed against the registered rule");
+
+    assert!(
+        !rows.is_empty(),
+        "QUERY sequence_detector returned no rows; the rule-by-name path is not usable"
+    );
+    let row = &rows[0];
+    assert_eq!(
+        row.get("action_a").and_then(|v| v.as_str()),
+        Some("investigate")
+    );
+    assert_eq!(
+        row.get("action_b").and_then(|v| v.as_str()),
+        Some("implement")
+    );
+    assert_eq!(row.get("success_count").and_then(Value::as_i64), Some(2));
+}
+
 async fn read_status(kb: &KnowledgeBase, pid: &str) -> String {
     let session = kb.db().session();
     let rows = session

@@ -14,6 +14,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use uni_db::Value;
 
 use uniko_memory::recall::intent::{build_intent, build_intent_at};
+use uniko_memory::recall::{RecallConfig, recall};
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::btic::btic_active;
@@ -135,6 +136,79 @@ async fn observation_in_window_is_recallable() {
         !ids.contains(&"obs-aug".to_string()),
         "August observation should NOT be in window, got {ids:?}"
     );
+}
+
+/// #4: the public `recall()` must thread `RecallConfig.reference_ts`
+/// into intent building, so a relative temporal phrase resolves against
+/// the question's anchor (not wall-clock now). Seed an Observation in
+/// May 2025; recall "what happened in may" with an anchor near that date
+/// surfaces it, while the default (`None` → now, ~2026) does not.
+#[tokio::test]
+async fn recall_threads_reference_ts_into_temporal_window() {
+    let kb = kb().await;
+
+    let may_anchor: DateTime<Utc> = Utc.with_ymd_and_hms(2025, 5, 15, 10, 0, 0).unwrap();
+    let mut props: HashMap<String, Value> = HashMap::new();
+    props.insert("observation_id".into(), Value::String("obs-ref-may".into()));
+    props.insert(
+        "content".into(),
+        Value::String("ATE_RAMEN at the new place".into()),
+    );
+    props.insert("subject".into(), Value::String("user".into()));
+    props.insert("predicate".into(), Value::String("did".into()));
+    props.insert("object".into(), Value::String("ramen".into()));
+    props.insert("temporal_anchor".into(), datetime_value(may_anchor));
+    props.insert("observed_at".into(), datetime_value(may_anchor));
+    kb.create_node(labels::OBSERVATION, &props)
+        .await
+        .expect("create Observation");
+
+    let target_score = |b: &uniko_memory::recall::ContextBundle| -> Option<f64> {
+        b.items
+            .iter()
+            .find(|i| i.content.contains("ATE_RAMEN"))
+            .map(|i| i.score)
+    };
+
+    // In-window anchor: "in may" resolves to May 2025, which overlaps the
+    // observation, so the Phase-2 temporal channel contributes a hit and
+    // boosts its fused score.
+    let in_window = RecallConfig {
+        reference_ts: Some(Utc.with_ymd_and_hms(2025, 7, 1, 12, 0, 0).unwrap()),
+        ..RecallConfig::default()
+    };
+    let res = recall(&kb, "what happened in may", &in_window).await;
+    if is_embedding_unavailable(&res) {
+        eprintln!("skipping: embedding unavailable");
+        return;
+    }
+    let bundle_in = res.expect("recall, in-window anchor");
+    let score_in =
+        target_score(&bundle_in).expect("in-window recall should surface the May 2025 observation");
+
+    // Out-of-window anchor: "in may" resolves to May 1990, which does NOT
+    // overlap the observation, so the temporal channel contributes nothing
+    // for it. Same query/content/weights → the ONLY difference is the
+    // reference_ts, which proves recall() actually threads it.
+    let out_window = RecallConfig {
+        reference_ts: Some(Utc.with_ymd_and_hms(1990, 7, 1, 12, 0, 0).unwrap()),
+        ..RecallConfig::default()
+    };
+    let bundle_out = recall(&kb, "what happened in may", &out_window)
+        .await
+        .expect("recall, out-of-window anchor");
+
+    // If present in both, the in-window temporal boost must make its score
+    // strictly higher (if recall ignored reference_ts the scores would
+    // match). If it's dropped entirely without the temporal contribution,
+    // that also proves reference_ts changed the outcome.
+    if let Some(score_out) = target_score(&bundle_out) {
+        assert!(
+            score_in > score_out,
+            "in-window anchor must boost the observation's score via the temporal channel: \
+             in={score_in} out={score_out}"
+        );
+    }
 }
 
 #[tokio::test]

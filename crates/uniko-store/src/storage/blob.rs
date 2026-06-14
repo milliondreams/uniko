@@ -93,6 +93,18 @@ impl KnowledgeBase {
         // host-side MATCH-or-CREATE: cheap because content_id is Hash-
         // indexed, and idempotent because the second leg short-circuits
         // on an existing row.
+        //
+        // The check-and-create must be atomic per content_id: without a
+        // guard, two concurrent ingests of the same content both read
+        // "absent" and both CREATE a duplicate row (this method is called
+        // per-item under the spawn-per-message ingest worker). Hold the
+        // striped lock across the existence re-read AND the create, like
+        // `merge_node`.
+        let _rmw_guard = self
+            .rmw_locks
+            .lock(&crate::locks::content_lock_key(&spec.content_id))
+            .await;
+
         let session = self.db.session();
         let existing = session
             .query_with("MATCH (c:ArtifactContent {content_id: $cid}) RETURN id(c) AS vid LIMIT 1")
@@ -104,42 +116,49 @@ impl KnowledgeBase {
             return Ok(vid);
         }
 
-        let tx = session.tx().await?;
-
         let now = Utc::now();
-        let result = tx
-            .query_with(
-                "CREATE (c:ArtifactContent {
-                    content_id: $cid, bytes: $bytes, uri: $uri,
-                    mime: $mime, size: $size, perceptual_hash: $phash,
-                    audio_fingerprint: $afp, created_at: $created_at
-                }) RETURN id(c) AS vid",
-            )
-            .param("cid", Value::String(spec.content_id.clone()))
-            .param("bytes", spec.bytes.map(Value::Bytes).unwrap_or(Value::Null))
-            .param("uri", spec.uri.map(Value::String).unwrap_or(Value::Null))
-            .param("mime", Value::String(spec.mime.clone()))
-            .param("size", Value::Int(spec.size))
-            .param(
-                "phash",
-                spec.perceptual_hash.map(Value::Int).unwrap_or(Value::Null),
-            )
-            .param(
-                "afp",
-                spec.audio_fingerprint
-                    .map(Value::Bytes)
-                    .unwrap_or(Value::Null),
-            )
-            .param("created_at", datetime_value(now))
-            .fetch_all()
-            .await?;
-        let row = result
-            .rows()
-            .first()
-            .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
-        let vid: i64 = row.get("vid")?;
-        tx.commit().await?;
-        Ok(vid)
+        self.transact_with_retry(uni_db::RetryOptions::default(), move |tx| {
+            let spec = spec.clone();
+            async move {
+                let r = async {
+                    let result = tx
+                        .query_with(
+                            "CREATE (c:ArtifactContent {
+                                content_id: $cid, bytes: $bytes, uri: $uri,
+                                mime: $mime, size: $size, perceptual_hash: $phash,
+                                audio_fingerprint: $afp, created_at: $created_at
+                            }) RETURN id(c) AS vid",
+                        )
+                        .param("cid", Value::String(spec.content_id.clone()))
+                        .param("bytes", spec.bytes.map(Value::Bytes).unwrap_or(Value::Null))
+                        .param("uri", spec.uri.map(Value::String).unwrap_or(Value::Null))
+                        .param("mime", Value::String(spec.mime.clone()))
+                        .param("size", Value::Int(spec.size))
+                        .param(
+                            "phash",
+                            spec.perceptual_hash.map(Value::Int).unwrap_or(Value::Null),
+                        )
+                        .param(
+                            "afp",
+                            spec.audio_fingerprint
+                                .map(Value::Bytes)
+                                .unwrap_or(Value::Null),
+                        )
+                        .param("created_at", datetime_value(now))
+                        .fetch_all()
+                        .await?;
+                    let row = result
+                        .rows()
+                        .first()
+                        .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
+                    let vid: i64 = row.get("vid")?;
+                    Ok(vid)
+                }
+                .await;
+                (tx, r)
+            }
+        })
+        .await
     }
 
     /// Fetch the bytes for a content node, dispatching on backend.

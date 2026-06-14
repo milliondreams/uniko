@@ -320,28 +320,30 @@ async fn link_action_entities(kb: &KnowledgeBase, action_node: NodeId, text: &st
 /// [`uniko_store::id::stable_hex64`] with a NUL separator.
 #[cfg(feature = "onnx")]
 fn stable_entity_id(name: &str, entity_type: NerEntityType) -> String {
-    uniko_store::id::stable_hex64("ent", |h| {
-        h.update(name.to_lowercase().as_bytes());
-        h.update(b"\x00");
-        h.update(entity_type_str(entity_type).as_bytes());
-    })
+    // Canonical shared derivation (issue #1) so an entity mentioned by an
+    // Action converges with the same entity mentioned in a message.
+    uniko_store::id::entity_id(name, entity_type_str(entity_type))
 }
 
 /// Stable string representation of [`NerEntityType`] for storage on
 /// the Entity node's `entity_type` property.
 #[cfg(feature = "onnx")]
 fn entity_type_str(t: NerEntityType) -> &'static str {
+    // Canonical shared type vocabulary (issue #1): lowercase, aligned with
+    // `uniko_extract`'s `EntityType::as_str()` so overlapping types
+    // (person/organization/location/date) produce identical entity_ids
+    // across the message-dedup and action-linking paths.
     match t {
-        NerEntityType::Person => "PERSON",
-        NerEntityType::Organization => "ORG",
-        NerEntityType::Location => "LOC",
-        NerEntityType::Date => "DATE",
-        NerEntityType::Numeric => "NUM",
-        NerEntityType::Event => "EVENT",
-        NerEntityType::Product => "PRODUCT",
-        NerEntityType::WorkOfArt => "WORK_OF_ART",
-        NerEntityType::Group => "GROUP",
-        NerEntityType::Misc => "MISC",
+        NerEntityType::Person => "person",
+        NerEntityType::Organization => "organization",
+        NerEntityType::Location => "location",
+        NerEntityType::Date => "date",
+        NerEntityType::Numeric => "numeric",
+        NerEntityType::Event => "event",
+        NerEntityType::Product => "product",
+        NerEntityType::WorkOfArt => "work_of_art",
+        NerEntityType::Group => "group",
+        NerEntityType::Misc => "misc",
     }
 }
 

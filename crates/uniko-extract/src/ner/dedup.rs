@@ -77,6 +77,10 @@ pub async fn upsert_entities(
     }
     let phase_start = std::time::Instant::now();
     let prep = prepare_entity_upsert(kb, deduped).await?;
+    // Hold the per-entity RMW locks across the tx + commit (see
+    // `apply_entity_upsert` / `lock_entity_ids`): lock before opening the tx
+    // so the snapshot reflects prior committed entities.
+    let _entity_guards = kb.lock_entity_ids(&prep.entity_ids).await;
     let session = kb.db().session();
     let tx = session.tx().await?;
     let matches = apply_entity_upsert(kb, &tx, source_node_id, prep).await?;
@@ -96,68 +100,48 @@ pub async fn upsert_entities(
     Ok(matches)
 }
 
-/// Pre-tx prep: assemble `EntityUpsertPrep` containing (a) the existing
-/// entity-id → (nid, freq, conf) map from a Phase-1 read and (b) the
-/// raw input ready for the apply step. Designed to be called BEFORE
-/// the atomic-ingest tx is opened so the read uses a fresh session
-/// snapshot and never collides with the writer side.
+/// Pre-tx prep: compute the canonical `entity_id`s for the batch and
+/// snapshot `now`. The caller uses the ids to acquire the per-entity RMW
+/// locks ([`KnowledgeBase::lock_entity_ids`]) BEFORE opening the write
+/// tx; the authoritative existence read then happens in
+/// [`apply_entity_upsert`] *inside* that tx and *under* those locks.
+///
+/// (Previously this did the existence read here, outside any tx — but a
+/// pre-tx, pre-lock read is non-authoritative: a concurrent ingest could
+/// create the same entity in the gap before the writer locked and opened
+/// its tx, so the writer would still CREATE a duplicate. The read now
+/// lives in `apply` on a post-lock snapshot. See issue #1 / RC2.)
 pub async fn prepare_entity_upsert(
-    kb: &KnowledgeBase,
+    _kb: &KnowledgeBase,
     deduped: Vec<(RawEntity, u32)>,
 ) -> uniko_store::Result<EntityUpsertPrep> {
+    // Canonical entity_id (issue #1): the single shared derivation, keyed on
+    // (lower name, canonical type). `EntityType::as_str()` already yields the
+    // shared lowercase vocabulary, so overlapping types unify with the
+    // action/consolidation paths.
     let entity_ids: Vec<String> = deduped
         .iter()
-        .map(|(entity, _)| format!("{}:{}", entity.entity_type.as_str(), &entity.canonical_name))
+        .map(|(entity, _)| {
+            uniko_store::id::entity_id(&entity.canonical_name, entity.entity_type.as_str())
+        })
         .collect();
-
-    // Phase 1: batched MATCH (read-only) against a fresh session.
-    // Done outside any tx so it doesn't extend the eventual write tx's
-    // hold time. The atomic ingest path opens its tx AFTER this read.
-    let existing = if entity_ids.is_empty() {
-        HashMap::new()
-    } else {
-        let eids_list: Vec<Value> = entity_ids.iter().cloned().map(Value::String).collect();
-        let match_cypher = "\
-            UNWIND $eids AS eid \
-            MATCH (n:Entity {entity_id: eid}) \
-            RETURN eid AS entity_id, id(n) AS nid, \
-                   n.frequency AS frequency, n.confidence AS confidence";
-        let session = kb.db().session();
-        let match_result = session
-            .query_with(match_cypher)
-            .param("eids", Value::List(eids_list))
-            .fetch_all()
-            .await?;
-        let mut existing: HashMap<String, (NodeId, i64, f64)> =
-            HashMap::with_capacity(match_result.rows().len());
-        for row in match_result.rows() {
-            let entity_id: String = row.get("entity_id")?;
-            let nid: i64 = row.get("nid")?;
-            let frequency: i64 = row.get("frequency")?;
-            let confidence: f64 = row.get("confidence")?;
-            existing.insert(entity_id, (nid, frequency, confidence));
-        }
-        existing
-    };
 
     Ok(EntityUpsertPrep {
         deduped,
         entity_ids,
-        existing,
         now_value: datetime_value(chrono::Utc::now()),
     })
 }
 
-/// Output of [`prepare_entity_upsert`]. Holds the resolved
-/// new-vs-existing split plus the raw inputs needed at apply time.
+/// Output of [`prepare_entity_upsert`]. Holds the new-vs-existing split
+/// inputs needed at apply time. The existence map is *not* precomputed
+/// here — `apply_entity_upsert` reads it authoritatively under lock.
 #[derive(Debug)]
 pub struct EntityUpsertPrep {
     /// Raw entities (with mention counts) to upsert, in input order.
     pub deduped: Vec<(RawEntity, u32)>,
-    /// Pre-computed `"{type}:{canonical}"` ids, parallel to `deduped`.
+    /// Pre-computed canonical entity ids, parallel to `deduped`.
     pub entity_ids: Vec<String>,
-    /// Entities already in the graph: id → (nid, freq, conf).
-    pub existing: HashMap<String, (NodeId, i64, f64)>,
     /// `Utc::now()` snapped at prep time; used as `last_seen`/`first_seen`.
     pub now_value: Value,
 }
@@ -188,9 +172,40 @@ pub async fn apply_entity_upsert(
     let EntityUpsertPrep {
         deduped,
         entity_ids,
-        existing,
         now_value,
     } = prep;
+
+    // Authoritative existence read, INSIDE the caller's tx and UNDER the
+    // per-entity RMW locks the caller holds (see `lock_entity_ids`). The
+    // tx snapshot was taken after the locks were acquired, so this read
+    // reflects every committed entity and no concurrent writer can create
+    // one of `entity_ids` until we commit and release. This is what makes
+    // the check-then-create below race-free (issue #1 / RC2).
+    let existing: HashMap<String, (NodeId, i64, f64)> = if entity_ids.is_empty() {
+        HashMap::new()
+    } else {
+        let eids_list: Vec<Value> = entity_ids.iter().cloned().map(Value::String).collect();
+        let match_cypher = "\
+            UNWIND $eids AS eid \
+            MATCH (n:Entity {entity_id: eid}) \
+            RETURN eid AS entity_id, id(n) AS nid, \
+                   n.frequency AS frequency, n.confidence AS confidence";
+        let match_result = tx
+            .query_with(match_cypher)
+            .param("eids", Value::List(eids_list))
+            .fetch_all()
+            .await?;
+        let mut map: HashMap<String, (NodeId, i64, f64)> =
+            HashMap::with_capacity(match_result.rows().len());
+        for row in match_result.rows() {
+            let entity_id: String = row.get("entity_id")?;
+            let nid: i64 = row.get("nid")?;
+            let frequency: i64 = row.get("frequency")?;
+            let confidence: f64 = row.get("confidence")?;
+            map.insert(entity_id, (nid, frequency, confidence));
+        }
+        map
+    };
 
     // Partition into (existing → batched UPDATE) and (new → batched
     // CREATE). `matches` is pre-filled with the right length so we can

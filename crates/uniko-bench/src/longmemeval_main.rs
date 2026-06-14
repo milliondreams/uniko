@@ -289,6 +289,7 @@ async fn main() -> Result<()> {
                     &evidence_map,
                     token_budget,
                     llm_alias_owned.as_deref(),
+                    Some(&item.question_date),
                 )
                 .await
                 {

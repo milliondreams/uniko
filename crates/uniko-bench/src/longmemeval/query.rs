@@ -40,6 +40,15 @@ pub struct LmeQueryResult {
     pub generation_latency_ms: u64,
 }
 
+/// Parse a LongMemEval `question_date` (`"%Y/%m/%d (%a) %H:%M"`, e.g.
+/// `"2023/04/10 (Mon) 23:07"`) into a UTC instant. Returns `None` on any
+/// parse failure so recall falls back to `Utc::now()`.
+fn parse_question_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y/%m/%d (%a) %H:%M")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
 /// Run recall for a LongMemEval question and optionally generate an answer.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_lme_query(
@@ -51,12 +60,21 @@ pub async fn run_lme_query(
     evidence_map: &EvidenceMap,
     token_budget: usize,
     llm_alias: Option<&str>,
+    question_date: Option<&str>,
 ) -> Result<LmeQueryResult> {
+    // The question's anchor timestamp lets the Phase-2 temporal channel
+    // resolve relative phrases ("last May") against when the question was
+    // asked, not wall-clock now — essential for a 2-yr-old corpus. Parse
+    // the LongMemEval `"%Y/%m/%d (%a) %H:%M"` format; on failure fall back
+    // to `None` (resolves against now()).
+    let reference_ts = question_date.and_then(parse_question_date);
+
     // Honour the KB's `UnikoConfig` (reranker, recall weights, min_score,
     // …); only the per-call token budget is overridden from the bench
     // CLI. Mirrors the LoCoMo bench at `query.rs:62`.
     let recall_config = RecallConfig {
         token_budget,
+        reference_ts,
         ..RecallConfig::from_uniko_config(kb.config())
     };
 

@@ -474,12 +474,21 @@ impl KnowledgeBase {
                 SET n.observation_count = u.new_count, \
                     n.confidence = u.new_confidence, \
                     n.valid_at = COALESCE(u.valid_at, n.valid_at)";
-            let tx = session.tx().await?;
-            tx.execute_with(update_cypher)
-                .param("updates", Value::List(updates_list))
-                .run()
-                .await?;
-            tx.commit().await?;
+            self.transact_with_retry(uni_db::RetryOptions::default(), move |tx| {
+                let updates_list = updates_list.clone();
+                async move {
+                    let r = async {
+                        tx.execute_with(update_cypher)
+                            .param("updates", Value::List(updates_list))
+                            .run()
+                            .await?;
+                        Ok(())
+                    }
+                    .await;
+                    (tx, r)
+                }
+            })
+            .await?;
         }
 
         // Fan resolved (fact_id → node_id) back out across every
@@ -864,10 +873,16 @@ impl KnowledgeBase {
                 (nid, c, u)
             }
             None => {
+                // Implicit create when NER missed the subject. Use the canonical
+                // entity_id scheme (issue #1) — no type is available here, so
+                // classify as `misc`. (Lookup above is by `name`, so an existing
+                // typed entity is found and updated instead of duplicated.)
+                let entity_id = crate::id::entity_id(key, "misc");
                 let mut props: HashMap<String, Value> = HashMap::new();
                 props.insert("name".into(), Value::String(key.to_string()));
+                props.insert("entity_type".into(), Value::String("misc".into()));
                 let nid = self
-                    .merge_node(labels::ENTITY, "entity_id", key, &props)
+                    .merge_node(labels::ENTITY, "entity_id", &entity_id, &props)
                     .await?;
                 (nid, 0, false)
             }

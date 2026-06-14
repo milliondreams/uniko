@@ -82,6 +82,27 @@ pub fn stable_hex64(prefix: &str, feed: impl FnOnce(&mut StableHasher)) -> Strin
     format!("{prefix}_{lead:016x}")
 }
 
+/// Canonical, deterministic `entity_id` for an `:Entity` node.
+///
+/// This is the **single source of truth** for entity identity across every
+/// writer (message dedup, action linking, consolidation invalidation). Two
+/// entities are the same iff their lower-cased `name` and `canonical_type`
+/// match, so all callers MUST pass a type drawn from the one shared
+/// vocabulary (`person`, `organization`, `location`, `date`, …) — see each
+/// NER enum's `canonical_type()` mapper — rather than their own per-enum
+/// string. Mixing vocabularies is exactly the divergence (issue #1) this
+/// function exists to prevent.
+///
+/// Form: `"ent_{u64:016x}"` over `lower(name) \0 canonical_type`.
+#[must_use]
+pub fn entity_id(name: &str, canonical_type: &str) -> String {
+    stable_hex64("ent", |h| {
+        h.update(name.to_lowercase().as_bytes());
+        h.update(b"\x00");
+        h.update(canonical_type.as_bytes());
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

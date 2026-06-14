@@ -11491,8 +11491,12 @@ version = "2.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
+ "bytes",
  "chrono",
  "log",
+ "object_store",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "uni-common",

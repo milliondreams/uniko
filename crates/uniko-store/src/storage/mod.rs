@@ -313,6 +313,111 @@ impl KnowledgeBase {
         &self.db
     }
 
+    /// Run `f` inside a transaction, automatically retrying transient
+    /// storage conflicts (SSI aborts, constraint/transaction conflicts,
+    /// commit/lock-timeout contention) with capped exponential backoff.
+    ///
+    /// This makes uni-db's SSI contention story reachable from uniko: a
+    /// retriable failure — surfaced as [`UnikoError::Conflict`] by the
+    /// `From<uni_db::UniError>` boundary — re-runs the closure from a fresh
+    /// transaction instead of failing the caller. Non-retriable errors
+    /// propagate immediately.
+    ///
+    /// The closure receives the [`uni_db::Transaction`] by value and returns it
+    /// alongside a uniko [`Result`] (`(tx, result)`); the wrapper then commits
+    /// or rolls back. Threading the transaction by value (rather than by
+    /// borrow) keeps the bound free of higher-ranked lifetimes, so the closure
+    /// can call the crate's validated `*_in_tx` write helpers AND remain `Send`
+    /// when the whole operation is spawned (e.g. the ingest workers). Because
+    /// the closure re-runs per attempt, any input it consumes must be re-usable
+    /// across attempts (capture by `Copy` reference or re-clone inside).
+    ///
+    /// In-process [`crate::locks::StripedLocks`] guards must be acquired
+    /// *outside* this call (lock first, retry the tx body inside) so the
+    /// single-writer-per-key invariant holds across all attempts.
+    ///
+    /// `opts` reuses [`uni_db::RetryOptions`] for a single shared config type.
+    /// (uni-db's own `Session::transact_with_retry` is not used directly
+    /// because its closure must return `uni_db::Result`, which cannot carry the
+    /// crate's validated-helper errors, and its backoff/metric internals are
+    /// not part of uni-db's public surface.)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Conflict`] if attempts are exhausted on a
+    /// retriable conflict, or another [`UnikoError`] for non-retriable
+    /// failures.
+    pub async fn transact_with_retry<F, Fut, T>(
+        &self,
+        opts: uni_db::RetryOptions,
+        mut f: F,
+    ) -> Result<T>
+    where
+        F: FnMut(uni_db::Transaction) -> Fut,
+        Fut: std::future::Future<Output = (uni_db::Transaction, Result<T>)> + Send,
+    {
+        let mut attempt: u32 = 1;
+        loop {
+            let tx = self.db.session().tx().await?;
+            let (tx, result) = f(tx).await;
+            match result {
+                Ok(value) => match tx.commit().await {
+                    Ok(_) => return Ok(value),
+                    // `commit` consumed `tx`; nothing to roll back.
+                    Err(e) => {
+                        let err = UnikoError::from(e);
+                        if err.is_retriable() && attempt < opts.max_attempts {
+                            attempt += 1;
+                            retry_backoff(&opts, attempt).await;
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                },
+                Err(err) if err.is_retriable() && attempt < opts.max_attempts => {
+                    tx.rollback();
+                    attempt += 1;
+                    retry_backoff(&opts, attempt).await;
+                }
+                Err(err) => {
+                    tx.rollback();
+                    return Err(err);
+                }
+            }
+            tracing::debug!(attempt, "retrying transaction after retriable conflict");
+        }
+    }
+
+    /// Acquire the per-entity RMW striped locks for `entity_ids`, in a
+    /// deadlock-free order, returning the held guards.
+    ///
+    /// Entity dedup is a check-then-create across a transaction the caller
+    /// owns. uni-db's `entity_id` index is non-unique, so two concurrent
+    /// ingests that both read "absent" would both CREATE a duplicate row
+    /// (an insert-phantom SSI does not catch — see `bugs/UNI_DB_WORKAROUNDS.md`
+    /// RC2). The caller must hold these guards across BOTH the existence
+    /// re-read AND the commit so a second writer cannot interleave; the guards
+    /// are dropped when the returned `Vec` goes out of scope (after commit).
+    /// Ids are de-duplicated and sorted so concurrent callers acquire shared
+    /// keys in the same order, preventing deadlock (mirrors
+    /// [`KnowledgeBase::batch_upsert_facts`]).
+    pub async fn lock_entity_ids(
+        &self,
+        entity_ids: &[String],
+    ) -> Vec<tokio::sync::MutexGuard<'_, ()>> {
+        let mut keys: Vec<Vec<u8>> = entity_ids
+            .iter()
+            .map(|id| crate::locks::entity_lock_key(id))
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        let mut guards = Vec::with_capacity(keys.len());
+        for k in &keys {
+            guards.push(self.rmw_locks.lock(k).await);
+        }
+        guards
+    }
+
     /// Runtime configuration.
     pub fn config(&self) -> &UnikoConfig {
         &self.config
@@ -334,6 +439,21 @@ impl KnowledgeBase {
 }
 
 // ── Internal helpers ────────────────────────────────────────────────
+
+/// Sleep before a retry attempt (`attempt == 2` is the first retry), using
+/// capped exponential backoff: `base_backoff * 2^(attempt-2)` clamped to
+/// `max_backoff`. Jitter is omitted deliberately — uniko runs against an
+/// embedded single-process engine where the hot RMW paths are already
+/// serialized by [`crate::locks::StripedLocks`], so retriable conflicts are
+/// rare and there is no thundering herd to de-correlate.
+async fn retry_backoff(opts: &uni_db::RetryOptions, attempt: u32) {
+    let steps = attempt.saturating_sub(2).min(20);
+    let delay = opts
+        .base_backoff
+        .saturating_mul(1u32 << steps)
+        .min(opts.max_backoff);
+    tokio::time::sleep(delay).await;
+}
 
 /// Load the xervo model catalog from a JSON file or build the default.
 ///

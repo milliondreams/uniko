@@ -43,14 +43,42 @@ pub enum UnikoError {
     #[error("timeout after {0}ms")]
     Timeout(u64),
 
+    /// A transient storage-layer concurrency conflict: an optimistic-concurrency
+    /// (SSI) abort, a constraint/transaction conflict, or commit/lock-timeout
+    /// contention. Re-running the operation from a fresh transaction may succeed.
+    /// The original uni-db message is preserved for diagnostics.
+    ///
+    /// This variant exists so callers can distinguish retriable contention from
+    /// permanent failures (which stay [`UnikoError::Storage`]); see
+    /// [`UnikoError::is_retriable`] and [`crate::KnowledgeBase::transact_with_retry`].
+    #[error("conflict (retriable): {0}")]
+    Conflict(String),
+
     /// Unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),
 }
 
+impl UnikoError {
+    /// Returns `true` when this error is a transient storage conflict that a
+    /// fresh transaction may win. Mirrors `uni_db::UniError::is_retriable`.
+    #[must_use]
+    pub fn is_retriable(&self) -> bool {
+        matches!(self, UnikoError::Conflict(_))
+    }
+}
+
 impl From<uni_db::UniError> for UnikoError {
     fn from(err: uni_db::UniError) -> Self {
-        UnikoError::Storage(err.to_string())
+        // Preserve uni-db's own retriability classification across the boundary
+        // instead of flattening every variant to an opaque Storage(String).
+        // `UniError` is `#[non_exhaustive]`, so we delegate to its classifier
+        // rather than enumerating variants here.
+        if err.is_retriable() {
+            UnikoError::Conflict(err.to_string())
+        } else {
+            UnikoError::Storage(err.to_string())
+        }
     }
 }
 
@@ -120,5 +148,48 @@ mod tests {
             }
             other => panic!("expected Storage, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_retriable_unidb_errors_map_to_conflict() {
+        // Every uni-db variant classified retriable must cross the boundary as a
+        // retriable UnikoError::Conflict — not get flattened into opaque Storage.
+        let retriable = vec![
+            uni_db::UniError::SerializationConflict {
+                message: "lost update".into(),
+            },
+            uni_db::UniError::ConstraintConflict {
+                message: "unique".into(),
+            },
+            uni_db::UniError::TransactionConflict {
+                message: "ww".into(),
+            },
+            uni_db::UniError::CommitTimeout {
+                tx_id: "tx-1".into(),
+                hint: "contended",
+            },
+            uni_db::UniError::LockTimeout { timeout_ms: 50 },
+        ];
+        for uni_err in retriable {
+            let err: UnikoError = uni_err.into();
+            assert!(
+                matches!(err, UnikoError::Conflict(_)),
+                "expected Conflict, got: {err:?}"
+            );
+            assert!(err.is_retriable(), "Conflict must be retriable: {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_non_retriable_unidb_error_maps_to_storage() {
+        let err: UnikoError = uni_db::UniError::Schema {
+            message: "no such label".into(),
+        }
+        .into();
+        assert!(
+            matches!(err, UnikoError::Storage(_)),
+            "expected Storage, got: {err:?}"
+        );
+        assert!(!err.is_retriable());
     }
 }

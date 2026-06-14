@@ -283,3 +283,42 @@ async fn test_atomic_no_partial_writes_on_validation_failure() {
         }
     }
 }
+
+/// #1 (CRITICAL): concurrent ingests that mention the SAME entity must
+/// not create duplicate `:Entity` rows. The entity-dedup hot path does a
+/// check-then-create across the ingest tx; without the per-entity RMW
+/// lock held across the commit, two spawn-per-message ingests both read
+/// "absent" and both CREATE. The email regex deterministically extracts
+/// exactly one entity (the address), so after N concurrent ingests there
+/// must be exactly ONE `:Entity`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_concurrent_ingest_same_entity_no_duplicate() {
+    let kb = test_kb().await;
+    const SPAWNS: usize = 16;
+
+    let mut handles = Vec::new();
+    for i in 0..SPAWNS {
+        let kb_c = kb.clone();
+        handles.push(tokio::spawn(async move {
+            // Distinct message_id (else idempotency skips); same session,
+            // same sender, same single entity (the email address).
+            let msg = test_message(
+                &format!("m-ent-{i}"),
+                "reach me at dedup@example.com",
+                "s-ent",
+                "p-ent",
+            );
+            let mut sc = SessionContext::new(msg.session_id.clone(), 0);
+            ingest_message_atomic(&kb_c, &msg, &mut sc).await.unwrap();
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+
+    let entity_count = count_label(&kb, "Entity").await;
+    assert_eq!(
+        entity_count, 1,
+        "concurrent ingests of the same entity created {entity_count} Entity rows (expected 1)"
+    );
+}

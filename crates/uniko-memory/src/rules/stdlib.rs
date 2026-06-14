@@ -51,15 +51,19 @@ const STDLIB_RULES: &[(&str, &str, &str, &str)] = &[
         "Detect recurring successful action sequences. When two actions \
          consistently follow each other with successful outcomes, surface \
          the pattern for procedural knowledge extraction.",
+        // Locy (not Cypher): one comma-joined MATCH (a second MATCH clause is
+        // a parse error), aggregate column is `expr AS name` (no `VALUE`
+        // keyword), and no $param in a post-FOLD HAVING (uni-db can't resolve
+        // it). The promotion threshold is applied by the consumer
+        // (cortex::procedures), so the rule surfaces all pairs. See RC12.
         "CREATE RULE sequence_detector AS \
-         MATCH (e1:Episode)-[:FOLLOWED_BY]->(e2:Episode) \
-         MATCH (e1)-[:RECORDED_BY]->(p:Participant {participant_id: $agent_id}) \
+         MATCH (e1:Episode)-[:FOLLOWED_BY]->(e2:Episode), \
+               (e1)-[:RECORDED_BY]->(p:Participant {participant_id: $agent_id}) \
          WHERE e1.outcome = 'success' \
            AND e2.outcome = 'success' \
          FOLD n = COUNT(*) \
-         WHERE n >= $promotion_threshold \
-         YIELD KEY e1.action_type, KEY e2.action_type, \
-               VALUE n AS success_count",
+         YIELD KEY e1.action_type AS action_a, KEY e2.action_type AS action_b, \
+               n AS success_count",
     ),
     (
         "stdlib_contradiction_detector",

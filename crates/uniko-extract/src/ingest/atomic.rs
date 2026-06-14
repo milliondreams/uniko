@@ -121,12 +121,21 @@ pub async fn ingest_message_atomic(
     let nlp_results = ext.nlp_results;
     let extract_ms = extract_start.elapsed().as_millis();
 
-    // 4. Read-only DB: Phase 1 MATCH on entities.
+    // 4. Compute canonical entity ids for this batch.
     let prep_start = std::time::Instant::now();
     let entity_prep: EntityUpsertPrep = prepare_entity_upsert(kb, deduped).await?;
     let prep_read_ms = prep_start.elapsed().as_millis();
 
-    // 5. Open tx.
+    // 5. Acquire the per-entity RMW locks BEFORE opening the tx, and hold
+    //    them across the commit (step 9). entity_id is non-unique in uni-db,
+    //    so without this two concurrent ingests of the same entity both read
+    //    "absent" and both CREATE a duplicate row. Locking before tx-open
+    //    means our snapshot (and the authoritative re-read in
+    //    `apply_entity_upsert`) reflects any entity a prior holder committed.
+    //    Guards drop at function exit, after `tx.commit()`.
+    let _entity_guards = kb.lock_entity_ids(&entity_prep.entity_ids).await;
+
+    // 6. Open tx (snapshot taken after the entity locks are held).
     let session = kb.db().session();
     let tx = session
         .tx()

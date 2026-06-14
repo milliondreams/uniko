@@ -6,6 +6,7 @@
 //! instead of once per file.
 //!
 //! Run: `cargo nextest run -p uniko-extract --test extract_tests`
+#![recursion_limit = "256"]
 
 mod ingest_atomic_tests;
 mod ingest_pdf_e2e;

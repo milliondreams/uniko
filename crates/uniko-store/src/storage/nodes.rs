@@ -28,11 +28,11 @@ impl KnowledgeBase {
         label: &str,
         properties: &HashMap<String, Value>,
     ) -> Result<NodeId> {
-        let session = self.db.session();
-        let tx = session.tx().await?;
-        let vid = self.create_node_in_tx(&tx, label, properties).await?;
-        tx.commit().await?;
-        Ok(vid)
+        self.transact_with_retry(uni_db::RetryOptions::default(), move |tx| async move {
+            let r = self.create_node_in_tx(&tx, label, properties).await;
+            (tx, r)
+        })
+        .await
     }
 
     /// Create a node within an existing transaction without committing.
@@ -169,17 +169,21 @@ impl KnowledgeBase {
         let (set_clause, params) = build_set_clause("n", properties, 0)?;
         let cypher = format!("MATCH (n) WHERE id(n) = $vid {set_clause}");
 
-        let session = self.db.session();
-        let tx = session.tx().await?;
-
-        let mut qb = tx.execute_with(&cypher);
-        qb = qb.param("vid", node_id);
-        for (k, v) in &params {
-            qb = qb.param(k.as_str(), v.clone());
-        }
-        qb.run().await?;
-        tx.commit().await?;
-        Ok(())
+        self.transact_with_retry(uni_db::RetryOptions::default(), move |tx| {
+            // Re-clone per attempt: the closure is re-run on a retriable conflict.
+            let cypher = cypher.clone();
+            let params = params.clone();
+            async move {
+                let mut qb = tx.execute_with(&cypher);
+                qb = qb.param("vid", node_id);
+                for (k, v) in &params {
+                    qb = qb.param(k.as_str(), v.clone());
+                }
+                let r = qb.run().await.map(|_| ()).map_err(UnikoError::from);
+                (tx, r)
+            }
+        })
+        .await
     }
 
     /// Delete a node and all its edges.
@@ -190,15 +194,19 @@ impl KnowledgeBase {
     ///
     /// Returns [`UnikoError::Storage`] on database failure.
     pub async fn delete_node(&self, node_id: NodeId) -> Result<bool> {
-        let session = self.db.session();
-        let tx = session.tx().await?;
-        let result = tx
-            .execute_with("MATCH (n) WHERE id(n) = $vid DETACH DELETE n")
-            .param("vid", node_id)
-            .run()
-            .await?;
-        tx.commit().await?;
-        Ok(result.nodes_deleted() > 0)
+        self.transact_with_retry(uni_db::RetryOptions::default(), move |tx| async move {
+            let r = async {
+                let result = tx
+                    .execute_with("MATCH (n) WHERE id(n) = $vid DETACH DELETE n")
+                    .param("vid", node_id)
+                    .run()
+                    .await?;
+                Ok(result.nodes_deleted() > 0)
+            }
+            .await;
+            (tx, r)
+        })
+        .await
     }
 
     /// Upsert a node using its external ID field.

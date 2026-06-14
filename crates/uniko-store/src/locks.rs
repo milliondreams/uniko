@@ -1,11 +1,20 @@
 //! Striped async locks for serializing read-modify-write critical sections.
 //!
-//! uni-db's transaction commit is last-writer-wins, not serializable.
-//! Two concurrent callers that read a row, mutate the value Rust-side,
-//! and write it back can both observe the same pre-image and lose one
-//! update.  Sites that perform this RMW pattern need an in-process
-//! serializer; [`StripedLocks`] provides one without paying per-key
-//! allocation.
+//! uniko runs uni-db with SSI enabled (`UniConfig::ssi_enabled` defaults
+//! to `true`), so two concurrent callers that read a row, mutate it
+//! Rust-side, and write it back do not silently lose an update — the
+//! second committer aborts with a retriable `SerializationConflict`
+//! (surfaced as [`crate::UnikoError::Conflict`] and retried by
+//! [`crate::KnowledgeBase::transact_with_retry`]).
+//!
+//! [`StripedLocks`] serialize same-key RMW *in-process* so those
+//! conflicts are avoided up front rather than paid for as abort+retry
+//! churn — and, critically, they also guard the check-then-create
+//! pattern ("does this row exist? if not, CREATE it"), where two
+//! concurrent transactions can each read "absent" and both insert a
+//! duplicate row: an insert-phantom uni-db's read-set SSI does not
+//! always catch (see `bugs/UNI_DB_WORKAROUNDS.md` RC2). They provide
+//! this without paying per-key allocation.
 //!
 //! # Design
 //!
@@ -115,6 +124,35 @@ impl Default for StripedLocks {
     fn default() -> Self {
         Self::from_env()
     }
+}
+
+// ── Canonical lock-key builders ─────────────────────────────────────
+//
+// Every writer of a given logical row must hash the SAME key bytes for
+// the stripe to actually serialize them. These helpers are the single
+// source of truth for each row family's key, so a new write site cannot
+// silently pick a divergent namespace (the defect behind issue #1).
+
+/// Lock key for an `:Entity` row, keyed by its canonical `entity_id`.
+///
+/// Used by every Entity writer — dedup upsert, action linking, and
+/// invalidation — so they all serialize on the same logical row.
+#[must_use]
+pub(crate) fn entity_lock_key(entity_id: &str) -> Vec<u8> {
+    let mut k = Vec::with_capacity(7 + entity_id.len());
+    k.extend_from_slice(b"entity:");
+    k.extend_from_slice(entity_id.as_bytes());
+    k
+}
+
+/// Lock key for an `:ArtifactContent` row, keyed by its `content_id`
+/// (a content hash, globally unique).
+#[must_use]
+pub(crate) fn content_lock_key(content_id: &str) -> Vec<u8> {
+    let mut k = Vec::with_capacity(8 + content_id.len());
+    k.extend_from_slice(b"content:");
+    k.extend_from_slice(content_id.as_bytes());
+    k
 }
 
 #[cfg(test)]

@@ -51,6 +51,45 @@ impl KnowledgeBase {
         Ok(result.rows().map(|rs| rs.to_vec()).unwrap_or_default())
     }
 
+    /// Invoke a *registered* Locy rule by name via a goal query.
+    ///
+    /// Builds `QUERY <name> [RETURN <cols>]` and evaluates it. This is the
+    /// supported way to run a rule registered with [`KnowledgeBase::create_rule`]
+    /// — unlike [`KnowledgeBase::execute_rule`], which treats its argument as a
+    /// Locy *program* and so cannot be handed a bare rule name (uni-db parses
+    /// it as a query and fails; see `bugs/UNI_DB_WORKAROUNDS.md` RC12).
+    ///
+    /// `return_cols` must name the rule's `YIELD` aliases; the result rows are
+    /// keyed by those names. Pass rule body parameters (e.g. `$agent_id`) via
+    /// `params`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Locy`] if the rule is unregistered or evaluation
+    /// fails.
+    pub async fn query_rule(
+        &self,
+        name: &str,
+        return_cols: &[&str],
+        params: &HashMap<String, Value>,
+    ) -> Result<Vec<Record>> {
+        let program = if return_cols.is_empty() {
+            format!("QUERY {name}")
+        } else {
+            format!("QUERY {name} RETURN {}", return_cols.join(", "))
+        };
+        let session = self.db.session();
+        let mut builder = session.locy_with(&program);
+        for (k, v) in params {
+            builder = builder.param(k.as_str(), v.clone());
+        }
+        let result = builder
+            .run()
+            .await
+            .map_err(|e| UnikoError::Locy(e.to_string()))?;
+        Ok(result.rows().map(|rs| rs.to_vec()).unwrap_or_default())
+    }
+
     /// List all registered Locy rules.
     pub fn list_rules(&self) -> Vec<RuleInfo> {
         self.db

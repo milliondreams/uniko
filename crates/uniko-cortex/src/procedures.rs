@@ -41,6 +41,29 @@ pub const STATUS_ACTIVE: &str = "active";
 /// effectiveness fell below the demotion threshold.
 pub const STATUS_DEPRECATED: &str = "deprecated";
 
+/// The `sequence_detector` Locy rule, invoked by name via
+/// [`KnowledgeBase::query_rule`].
+///
+/// Detects every recurring `(action_a → action_b)` pair where both
+/// episodes succeeded; `success_count` is the occurrence count.
+/// [`upsert_procedure`] classifies candidate-vs-active against
+/// `LifecycleConfig::promote_threshold`, so the rule itself surfaces ALL
+/// pairs (no HAVING filter).
+///
+/// Locy is not Cypher: the two relationships are one comma-joined
+/// `MATCH` (a second `MATCH` clause is a parse error), aggregate columns
+/// are `expr AS name` (there is no `VALUE` keyword), and a `$param` in a
+/// post-`FOLD` HAVING clause does not resolve — all three were latent
+/// bugs in the prior rule, which is why it never registered and a Cypher
+/// fallback was load-bearing (RC12, now resolved).
+const SEQUENCE_DETECTOR_RULE: &str = "CREATE RULE sequence_detector AS \
+     MATCH (e1:Episode)-[:FOLLOWED_BY]->(e2:Episode), \
+           (e1)-[:RECORDED_BY]->(p:Participant {participant_id: $agent_id}) \
+     WHERE e1.outcome = 'success' AND e2.outcome = 'success' \
+     FOLD n = COUNT(*) \
+     YIELD KEY e1.action_type AS action_a, KEY e2.action_type AS action_b, \
+           n AS success_count";
+
 /// Promotion / demotion thresholds for the Procedure lifecycle.
 ///
 /// Values come from the spec's P5 description (Part VI) and the
@@ -99,44 +122,32 @@ pub async fn promote_procedures_once(
     agent_id: &str,
     cfg: LifecycleConfig,
 ) -> Result<PromotionReport, UnikoError> {
-    // Detect every recurring pair (threshold = 1) and let
-    // `upsert_procedure` classify candidates vs active based on the
-    // configured promotion threshold.  Running the rule at the
-    // promotion threshold would hide sequences that haven't yet
-    // qualified, defeating candidate creation.
-    let detection_threshold: i64 = 1;
+    // Register the rule (idempotent — registering an exact-duplicate
+    // program is a no-op) and invoke it by name via the QUERY goal-query
+    // form. `upsert_procedure` applies the promotion threshold, so the
+    // rule surfaces every recurring pair.
+    kb.create_rule(SEQUENCE_DETECTOR_RULE).await?;
     let mut params = HashMap::new();
     params.insert("agent_id".into(), Value::String(agent_id.to_string()));
-    params.insert(
-        "promotion_threshold".into(),
-        Value::Int(detection_threshold),
-    );
-
-    // The Cypher fallback is load-bearing on uni-db 2.0: invoking a
-    // registered Locy rule by bare name via `execute_rule` →
-    // `session.locy_with("sequence_detector")` fails to parse ("expected
-    // locy_query") — 2.0 treats the argument as a Locy *query*, not a
-    // rule name. Until uniko's rule-invocation path is fixed (see
-    // bugs/UNI_DB_WORKAROUNDS.md RC12), keep falling back to direct Cypher.
-    let records = match kb.execute_rule("sequence_detector", &params).await {
-        Ok(r) => r,
-        Err(UnikoError::Locy(msg)) => {
-            tracing::debug!(error = %msg, "sequence_detector unavailable — falling back to direct Cypher");
-            fallback_sequence_query(kb, agent_id, detection_threshold).await?
-        }
-        Err(other) => return Err(other),
-    };
+    let records = kb
+        .query_rule(
+            "sequence_detector",
+            &["action_a", "action_b", "success_count"],
+            &params,
+        )
+        .await?;
 
     let mut report = PromotionReport::default();
     for rec in records {
-        let a = pick_string(&rec, &["e1.action_type", "key_0", "a", "action_a"]);
-        let b = pick_string(&rec, &["e2.action_type", "key_1", "b", "action_b"]);
-        let count = pick_i64(&rec, &["success_count", "value_0", "n"]);
-        let (Some(a), Some(b), Some(count)) = (a, b, count) else {
+        let (Some(Value::String(a)), Some(Value::String(b)), Some(count)) = (
+            rec.get("action_a"),
+            rec.get("action_b"),
+            rec.get("success_count").and_then(Value::as_i64),
+        ) else {
             continue;
         };
 
-        let (created, promoted) = upsert_procedure(kb, agent_id, &a, &b, count, cfg).await?;
+        let (created, promoted) = upsert_procedure(kb, agent_id, a, b, count, cfg).await?;
         if created {
             report.created += 1;
         } else {
@@ -375,60 +386,6 @@ async fn read_procedure(
         failure_count: row.get("fc").unwrap_or(0),
         status: row.get("st").unwrap_or_default(),
     }))
-}
-
-/// Fallback when the Locy runtime can't execute the stdlib rule.
-async fn fallback_sequence_query(
-    kb: &KnowledgeBase,
-    agent_id: &str,
-    threshold: i64,
-) -> Result<Vec<HashMap<String, Value>>, UnikoError> {
-    let session = kb.db().session();
-    let cypher = "MATCH (e1:Episode)-[:FOLLOWED_BY]->(e2:Episode) \
-                  MATCH (e1)-[:RECORDED_BY]->(p:Participant {participant_id: $aid}) \
-                  WHERE e1.outcome = 'success' AND e2.outcome = 'success' \
-                  WITH e1.action_type AS a, e2.action_type AS b, count(*) AS n \
-                  WHERE n >= $thr \
-                  RETURN a, b, n";
-    let result = session
-        .query_with(cypher)
-        .param("aid", agent_id)
-        .param("thr", threshold)
-        .fetch_all()
-        .await?;
-
-    let mut out = Vec::new();
-    for row in result.rows() {
-        let a: String = row.get("a").unwrap_or_default();
-        let b: String = row.get("b").unwrap_or_default();
-        let n: i64 = row.get("n").unwrap_or(0);
-        let mut rec = HashMap::new();
-        rec.insert("a".into(), Value::String(a));
-        rec.insert("b".into(), Value::String(b));
-        rec.insert("n".into(), Value::Int(n));
-        out.push(rec);
-    }
-    Ok(out)
-}
-
-fn pick_string(rec: &HashMap<String, Value>, keys: &[&str]) -> Option<String> {
-    for k in keys {
-        if let Some(Value::String(s)) = rec.get(*k) {
-            return Some(s.clone());
-        }
-    }
-    None
-}
-
-fn pick_i64(rec: &HashMap<String, Value>, keys: &[&str]) -> Option<i64> {
-    for k in keys {
-        match rec.get(*k) {
-            Some(Value::Int(i)) => return Some(*i),
-            Some(Value::Float(f)) => return Some(*f as i64),
-            _ => continue,
-        }
-    }
-    None
 }
 
 /// Build a deterministic procedure_id for the (agent, action_a, action_b) triple.
