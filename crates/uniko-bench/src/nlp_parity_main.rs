@@ -73,6 +73,54 @@ const SAMPLE_SENTENCES: &[&str] = &[
     "John told Mary that he would finish the project by Monday.",
     "Quantum computers may eventually break modern encryption.",
     "After the storm passed, the volunteers cleaned up the beach.",
+    // Passive voice + agent.
+    "The proposal was rejected by the committee on Tuesday.",
+    "The bridge was designed by a Spanish architect in 1998.",
+    // Coordination + relative clauses.
+    "The engineer who fixed the server also rewrote the deployment script.",
+    "Sarah enjoys hiking, painting, and playing the violin on weekends.",
+    "The book that won the prize was translated into twelve languages.",
+    // Possessives + numbers.
+    "Tesla's revenue grew by 47 percent in the third quarter.",
+    "Maria's brother lent her his car for the trip to Denver.",
+    "The recipe calls for two cups of flour and a teaspoon of salt.",
+    // Money / percent / quantity / ordinal.
+    "The startup raised forty million dollars in its second funding round.",
+    "Unemployment fell to 3.5 percent last March.",
+    "He finished third in the marathon despite an injured ankle.",
+    // Multi-entity / orgs / places.
+    "Amazon opened a new warehouse near Seattle to serve the Pacific Northwest.",
+    "The United Nations met in Geneva to discuss the treaty.",
+    "Leonardo da Vinci painted the Mona Lisa in the early sixteenth century.",
+    // Negation + modality.
+    "I don't believe the meeting was moved to Thursday.",
+    "They could not agree on whether to expand the budget.",
+    // Questions of several kinds.
+    "When did the company first launch its mobile app?",
+    "Why was the flight delayed for almost three hours?",
+    "Who approved the final version of the contract?",
+    // Imperatives / requests / offers.
+    "Please forward the invoice to the accounting department.",
+    "Let me know if you want me to book the conference room.",
+    // Temporal expressions.
+    "We launched the beta last spring and shipped the release in October.",
+    "The museum is closed on Mondays and public holidays.",
+    // Nested clauses / reported speech.
+    "The analyst said that earnings would likely beat expectations.",
+    "She promised to call her grandmother as soon as she landed.",
+    // Comparatives / coordination of verbs.
+    "The new model runs faster and uses less memory than the old one.",
+    "He neither confirmed nor denied the rumor about the merger.",
+    // Locations + movement.
+    "The hikers crossed the river and camped beside the old mill.",
+    "A package was delivered to the wrong address in Brooklyn.",
+    // Mixed.
+    "Dr. Chen presented her findings at the conference in Tokyo.",
+    "The committee will review the application within two weeks.",
+    "Children from the local school planted trees along the highway.",
+    "The thunderstorm knocked out power across three counties.",
+    "Our team celebrated the victory at a restaurant downtown.",
+    "The senator voted against the bill despite pressure from donors.",
 ];
 
 #[derive(Parser)]
@@ -148,7 +196,10 @@ impl Overlap {
 struct SentenceReport {
     sentence: String,
     uniko_tokens: Vec<String>,
+    /// Raw xervo tokens (metaspace-prefixed, punctuation split out).
     xervo_tokens: Vec<String>,
+    /// xervo tokens reconstructed into uniko-style word units (adapter).
+    xervo_words: Vec<String>,
     tokens_aligned: bool,
     /// POS tags agreeing / total, when tokens align.
     pos_agree: Option<[usize; 2]>,
@@ -156,7 +207,13 @@ struct SentenceReport {
     /// `(uniko_type, xervo_label, surface)` for entity surfaces seen on
     /// both sides — lets a human eyeball the two label schemes.
     ner_label_pairs: Vec<(String, String, String)>,
+    /// Full `(label, surface)` entity lists from each side (diagnostic).
+    uniko_ner_spans: Vec<(String, String)>,
+    xervo_ner_spans: Vec<(String, String)>,
     dep: Overlap,
+    /// Full `dep|head|rel` arc-key lists from each side (diagnostic).
+    uniko_dep_arcs: Vec<String>,
+    xervo_dep_arcs: Vec<String>,
     srl_predicates: Overlap,
     srl_roles: Overlap,
     uniko_cls: String,
@@ -218,28 +275,35 @@ fn uniko_ner(result: &UnikoNlp) -> Vec<(String, String)> {
 /// run of equal non-`None` labels is one entity. Surface text is sliced
 /// from the original sentence by byte offsets for fidelity.
 fn xervo_ner(result: &uni_xervo::traits::NlpResult, sentence: &str) -> Vec<(String, String)> {
-    let mut spans = Vec::new();
-    let mut run: Option<(String, usize, usize)> = None;
+    // xervo exposes RAW per-token BIO tags (`B-PERSON`, `I-PERSON`, `O`, …),
+    // not merged spans, so merge them the way uniko's `merge_bio_spans`
+    // does: a `B-` (or orphan `I-`) opens a span, a matching `I-` extends
+    // it, and `O`/empty closes it. Surface sliced by byte offsets.
+    let mut spans: Vec<(String, String)> = Vec::new();
+    let mut run: Option<(String, usize, usize)> = None; // (type, start, end)
     for tok in &result.tokens {
-        match (&tok.ner, &mut run) {
-            (Some(label), Some((cur, _start, end))) if *label == *cur => {
+        let tag = tok.ner.as_deref().unwrap_or("O");
+        if tag == "O" || tag.is_empty() {
+            if let Some((cur, s, e)) = run.take() {
+                spans.push((cur, normalize_surface(&sentence[s..e])));
+            }
+            continue;
+        }
+        let (prefix, ty) = tag.split_once('-').unwrap_or(("B", tag));
+        match &mut run {
+            Some((cur, _s, end)) if prefix == "I" && *cur == ty => {
                 *end = tok.end;
             }
-            (Some(label), _) => {
-                if let Some((cur, start, end)) = run.take() {
-                    spans.push((cur, normalize_surface(&sentence[start..end])));
+            _ => {
+                if let Some((cur, s, e)) = run.take() {
+                    spans.push((cur, normalize_surface(&sentence[s..e])));
                 }
-                run = Some((label.clone(), tok.start, tok.end));
-            }
-            (None, _) => {
-                if let Some((cur, start, end)) = run.take() {
-                    spans.push((cur, normalize_surface(&sentence[start..end])));
-                }
+                run = Some((ty.to_string(), tok.start, tok.end));
             }
         }
     }
-    if let Some((cur, start, end)) = run.take() {
-        spans.push((cur, normalize_surface(&sentence[start..end])));
+    if let Some((cur, s, e)) = run.take() {
+        spans.push((cur, normalize_surface(&sentence[s..e])));
     }
     spans
 }
@@ -266,30 +330,78 @@ fn uniko_dep(result: &UnikoNlp) -> Vec<String> {
         .collect()
 }
 
-/// xervo dependency arcs as `dep|head|rel` keys (self-head → ROOT).
-fn xervo_dep(result: &uni_xervo::traits::NlpResult) -> Vec<String> {
-    let surf = |i: usize| {
-        result
-            .tokens
-            .get(i)
-            .map_or("?".to_string(), |t| normalize_surface(&t.text))
+/// PROTOTYPE ADAPTER: reconstruct uniko-style word units from xervo tokens.
+///
+/// xervo surfaces the SentencePiece metaspace, so a token beginning with a
+/// space (or `▁`) starts a new word and a token without one continues the
+/// previous. Grouping on that boundary mirrors uniko's `token_to_word`
+/// alignment: it strips the leading space and folds trailing punctuation
+/// (`'1961'` + `'.'` → `'1961.'`) back onto the preceding word, so the two
+/// pipelines compare on identical word boundaries.
+///
+/// Returns the word surfaces and a map `token_index -> word_index`.
+fn reconstruct_xervo_words(result: &uni_xervo::traits::NlpResult) -> (Vec<String>, Vec<usize>) {
+    let mut words: Vec<String> = Vec::new();
+    let mut map: Vec<usize> = Vec::with_capacity(result.tokens.len());
+    for tok in &result.tokens {
+        let raw = tok.text.as_str();
+        let starts_word = words.is_empty() || raw.starts_with([' ', '\u{2581}']);
+        let piece = raw.trim_start_matches([' ', '\u{2581}']);
+        if starts_word {
+            words.push(piece.to_string());
+        } else if let Some(last) = words.last_mut() {
+            last.push_str(piece);
+        } else {
+            words.push(piece.to_string());
+        }
+        map.push(words.len() - 1);
+    }
+    (words, map)
+}
+
+/// xervo dependency arcs lifted onto reconstructed uniko word units.
+///
+/// One arc per word, taken from the word's first token (first-subword-wins,
+/// matching uniko). A head that lands in the same word is treated as ROOT.
+fn xervo_dep_words(
+    result: &uni_xervo::traits::NlpResult,
+    words: &[String],
+    tok2word: &[usize],
+) -> Vec<String> {
+    let surf = |w: usize| {
+        words
+            .get(w)
+            .map_or_else(|| "?".to_string(), |s| normalize_surface(s))
     };
-    result
-        .tokens
-        .iter()
-        .enumerate()
-        .filter_map(|(i, t)| {
-            t.dep.as_ref().map(|d| {
-                // A token whose head is itself denotes the sentence root.
-                let head = if d.head == i {
-                    "root".to_string()
-                } else {
-                    surf(d.head)
-                };
-                format!("{}|{}|{}", surf(i), head, d.relation.to_ascii_lowercase())
-            })
-        })
-        .collect()
+    let mut seen = vec![false; words.len()];
+    let mut out = Vec::new();
+    for (i, tok) in result.tokens.iter().enumerate() {
+        let w = tok2word[i];
+        if seen[w] {
+            continue;
+        }
+        seen[w] = true;
+        if let Some(d) = &tok.dep {
+            // xervo heads follow CoNLL-U numbering: 1-based, `0` = root
+            // (the `[CLS]`/BOS slot xervo's `tokens` array omits). Map the
+            // 1-based head back to a 0-based token index, then to its word.
+            let head = match d
+                .head
+                .checked_sub(1)
+                .and_then(|ht| tok2word.get(ht).copied())
+            {
+                Some(hw) if hw != w => surf(hw),
+                _ => "root".to_string(),
+            };
+            out.push(format!(
+                "{}|{}|{}",
+                surf(w),
+                head,
+                d.relation.to_ascii_lowercase()
+            ));
+        }
+    }
+    out
 }
 
 /// uniko SRL predicates and `pred::role::arg` role keys.
@@ -347,25 +459,34 @@ fn compare(
 ) -> SentenceReport {
     let uniko_tokens: Vec<String> = uniko.words.clone();
     let xervo_tokens: Vec<String> = xervo.tokens.iter().map(|t| t.text.clone()).collect();
-    let tokens_aligned = uniko_tokens.len() == xervo_tokens.len();
+    // Adapter: reconcile xervo's segmentation to uniko's word boundaries
+    // before any index-based comparison (POS/DEP), since the two only
+    // differ in metaspace + punctuation grouping, not in subwords.
+    let (xervo_words, tok2word) = reconstruct_xervo_words(xervo);
+    let tokens_aligned = uniko_tokens.len() == xervo_words.len();
 
-    // POS only meaningful when token sequences align 1:1.
+    // POS only meaningful when word sequences align 1:1. The first xervo
+    // token of each word carries the word's tag (first-subword-wins).
     let pos_agree = if tokens_aligned {
+        let mut first_tok: Vec<Option<usize>> = vec![None; xervo_words.len()];
+        for (i, w) in tok2word.iter().enumerate() {
+            first_tok[*w].get_or_insert(i);
+        }
         let mut agree = 0usize;
-        for (i, tok) in xervo.tokens.iter().enumerate() {
+        for (w, slot) in first_tok.iter().enumerate() {
             let u = uniko
                 .pos_indices
-                .get(i)
+                .get(w)
                 .and_then(|&idx| labels.pos_labels.get(idx))
                 .map(String::as_str);
-            let x = tok.pos.as_deref();
+            let x = slot.and_then(|i| xervo.tokens[i].pos.as_deref());
             if let (Some(u), Some(x)) = (u, x)
                 && u.eq_ignore_ascii_case(x)
             {
                 agree += 1;
             }
         }
-        Some([agree, xervo_tokens.len()])
+        Some([agree, xervo_words.len()])
     } else {
         None
     };
@@ -389,7 +510,9 @@ fn compare(
         })
         .collect();
 
-    let dep = overlap(&uniko_dep(uniko), &xervo_dep(xervo));
+    let u_dep = uniko_dep(uniko);
+    let x_dep = xervo_dep_words(xervo, &xervo_words, &tok2word);
+    let dep = overlap(&u_dep, &x_dep);
 
     let (u_preds, u_roles) = uniko_srl(uniko);
     let (x_preds, x_roles) = xervo_srl(xervo);
@@ -411,11 +534,16 @@ fn compare(
         sentence: sentence.to_string(),
         uniko_tokens,
         xervo_tokens,
+        xervo_words,
         tokens_aligned,
         pos_agree,
         ner,
         ner_label_pairs,
+        uniko_ner_spans: u_ner,
+        xervo_ner_spans: x_ner,
         dep,
+        uniko_dep_arcs: u_dep,
+        xervo_dep_arcs: x_dep,
         srl_predicates,
         srl_roles,
         uniko_cls,

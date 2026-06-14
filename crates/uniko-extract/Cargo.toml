@@ -9,6 +9,9 @@ license.workspace = true
 uniko-pipes = { workspace = true }
 uniko-store = { workspace = true }
 uni-db = { workspace = true }
+# Direct dep so the NLP adapter can name xervo's `NlpModel` / `NlpRequest`
+# / `NlpResult` (uni-db does not re-export them).
+uni-xervo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

@@ -427,7 +427,11 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
         },
         ModelAliasSpec {
             alias: NLP_ALIAS.to_string(),
-            task: ModelTask::Raw,
+            // Managed multi-task NLP: xervo owns tokenization + POS/NER/
+            // DEP/SRL/CLS decode (uniko adapts the output). Was `Raw`
+            // (uniko decoded the tensors in-crate) before the 2026-06
+            // migration to `NlpModel`.
+            task: ModelTask::Nlp,
             provider_id: "local/onnx".to_string(),
             model_id: config.nlp.model_id.clone(),
             revision: None,
@@ -436,9 +440,13 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
             timeout: None,
             load_timeout: None,
             retry: None,
+            // `OnnxNlpModel` reads `onnx_path` (not `artifact`) plus the
+            // tokenizer / label-map asset names shipped in the model repo.
             options: serde_json::json!({
-                "artifact": config.nlp.artifact,
-                "max_batch_size": config.nlp.max_batch_size,
+                "onnx_path": config.nlp.artifact,
+                "tokenizer_path": "tokenizer.json",
+                "label_maps_path": "label_maps.json",
+                "max_seq_len": 128,
                 "execution_providers": nlp_eps,
             }),
         },

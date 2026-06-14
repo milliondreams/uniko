@@ -12092,6 +12092,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "uni-db",
+ "uni-xervo",
  "uniko-pipes",
  "uniko-store",
 ]

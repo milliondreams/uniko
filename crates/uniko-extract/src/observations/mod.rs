@@ -91,7 +91,18 @@ fn cls_gate_admits(
     gate: &crate::observations::rules_engine::rules::ClsGate,
 ) -> bool {
     if nlp_result.cls_probs.is_empty() {
-        return nlp_result.sentence_class.is_informative();
+        // xervo's `NlpModel` reports only the top class + its confidence,
+        // not the full softmax the probs path below consumes. Reconstruct
+        // the old gate's intent as faithfully as the top-1 signal allows:
+        // admit an informative top class outright; for a non-informative
+        // top class with confidence `c`, the most any single informative
+        // label could hold is `1 - c`, so only suppress when even that
+        // upper bound cannot clear `min_prob` (`c > 1 - min_prob`). A
+        // low-confidence "social"/"question" on an otherwise-declarative
+        // sentence therefore still admits — matching the old
+        // full-distribution gate — while a confident greeting is filtered.
+        return nlp_result.sentence_class.is_informative()
+            || nlp_result.cls_confidence <= 1.0 - gate.min_prob;
     }
     for (i, &p) in nlp_result.cls_probs.iter().enumerate() {
         if p < gate.min_prob {
