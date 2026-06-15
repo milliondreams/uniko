@@ -14,9 +14,9 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
-use uni_db::Value;
 
 use uniko_extract::embedding::embed_episode;
+use uniko_store::Value;
 use uniko_store::id::new_id;
 use uniko_store::schema::{edges, labels};
 use uniko_store::types::datetime_value;
@@ -127,7 +127,10 @@ pub async fn record_episode(
 
     // Look up the previous episode BEFORE creating the new one so the
     // lookup query doesn't have to filter out the in-flight node.
-    let previous = find_previous_episode(kb, agent_id, timestamp).await?;
+    let earliest = timestamp - chrono::Duration::milliseconds(FOLLOWED_BY_WINDOW_MS);
+    let previous = kb
+        .previous_episode_in_window(agent_id, earliest, timestamp)
+        .await?;
 
     let episode_node = kb
         .merge_node(labels::EPISODE, "episode_id", &episode_id, &props)
@@ -165,47 +168,4 @@ pub async fn record_episode(
     .await?;
 
     Ok(episode_node)
-}
-
-/// Find the most recent Episode of `agent_id` that occurred within
-/// [`FOLLOWED_BY_WINDOW_MS`] before `now`.
-///
-/// Returns `(node_id, timestamp)` or `None` when no candidate exists.
-///
-/// uni-db 2.0 supports `WHERE` predicates on `DateTime`, so the
-/// `[earliest, now]` window is filtered in Cypher; `ORDER BY … LIMIT 1`
-/// then returns the most recent match directly.
-async fn find_previous_episode(
-    kb: &KnowledgeBase,
-    agent_id: &str,
-    now: DateTime<Utc>,
-) -> Result<Option<(NodeId, DateTime<Utc>)>, UnikoError> {
-    let earliest = now - chrono::Duration::milliseconds(FOLLOWED_BY_WINDOW_MS);
-
-    let cypher = "MATCH (e:Episode)-[:RECORDED_BY]->(p:Participant {participant_id: $aid}) \
-                  WHERE e.timestamp >= $earliest AND e.timestamp <= $now \
-                  RETURN e \
-                  ORDER BY e.timestamp DESC \
-                  LIMIT 1";
-
-    let session = kb.db().session();
-    let result = session
-        .query_with(cypher)
-        .param("aid", agent_id)
-        .param("earliest", datetime_value(earliest))
-        .param("now", datetime_value(now))
-        .fetch_all()
-        .await?;
-
-    let Some(row) = result.rows().first() else {
-        return Ok(None);
-    };
-    let node: uni_db::Node = row.get("e")?;
-    let vid = node.vid.as_u64() as i64;
-    let ts_value = node
-        .properties
-        .get("timestamp")
-        .ok_or_else(|| UnikoError::Storage("Episode.timestamp missing".into()))?;
-    let ts = crate::value_convert::require_datetime(ts_value, "Episode.timestamp")?;
-    Ok(Some((vid, ts)))
 }

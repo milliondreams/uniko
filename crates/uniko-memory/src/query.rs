@@ -225,11 +225,11 @@ pub struct QueryRecordOptions {
 ///     &recall_config,
 ///     |bundle, q| async move {
 ///         let context = format_context(&bundle.items);
-///         let result = kb.db().xervo().generate(/* ... */).await?;
+///         let text = kb.generate("llm/default", &messages, opts).await?;
 ///         Ok(uniko_memory::GeneratedAnswer {
-///             text: result.text,
-///             input_tokens: result.usage.as_ref().map(|u| u.prompt_tokens as u64),
-///             output_tokens: result.usage.as_ref().map(|u| u.completion_tokens as u64),
+///             text,
+///             input_tokens: None,
+///             output_tokens: None,
 ///             model: Some("gpt-4o-mini".into()),
 ///         })
 ///     },

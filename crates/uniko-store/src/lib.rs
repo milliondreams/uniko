@@ -5,14 +5,18 @@
 //!
 //! This is the lowest layer. It depends only on uni-db and external utility crates.
 //!
-//! Intended boundary: all other uniko crates access the graph through this
-//! layer's typed API, so uni-db stays an implementation detail. That seal is
-//! **not yet complete** — [`KnowledgeBase::db`] is still a public escape hatch
-//! and several higher crates reach uni-db directly through it (issue #2,
-//! sealing in progress: parameterized read queries are being consolidated here
-//! and a CI gate will forbid `use uni_db` outside this crate). Treat new
-//! direct uni-db usage outside `uniko-store` as debt to migrate, not a pattern
-//! to copy.
+//! Boundary (issue #2): the product crates
+//! (`uniko-{memory,extract,cortex,pipes}`) access the graph **only** through
+//! this layer's typed API, so uni-db is an implementation detail. The Cypher
+//! they used to issue inline now lives in [`repository`] (decoded reads) and
+//! [`operations`] (writes); model-runtime access goes through [`model`]; the
+//! uni-db value types they legitimately name are re-exported here ([`Value`],
+//! [`Transaction`], [`temporal`], [`xervo`]). A CI grep gate forbids
+//! `use uni_db` / [`KnowledgeBase::db`] in those crates' `src/`.
+//!
+//! [`KnowledgeBase::db`] remains a `pub` escape hatch for **tests** and the
+//! **benchmark** crate only (both out of the gate's scope); product code must
+//! not reintroduce it.
 
 pub mod blob_store;
 pub mod config;
@@ -20,7 +24,9 @@ pub mod error;
 pub mod id;
 pub mod locks;
 pub mod locy;
+pub mod model;
 pub mod operations;
+pub mod repository;
 pub mod schema;
 pub mod search;
 pub mod storage;
@@ -43,3 +49,29 @@ pub use types::*;
 // [`KnowledgeBase::open_with_runtime`]. uni-db wraps `ModelRuntime`
 // internally but does not re-export it.
 pub use uni_xervo::runtime::ModelRuntime;
+
+// --- Sealed uni-db surface (issue #2) ---------------------------------
+//
+// These are the *only* uni-db types higher uniko crates legitimately
+// need to name. Re-exporting them here means consumers write
+// `use uniko_store::Value;` instead of `use uni_db::Value;`, so the
+// CI gate can forbid `use uni_db` outside this crate while the graph
+// stays reachable. Anything not re-exported here is an implementation
+// detail of the storage layer and must be reached through a typed
+// `KnowledgeBase` method, not the raw handle.
+pub use uni_db::{RetryOptions, Transaction, Value};
+/// Temporal / bitemporal value types used on `valid_at` BTIC columns.
+///
+/// [`Btic`](uni_db::common::uni_btic::Btic) is the in-memory bitemporal
+/// interval that consolidation and recall manipulate directly; the
+/// [`schema::btic`](crate::schema::btic) helpers construct/compare it.
+pub mod temporal {
+    pub use uni_db::common::TemporalValue;
+    pub use uni_db::common::uni_btic::Btic;
+}
+/// Model-runtime value types used by the [`KnowledgeBase`] generation
+/// and NLP seams (see `model` module). Re-exported so callers building
+/// prompts never reach `uni_db::xervo` directly.
+pub mod xervo {
+    pub use uni_db::xervo::{GenerationOptions, Message};
+}

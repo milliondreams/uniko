@@ -2,9 +2,8 @@
 
 use std::collections::HashMap;
 
-use uni_db::Value;
-
 use uniko_pipes::types::IngestMessage;
+use uniko_store::Value;
 use uniko_store::types::datetime_value;
 use uniko_store::{KnowledgeBase, NodeId};
 
@@ -47,7 +46,7 @@ pub struct MessageWriteResult {
 /// Returns [`uniko_store::UnikoError`] on any underlying write failure.
 pub(crate) async fn apply_message_writes_in_tx(
     kb: &KnowledgeBase,
-    tx: &uni_db::Transaction,
+    tx: &uniko_store::Transaction,
     msg: &IngestMessage,
     setup: &MessageSetup,
 ) -> uniko_store::Result<MessageWriteResult> {
@@ -207,11 +206,7 @@ pub async fn create_chunks(
         return Ok(Vec::new());
     }
     let start = std::time::Instant::now();
-    let session = kb.db().session();
-    let tx = session
-        .tx()
-        .await
-        .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
+    let tx = kb.begin_tx().await?;
     let nids =
         create_chunks_in_tx(kb, &tx, parent_ext_id, parent_nid, chunks, parent_label).await?;
     let commit_start = std::time::Instant::now();
@@ -245,7 +240,7 @@ pub async fn create_chunks(
 /// Returns a storage error if either batched write fails.
 pub async fn create_chunks_in_tx(
     kb: &KnowledgeBase,
-    tx: &uni_db::Transaction,
+    tx: &uniko_store::Transaction,
     parent_ext_id: &str,
     parent_nid: NodeId,
     chunks: &[super::chunking::ChunkData],
@@ -310,7 +305,7 @@ pub async fn create_chunks_in_tx(
     Ok(chunk_nids)
 }
 
-/// Convert a `serde_json::Value` into a `uni_db::Value` suitable for
+/// Convert a `serde_json::Value` into a `uniko_store::Value` suitable for
 /// storage in a `DataType::CypherValue` column.
 ///
 /// JSON numbers split across `Value::Int` (when they fit in `i64` and

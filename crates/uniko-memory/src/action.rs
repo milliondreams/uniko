@@ -17,7 +17,6 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
-use uni_db::Value;
 
 use uniko_extract::embedding::embed_document;
 use uniko_extract::ingest::count_tokens;
@@ -25,6 +24,7 @@ use uniko_extract::ingest::count_tokens;
 use uniko_extract::nlp::NlpPipeline;
 #[cfg(feature = "onnx")]
 use uniko_extract::nlp::types::NerEntityType;
+use uniko_store::Value;
 use uniko_store::id::new_id;
 use uniko_store::schema::{edges, labels};
 use uniko_store::types::datetime_value;

@@ -7,9 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use uni_db::Value;
-
-use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+use uniko_store::{KnowledgeBase, NodeId, UnikoError, Value};
 
 /// Persistent dead-letter queue using `DeadLetter` graph nodes.
 #[derive(Debug, Clone)]

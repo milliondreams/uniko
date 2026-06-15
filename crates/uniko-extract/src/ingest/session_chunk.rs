@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use uniko_store::{KnowledgeBase, NodeId};
+use uniko_store::{KnowledgeBase, NodeId, Value};
 
 use super::chunking::text::TextChunker;
 use super::chunking::{ChunkConfig, ChunkData, Chunker};
@@ -64,20 +64,9 @@ pub async fn chunk_session(
 
     // Query all messages in this session with their sender names,
     // ordered by timestamp.
-    let cypher = "\
-        MATCH (m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
-        OPTIONAL MATCH (m)-[:SENT_BY]->(p:Participant) \
-        RETURN m.content AS content, p.name AS speaker, m.timestamp AS ts \
-        ORDER BY m.timestamp";
+    let rows = kb.session_transcript_rows(session_id).await?;
 
-    let session = kb.db().session();
-    let result = session
-        .query_with(cypher)
-        .param("sid", session_id)
-        .fetch_all()
-        .await?;
-
-    if result.is_empty() {
+    if rows.is_empty() {
         tracing::debug!(session_id, "no messages in session");
         return Ok(Vec::new());
     }
@@ -86,15 +75,12 @@ pub async fn chunk_session(
     let mut transcript = String::new();
     let mut speakers = HashSet::new();
 
-    for row in result.rows() {
-        let content: String = row.get("content").unwrap_or_default();
-        let speaker: String = row.get("speaker").unwrap_or_else(|_| "unknown".to_string());
-
-        if !content.is_empty() {
-            speakers.insert(speaker.clone());
-            transcript.push_str(&speaker);
+    for row in &rows {
+        if !row.content.is_empty() {
+            speakers.insert(row.speaker.clone());
+            transcript.push_str(&row.speaker);
             transcript.push_str(": ");
-            transcript.push_str(&content);
+            transcript.push_str(&row.content);
             transcript.push('\n');
         }
     }
@@ -135,7 +121,7 @@ pub async fn chunk_session(
 
     tracing::info!(
         session_id,
-        messages = result.len(),
+        messages = rows.len(),
         chunks = chunk_nids.len(),
         transcript_len = transcript.len(),
         "session chunked",
@@ -176,44 +162,20 @@ pub async fn chunk_session_observations(
     };
 
     // Check if observation chunks already exist (idempotent).
-    let check_cypher = "\
-        MATCH (s:Session {session_id: $sid})-[:HAS_CHUNK]->(c:Chunk {chunk_type: 'observation'}) \
-        RETURN id(c) AS cid";
-    let check = kb
-        .db()
-        .session()
-        .query_with(check_cypher)
-        .param("sid", session_id)
-        .fetch_all()
-        .await?;
-    if !check.is_empty() {
+    let existing_chunk_ids = kb.session_observation_chunk_ids(session_id).await?;
+    if !existing_chunk_ids.is_empty() {
         tracing::debug!(
             session_id,
-            chunks = check.len(),
+            chunks = existing_chunk_ids.len(),
             "observation chunks already exist"
         );
-        let ids: Vec<NodeId> = check
-            .rows()
-            .iter()
-            .filter_map(|r| r.get::<NodeId>("cid").ok())
-            .collect();
-        return Ok(ids);
+        return Ok(existing_chunk_ids);
     }
 
     // Query all observations in this session.
-    let cypher = "\
-        MATCH (o:Observation)-[:OBSERVED_IN]->(m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
-        RETURN o.content AS content, o.subject AS subject \
-        ORDER BY m.timestamp";
+    let rows = kb.session_observation_rows(session_id).await?;
 
-    let session = kb.db().session();
-    let result = session
-        .query_with(cypher)
-        .param("sid", session_id)
-        .fetch_all()
-        .await?;
-
-    if result.is_empty() {
+    if rows.is_empty() {
         tracing::debug!(session_id, "no observations in session");
         return Ok(Vec::new());
     }
@@ -223,24 +185,21 @@ pub async fn chunk_session_observations(
     let mut text_block = String::new();
     let mut subjects = HashSet::new();
 
-    for row in result.rows() {
-        let content: String = row.get("content").unwrap_or_default();
-        let subject: String = row.get("subject").unwrap_or_default();
-
-        if content.is_empty() {
+    for row in &rows {
+        if row.content.is_empty() {
             continue;
         }
 
         // Deduplicate by normalized (lowercased, trimmed) content.
-        let key = content.trim().to_lowercase();
+        let key = row.content.trim().to_lowercase();
         if !seen.insert(key) {
             continue;
         }
 
-        if !subject.is_empty() {
-            subjects.insert(subject);
+        if !row.subject.is_empty() {
+            subjects.insert(row.subject.clone());
         }
-        text_block.push_str(content.trim());
+        text_block.push_str(row.content.trim());
         text_block.push('\n');
     }
 
@@ -278,25 +237,10 @@ pub async fn chunk_session_observations(
     let chunk_nids = create_chunks(kb, &obs_ext_id, session_nid, &chunks, "Session").await?;
 
     // Wire ABOUT edges from observation chunks to entities.
-    let entity_cypher = "\
-        MATCH (o:Observation)-[:OBSERVED_IN]->(m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
-        MATCH (o)-[:ABOUT]->(e:Entity) \
-        RETURN DISTINCT id(e) AS eid";
-
-    let entity_result = session
-        .query_with(entity_cypher)
-        .param("sid", session_id)
-        .fetch_all()
-        .await?;
-
-    let entity_nids: Vec<NodeId> = entity_result
-        .rows()
-        .iter()
-        .filter_map(|row| row.get::<NodeId>("eid").ok())
-        .collect();
+    let entity_nids = kb.session_observation_entity_ids(session_id).await?;
 
     if !entity_nids.is_empty() {
-        let about_edges: Vec<(NodeId, NodeId, HashMap<String, uni_db::Value>)> = chunk_nids
+        let about_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = chunk_nids
             .iter()
             .flat_map(|&chunk_nid| {
                 entity_nids
@@ -327,22 +271,9 @@ pub async fn chunk_session_observations(
     // Also propagate Participant ABOUT edges so an obs Chunk is
     // reachable via the participant (e.g. Caroline) — needed for
     // entity-anchored multi-hop recall.
-    let participant_cypher = "\
-        MATCH (o:Observation)-[:OBSERVED_IN]->(m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
-        MATCH (o)-[:ABOUT]->(p:Participant) \
-        RETURN DISTINCT id(p) AS pid";
-    let participant_result = session
-        .query_with(participant_cypher)
-        .param("sid", session_id)
-        .fetch_all()
-        .await?;
-    let participant_nids: Vec<NodeId> = participant_result
-        .rows()
-        .iter()
-        .filter_map(|row| row.get::<NodeId>("pid").ok())
-        .collect();
+    let participant_nids = kb.session_observation_participant_ids(session_id).await?;
     if !participant_nids.is_empty() {
-        let p_edges: Vec<(NodeId, NodeId, HashMap<String, uni_db::Value>)> = chunk_nids
+        let p_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = chunk_nids
             .iter()
             .flat_map(|&chunk_nid| {
                 participant_nids

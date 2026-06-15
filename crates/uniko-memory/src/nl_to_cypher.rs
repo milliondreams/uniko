@@ -23,10 +23,10 @@ use std::num::NonZeroUsize;
 use std::sync::{Mutex, OnceLock};
 
 use lru::LruCache;
-use uni_db::xervo::{GenerationOptions, Message};
 #[cfg(feature = "onnx")]
 use uniko_extract::nlp::NlpPipeline;
 use uniko_store::schema::labels;
+use uniko_store::xervo::{GenerationOptions, Message};
 use uniko_store::{KnowledgeBase, UnikoError};
 
 /// Default cache capacity.  ~128 entries × ~256 bytes per entry ≈
@@ -345,14 +345,10 @@ async fn call_with_retry(
 
     let mut last_err = None;
     for attempt in 0..=RETRY_ATTEMPTS {
-        let res = kb
-            .db()
-            .xervo()
-            .generate(llm_alias, &messages, options.clone())
-            .await;
+        let res = kb.generate(llm_alias, &messages, options.clone()).await;
         match res {
             Ok(r) => {
-                let cypher = clean_response(&r.text);
+                let cypher = clean_response(&r);
                 if !cypher.is_empty() {
                     return Ok(cypher);
                 }

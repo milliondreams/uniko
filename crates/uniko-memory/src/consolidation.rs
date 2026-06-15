@@ -37,11 +37,11 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
-use uni_db::Value;
-
 use uniko_extract::embedding::embed_batch_chunked;
+use uniko_store::Value;
 use uniko_store::operations::facts::FactUpsertInput;
 use uniko_store::schema::constants::{edges, labels};
+use uniko_store::temporal::Btic;
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use crate::llm_triples::{ObservationInput, refine_triples};
@@ -160,7 +160,7 @@ pub async fn run_cycle_with(
     let started_at = Utc::now();
     let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE).max(1);
 
-    let mut observations = fetch_unprocessed_observations(kb, batch_size).await?;
+    let mut observations = kb.fetch_unprocessed_observations(batch_size).await?;
 
     // Optionally refine each Observation's triple via the LLM.  Done
     // before grouping so the LLM's cleaner predicates collapse near-
@@ -330,7 +330,7 @@ pub async fn run_cycle_with(
         predicate: String,
         canonical: Option<String>,
         contributing: Vec<NodeId>,
-        prior_stale: Vec<(NodeId, uni_db::common::uni_btic::Btic, String)>,
+        prior_stale: Vec<(NodeId, Btic, String)>,
         first_observed: DateTime<Utc>,
         embed_text: String,
     }
@@ -365,7 +365,7 @@ pub async fn run_cycle_with(
 
         // F38: identify prior open Facts whose object's cluster gets
         // outvoted in this cycle.
-        let mut prior_stale: Vec<(NodeId, uni_db::common::uni_btic::Btic, String)> = Vec::new();
+        let mut prior_stale: Vec<(NodeId, Btic, String)> = Vec::new();
         for prior in &priors {
             let prior_key = normalize_object(&prior.object);
             let prior_cluster = clusters.get(&prior_key).copied();
@@ -769,65 +769,6 @@ fn canonical_object(votes: &[ObjectVote], clusters: &HashMap<String, usize>) -> 
         .map(|((_, text), _)| text)
 }
 
-/// Pull unprocessed Observations carrying a structured triple.
-///
-/// Filters out Observations from the rule-based fallback path
-/// (`predicate IS NULL`) and Observations already wired to a prior
-/// `ConsolidationCycle` via `PROCESSED`.  Capped at `limit` per cycle
-/// to bound worst-case latency.
-async fn fetch_unprocessed_observations(
-    kb: &KnowledgeBase,
-    limit: i64,
-) -> Result<Vec<UnprocessedObs>, UnikoError> {
-    let session = kb.db().session();
-    let cypher = "MATCH (o:Observation) \
-                  WHERE o.subject IS NOT NULL AND o.predicate IS NOT NULL \
-                  AND NOT EXISTS { MATCH (:ConsolidationCycle)-[:PROCESSED]->(o) } \
-                  RETURN id(o) AS nid, o.subject AS subject, o.predicate AS predicate, \
-                         o.object AS object, o.content AS content, \
-                         o.observed_at AS observed_at, \
-                         o.temporal_anchor AS temporal_anchor \
-                  ORDER BY o.observed_at ASC \
-                  LIMIT $lim";
-    let result = session
-        .query_with(cypher)
-        .param("lim", limit)
-        .fetch_all()
-        .await?;
-
-    Ok(result
-        .rows()
-        .iter()
-        .filter_map(try_parse_observation)
-        .collect())
-}
-
-/// Decode one Observation row into [`UnprocessedObs`].  Returns `None`
-/// when any required column (`nid`/`subject`/`predicate`) is missing or
-/// malformed — those rows are silently skipped, matching the legacy
-/// per-field guards.
-fn try_parse_observation(row: &uni_db::Row) -> Option<UnprocessedObs> {
-    let nid = row.get::<i64>("nid").ok()?;
-    let subject = row.get::<String>("subject").ok()?;
-    let predicate = row.get::<String>("predicate").ok()?;
-    // uni-db 2.1.0 returns DateTime props as `Value::Temporal`, not as
-    // RFC-3339 strings (uni `4583ee870`).  `extract_optional_dt` reads
-    // the `Value::Temporal` form and still accepts a legacy string, so
-    // it correctly handles both stored shapes.
-    let observed_at =
-        crate::value_convert::extract_optional_dt(row, "observed_at").unwrap_or_else(Utc::now);
-    let temporal_anchor = crate::value_convert::extract_optional_dt(row, "temporal_anchor");
-    Some(UnprocessedObs {
-        node_id: nid,
-        subject,
-        predicate,
-        object: row.get::<String>("object").ok(),
-        content: row.get::<String>("content").unwrap_or_default(),
-        observed_at,
-        temporal_anchor,
-    })
-}
-
 /// Compose the text that gets embedded for a Fact.
 ///
 /// Canonical path: `"{subject} {predicate} {object}"`.  Fallback path
@@ -872,20 +813,6 @@ fn freshest_content(votes: &[ObjectVote]) -> Option<String> {
         .map(|v| v.content.clone())
 }
 
-#[derive(Debug)]
-struct UnprocessedObs {
-    node_id: NodeId,
-    subject: String,
-    predicate: String,
-    object: Option<String>,
-    content: String,
-    observed_at: DateTime<Utc>,
-    /// Resolved absolute date from `ARGM-TMP` (Phase A).  Absent when
-    /// the source observation had no temporal modifier or used the
-    /// rule-based fallback path.
-    temporal_anchor: Option<DateTime<Utc>>,
-}
-
 #[derive(Debug, Default)]
 struct GroupBuilder {
     contributing: Vec<NodeId>,
@@ -904,7 +831,7 @@ struct ObjectVote {
 #[derive(Debug, Clone)]
 struct PriorFact {
     node_id: NodeId,
-    btic: uni_db::common::uni_btic::Btic,
+    btic: Btic,
     object: String,
 }
 

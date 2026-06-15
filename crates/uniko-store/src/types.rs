@@ -38,3 +38,66 @@ pub fn datetime_value(dt: chrono::DateTime<chrono::Utc>) -> uni_db::Value {
         timezone_name: None,
     })
 }
+
+/// Decode a `Value::Temporal` (or legacy RFC-3339 `Value::String`) into a
+/// UTC datetime, surfacing a precise [`UnikoError::Storage`] when neither
+/// branch yields a valid timestamp.
+///
+/// The inverse of [`datetime_value`] for the read path. Use this when an
+/// absent / malformed timestamp is genuinely an error (e.g. an Episode
+/// that *must* carry a write time); use [`optional_datetime_from_row`]
+/// when absence is acceptable.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) if the
+/// value is not a Temporal / String, the millis fall outside the
+/// supported range, or the RFC-3339 parse fails.
+pub fn datetime_from_value(
+    value: &uni_db::Value,
+    context: &str,
+) -> crate::error::Result<chrono::DateTime<chrono::Utc>> {
+    use chrono::{DateTime, Utc};
+    match value {
+        uni_db::Value::Temporal(t) => {
+            let millis = t
+                .epoch_millis()
+                .ok_or_else(|| crate::UnikoError::Storage(format!("{context} has no epoch")))?;
+            DateTime::<Utc>::from_timestamp_millis(millis).ok_or_else(|| {
+                crate::UnikoError::Storage(format!("epoch millis {millis} out of range"))
+            })
+        }
+        uni_db::Value::String(s) => DateTime::parse_from_rfc3339(s)
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(|e| crate::UnikoError::Storage(e.to_string())),
+        other => Err(crate::UnikoError::Storage(format!(
+            "{context} unexpected type: {other:?}"
+        ))),
+    }
+}
+
+/// Pull an optional UTC datetime out of a uni-db row `column`.
+///
+/// uni-db serialises DateTime properties as `Value::Temporal`, but some
+/// legacy properties land as RFC-3339 strings. Returns `None` when the
+/// column is missing, null, or unparseable — callers treat absence as
+/// "not yet set" rather than an error.
+#[must_use]
+pub fn optional_datetime_from_row(
+    row: &uni_db::Row,
+    column: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{DateTime, Utc};
+    let idx = row.columns().iter().position(|c| c == column)?;
+    let value = row.values().get(idx)?;
+    match value {
+        uni_db::Value::Temporal(t) => {
+            let millis = t.epoch_millis()?;
+            DateTime::<Utc>::from_timestamp_millis(millis)
+        }
+        uni_db::Value::String(s) if !s.is_empty() => DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|d| d.with_timezone(&Utc)),
+        _ => None,
+    }
+}

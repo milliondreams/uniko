@@ -26,10 +26,9 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
-use uni_db::Value;
 use uniko_store::schema::labels;
 use uniko_store::types::datetime_value;
-use uniko_store::{KnowledgeBase, UnikoError};
+use uniko_store::{KnowledgeBase, UnikoError, Value};
 
 /// Status string for a Procedure that has been observed once but
 /// hasn't yet crossed the promotion threshold.
@@ -182,11 +181,14 @@ pub async fn record_procedure_use(
             ))
         })?;
 
-    let snapshot = read_procedure(kb, procedure_id).await?.ok_or_else(|| {
-        UnikoError::Storage(format!(
-            "record_procedure_use: Procedure '{procedure_id}' not found"
-        ))
-    })?;
+    let snapshot = kb
+        .read_procedure_snapshot(procedure_id)
+        .await?
+        .ok_or_else(|| {
+            UnikoError::Storage(format!(
+                "record_procedure_use: Procedure '{procedure_id}' not found"
+            ))
+        })?;
     let use_count = snapshot.use_count + 1;
     let success = snapshot.success_count + i64::from(succeeded);
     let failure = snapshot.failure_count + i64::from(!succeeded);
@@ -235,31 +237,15 @@ pub async fn match_procedures(
     kb: &KnowledgeBase,
     state: &HashMap<String, String>,
 ) -> Result<Vec<MatchedProcedure>, UnikoError> {
-    let session = kb.db().session();
-    let cypher = "MATCH (p:Procedure) WHERE p.status = $st \
-                  RETURN p.procedure_id AS pid, p.name AS name, \
-                         coalesce(p.precondition_rule, '') AS pre, \
-                         coalesce(p.effectiveness, 0.0) AS eff \
-                  ORDER BY eff DESC";
-    let result = session
-        .query_with(cypher)
-        .param("st", STATUS_ACTIVE)
-        .fetch_all()
-        .await?;
+    let candidates = kb.fetch_procedures_by_status(STATUS_ACTIVE).await?;
 
     let mut out = Vec::new();
-    for row in result.rows() {
-        let Ok(pid) = row.get::<String>("pid") else {
-            continue;
-        };
-        let name: String = row.get("name").unwrap_or_default();
-        let pre: String = row.get("pre").unwrap_or_default();
-        let eff: f64 = row.get("eff").unwrap_or(0.0);
-        if precondition_matches(&pre, state) {
+    for c in candidates {
+        if precondition_matches(&c.precondition_rule, state) {
             out.push(MatchedProcedure {
-                procedure_id: pid,
-                name,
-                effectiveness: eff,
+                procedure_id: c.procedure_id,
+                name: c.name,
+                effectiveness: c.effectiveness,
             });
         }
     }
@@ -277,14 +263,6 @@ pub struct MatchedProcedure {
     pub effectiveness: f64,
 }
 
-#[derive(Debug, Default)]
-struct ProcedureSnapshot {
-    use_count: i64,
-    success_count: i64,
-    failure_count: i64,
-    status: String,
-}
-
 /// Returns `(created, promoted)`:
 /// - `created` — a fresh Procedure node was inserted this call.
 /// - `promoted` — an existing candidate crossed the threshold and
@@ -300,7 +278,7 @@ async fn upsert_procedure(
     let name = format!("{action_a} → {action_b}");
     let procedure_id = stable_procedure_id(agent_id, action_a, action_b);
 
-    let existing = read_procedure(kb, &procedure_id).await?;
+    let existing = kb.read_procedure_snapshot(&procedure_id).await?;
     let new = existing.is_none();
     let snapshot = existing.unwrap_or_default();
 
@@ -360,32 +338,6 @@ async fn upsert_procedure(
         .await?;
 
     Ok((new, promoted_this_call))
-}
-
-async fn read_procedure(
-    kb: &KnowledgeBase,
-    procedure_id: &str,
-) -> Result<Option<ProcedureSnapshot>, UnikoError> {
-    let session = kb.db().session();
-    let cypher = "MATCH (p:Procedure) WHERE p.procedure_id = $pid \
-                  RETURN coalesce(p.use_count, 0) AS uc, \
-                         coalesce(p.success_count, 0) AS sc, \
-                         coalesce(p.failure_count, 0) AS fc, \
-                         coalesce(p.status, '') AS st";
-    let result = session
-        .query_with(cypher)
-        .param("pid", procedure_id)
-        .fetch_all()
-        .await?;
-    let Some(row) = result.rows().first() else {
-        return Ok(None);
-    };
-    Ok(Some(ProcedureSnapshot {
-        use_count: row.get("uc").unwrap_or(0),
-        success_count: row.get("sc").unwrap_or(0),
-        failure_count: row.get("fc").unwrap_or(0),
-        status: row.get("st").unwrap_or_default(),
-    }))
 }
 
 /// Build a deterministic procedure_id for the (agent, action_a, action_b) triple.

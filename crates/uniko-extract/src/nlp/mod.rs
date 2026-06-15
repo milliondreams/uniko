@@ -55,7 +55,7 @@ impl NlpPipeline {
     /// cannot be resolved as an NLP model (e.g. the model download
     /// fails) — callers fall back to rule-based extraction.
     pub async fn try_new(kb: &KnowledgeBase) -> Option<Self> {
-        let runtime = kb.db().xervo().raw_runtime().cloned()?;
+        let runtime = kb.model_runtime()?;
         let model = match runtime.nlp_model(NLP_ALIAS).await {
             Ok(m) => m,
             Err(e) => {

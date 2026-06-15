@@ -109,36 +109,7 @@ impl IntentProfile {
     /// resolved NodeIds; empty when no entity_ref resolves or when
     /// `entity_refs` itself is empty.
     pub async fn resolve_seeds(&self, kb: &uniko_store::KnowledgeBase) -> Vec<uniko_store::NodeId> {
-        if self.entity_refs.is_empty() {
-            return Vec::new();
-        }
-        let session = kb.db().session();
-        let cypher = "UNWIND $names AS name \
-                      MATCH (n) \
-                      WHERE (n:Entity AND n.name = name) \
-                         OR (n:Participant AND n.name = name) \
-                      RETURN DISTINCT id(n) AS nid";
-        let names: Vec<uni_db::Value> = self
-            .entity_refs
-            .iter()
-            .map(|n| uni_db::Value::String(n.clone()))
-            .collect();
-        match session
-            .query_with(cypher)
-            .param("names", uni_db::Value::List(names))
-            .fetch_all()
-            .await
-        {
-            Ok(r) => r
-                .rows()
-                .iter()
-                .filter_map(|row| row.get::<i64>("nid").ok())
-                .collect(),
-            Err(e) => {
-                tracing::debug!(error = %e, "resolve_seeds query failed");
-                Vec::new()
-            }
-        }
+        kb.resolve_entity_seeds(&self.entity_refs).await
     }
 }
 

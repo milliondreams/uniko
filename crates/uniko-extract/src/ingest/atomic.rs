@@ -136,11 +136,7 @@ pub async fn ingest_message_atomic(
     let _entity_guards = kb.lock_entity_ids(&entity_prep.entity_ids).await;
 
     // 6. Open tx (snapshot taken after the entity locks are held).
-    let session = kb.db().session();
-    let tx = session
-        .tx()
-        .await
-        .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
+    let tx = kb.begin_tx().await?;
 
     // 6. apply Message writes.
     let setup = MessageSetup {

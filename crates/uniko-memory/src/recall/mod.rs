@@ -633,20 +633,18 @@ async fn recall_unfiltered(
         let top_n = config.reranker_top_n.min(items.len());
         let docs: Vec<&str> = items[..top_n].iter().map(|i| i.content.as_str()).collect();
         match kb
-            .db()
-            .xervo()
             .rerank(uniko_store::schema::RERANK_ALIAS, query, &docs)
             .await
         {
             Ok(scored) => {
                 let mut head: Vec<RecallItem> = scored
                     .into_iter()
-                    .filter_map(|s| {
-                        items.get(s.index).cloned().map(|mut it| {
+                    .filter_map(|(index, score)| {
+                        items.get(index).cloned().map(|mut it| {
                             it.score = if config.reranker_apply_sigmoid {
-                                1.0 / (1.0 + f64::exp(-(s.score as f64)))
+                                1.0 / (1.0 + f64::exp(-(score as f64)))
                             } else {
-                                s.score as f64
+                                score as f64
                             };
                             it
                         })
@@ -786,7 +784,6 @@ async fn phase1_compact(
         return Vec::new();
     }
 
-    let session = kb.db().session();
     let targets: &[(&str, &str, &str, i64)] = &[
         // (label, embedding field, content field, top_k)
         ("Fact", "embedding", "object", 20),
@@ -796,53 +793,36 @@ async fn phase1_compact(
 
     let mut out: HashMap<NodeId, RecallItem> = HashMap::new();
     for &(label, embed_field, content_field, top_k) in targets {
-        let cypher = format!(
-            "MATCH (m:{label}) \
-             WHERE m.{embed_field} IS NOT NULL \
-             RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                    coalesce(m.{content_field}, '') AS content, \
-                    similar_to(m.{embed_field}, $qvec) AS score \
-             ORDER BY score DESC LIMIT $lim"
-        );
-        let result = session
-            .query_with(&cypher)
-            .param("qvec", uni_db::Value::Vector(qvec.to_vec()))
-            .param("lim", top_k)
-            .fetch_all()
-            .await;
-        let result = match result {
+        let rows = match kb
+            .recall_vector_search(label, embed_field, content_field, qvec, top_k)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(label, error = %e, "phase1 compact query failed");
                 continue;
             }
         };
-        for row in result.rows() {
-            let Ok(nid) = row.get::<i64>("nid") else {
-                continue;
-            };
-            let lbl: String = row.get("lbl").unwrap_or_default();
-            let content: String = row.get("content").unwrap_or_default();
-            let score: f64 = row.get("score").unwrap_or(0.0);
-            if score < config.min_score {
+        for row in rows {
+            if row.score < config.min_score {
                 continue;
             }
-            let tier = RecallTier::from_label(&lbl);
-            let weighted = score * tier.weight();
+            let tier = RecallTier::from_label(&row.label);
+            let weighted = row.score * tier.weight();
             // Same node could appear from multiple targets if labels
             // overlap (they don't today, but be safe): keep the higher
             // weighted score.
-            out.entry(nid)
+            out.entry(row.node_id)
                 .and_modify(|existing| {
                     if weighted > existing.score {
                         existing.score = weighted;
                     }
                 })
                 .or_insert(RecallItem {
-                    node_id: nid,
-                    node_type: lbl,
+                    node_id: row.node_id,
+                    node_type: row.label,
                     score: weighted,
-                    content,
+                    content: row.content,
                     tier,
                 });
         }
@@ -1106,44 +1086,20 @@ async fn run_phase2_source(
     vector_field: &str,
 ) -> Vec<RankedHit> {
     let start = std::time::Instant::now();
-    let session = kb.db().session();
 
-    let result = match mode {
+    let rows = match mode {
         "vector" => {
-            let cypher = format!(
-                "MATCH (m:{label}) \
-                 WHERE m.{vector_field} IS NOT NULL \
-                 RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                        coalesce(m.{content_field}, '') AS content, \
-                        similar_to(m.{vector_field}, $qvec) AS score \
-                 ORDER BY score DESC LIMIT $lim"
-            );
-            session
-                .query_with(&cypher)
-                .param("qvec", uni_db::Value::Vector(qvec.to_vec()))
-                .param("lim", top_k)
-                .fetch_all()
+            kb.recall_vector_search(label, vector_field, content_field, qvec, top_k)
                 .await
         }
         "fulltext" => {
-            let cypher = format!(
-                "MATCH (m:{label}) \
-                 RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                        coalesce(m.{content_field}, '') AS content, \
-                        similar_to(m.{content_field}, $qtxt) AS score \
-                 ORDER BY score DESC LIMIT $lim"
-            );
-            session
-                .query_with(&cypher)
-                .param("qtxt", qtxt.as_str())
-                .param("lim", top_k)
-                .fetch_all()
+            kb.recall_fulltext_search(label, content_field, qtxt.as_str(), top_k)
                 .await
         }
         _ => return Vec::new(),
     };
 
-    let hits = match result {
+    let hits = match rows {
         Ok(r) => r,
         Err(e) => {
             tracing::debug!(label, mode, error = %e, "phase2 query failed");
@@ -1151,22 +1107,23 @@ async fn run_phase2_source(
         }
     };
 
-    let mut ranked: Vec<RankedHit> = Vec::with_capacity(hits.rows().len());
-    for row in hits.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let lbl: String = row.get("lbl").unwrap_or_else(|_| label.into());
-        let content: String = row.get("content").unwrap_or_default();
-        let score: f64 = row.get("score").unwrap_or(0.0);
-        if content.is_empty() {
+    let mut ranked: Vec<RankedHit> = Vec::with_capacity(hits.len());
+    for row in hits {
+        if row.content.is_empty() {
             continue;
         }
+        // The query always projects `labels(m)[0]`; fall back to the
+        // requested label only on the (defensive) empty case.
+        let lbl = if row.label.is_empty() {
+            label.to_string()
+        } else {
+            row.label
+        };
         ranked.push(RankedHit {
-            node_id: nid,
+            node_id: row.node_id,
             label: lbl,
-            content,
-            raw_score: score,
+            content: row.content,
+            raw_score: row.score,
         });
     }
     normalize_scores_in_place(&mut ranked);
@@ -1206,80 +1163,21 @@ async fn phase2_temporal(
     };
     let start = std::time::Instant::now();
 
-    // Cypher params: BTIC value for Fact overlap, day-aligned DateTime
-    // values for Observation/Episode BTree range scans.
-    let qbtic = temporal_window_to_btic_value(lo, hi);
-    let lo_val = uniko_store::types::datetime_value(lo);
-    let hi_val = uniko_store::types::datetime_value(hi);
-
-    // Single Cypher with three `UNION ALL` arms — Fact via BTIC overlap,
-    // Observation + Episode via BTree range on their timestamp columns.
-    // Per-arm `WITH ... LIMIT` preserves the historical 20/20/10 budget
-    // (a single trailing LIMIT could starve one arm if another saturates
-    // it first).  A `source` discriminator column is projected per arm
-    // so future per-source scoring can fan back out without re-querying.
-    let session = kb.db().session();
-    let cypher = "MATCH (f:Fact) \
-                  WHERE f.valid_at IS NOT NULL \
-                    AND btic_overlaps(f.valid_at, $qbtic) \
-                  WITH f LIMIT $lim_fact \
-                  RETURN id(f) AS nid, labels(f)[0] AS lbl, 'fact' AS source, \
-                         (coalesce(f.subject, '') + ' ' \
-                          + coalesce(f.predicate, '') + ' ' \
-                          + coalesce(f.object, '')) AS content \
-                  UNION ALL \
-                  MATCH (o:Observation) \
-                  WHERE o.temporal_anchor >= $lo \
-                    AND o.temporal_anchor < $hi \
-                  WITH o LIMIT $lim_obs \
-                  RETURN id(o) AS nid, labels(o)[0] AS lbl, 'observation' AS source, \
-                         coalesce(o.content, '') AS content \
-                  UNION ALL \
-                  MATCH (e:Episode) \
-                  WHERE e.timestamp >= $lo \
-                    AND e.timestamp < $hi \
-                  WITH e LIMIT $lim_eps \
-                  RETURN id(e) AS nid, labels(e)[0] AS lbl, 'episode' AS source, \
-                         coalesce(e.action_type, '') AS content";
-
-    let unified = session
-        .query_with(cypher)
-        .param("qbtic", qbtic.clone())
-        .param("lo", lo_val.clone())
-        .param("hi", hi_val.clone())
-        .param("lim_fact", 20i64)
-        .param("lim_obs", 20i64)
-        .param("lim_eps", 10i64)
-        .fetch_all()
-        .await;
-
-    // Flat score 1.0 for every hit — the window is the discriminator,
-    // not proximity-within-window.  RRF rank order is what matters
-    // downstream, and a narrow query window already restricts the
-    // candidate set tightly.
+    // Per-arm budget 20/20/10 (Fact/Observation/Episode). Flat score 1.0
+    // for every hit — the window is the discriminator, not proximity-
+    // within-window. RRF rank order is what matters downstream, and a
+    // narrow query window already restricts the candidate set tightly.
     let mut ranked: Vec<RankedHit> = Vec::new();
-    match unified {
-        Ok(res) => {
-            for row in res.rows() {
-                let Ok(nid) = row.get::<i64>("nid") else {
-                    continue;
-                };
-                let source: String = row.get("source").unwrap_or_default();
-                let default_label = match source.as_str() {
-                    "fact" => "Fact",
-                    "observation" => "Observation",
-                    "episode" => "Episode",
-                    _ => "Unknown",
-                };
-                let lbl: String = row.get("lbl").unwrap_or_else(|_| default_label.into());
-                let content: String = row.get("content").unwrap_or_default();
-                if content.trim().is_empty() {
+    match kb.temporal_window_hits(lo, hi, 20, 20, 10).await {
+        Ok(rows) => {
+            for row in rows {
+                if row.content.trim().is_empty() {
                     continue;
                 }
                 ranked.push(RankedHit {
-                    node_id: nid,
-                    label: lbl,
-                    content,
+                    node_id: row.node_id,
+                    label: row.label,
+                    content: row.content,
                     raw_score: 1.0,
                 });
             }
@@ -1363,26 +1261,8 @@ async fn phase2_graph_activation(
     let score_by_nid: HashMap<NodeId, f64> = ppr_result.scores.into_iter().collect();
 
     // Pull labels + a best-effort content field for each activated node
-    // in a single Cypher round-trip.  `content` falls back through the
-    // common text-bearing fields across label types.
-    let session = kb.db().session();
-    let cypher = "UNWIND $nids AS nid \
-                  MATCH (n) WHERE id(n) = nid \
-                  RETURN nid, labels(n)[0] AS lbl, \
-                         coalesce(n.content, \
-                                  n.action_type, \
-                                  (coalesce(n.subject, '') + ' ' \
-                                   + coalesce(n.predicate, '') + ' ' \
-                                   + coalesce(n.object, '')), \
-                                  n.name, \
-                                  '') AS content";
-    let vids_param: Vec<uni_db::Value> = vids.iter().map(|&v| uni_db::Value::Int(v)).collect();
-    let r = match session
-        .query_with(cypher)
-        .param("nids", uni_db::Value::List(vids_param))
-        .fetch_all()
-        .await
-    {
+    // in a single round-trip.
+    let r = match kb.fetch_node_contents(&vids).await {
         Ok(r) => r,
         Err(e) => {
             tracing::debug!(error = %e, "phase2_graph_activation node fetch failed");
@@ -1390,27 +1270,22 @@ async fn phase2_graph_activation(
         }
     };
 
-    let mut ranked: Vec<RankedHit> = Vec::with_capacity(r.rows().len());
-    for row in r.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let lbl: String = row.get("lbl").unwrap_or_default();
-        let content: String = row.get("content").unwrap_or_default();
-        if content.trim().is_empty() {
+    let mut ranked: Vec<RankedHit> = Vec::with_capacity(r.len());
+    for row in r {
+        if row.content.trim().is_empty() {
             continue;
         }
         // Skip entities themselves — they're recall anchors, not items
         // we want to show in the bundle.  Same exclusion downstream
         // code in Phase 3 entity fan-out applies.
-        if lbl == "Entity" || lbl == "Participant" {
+        if row.label == "Entity" || row.label == "Participant" {
             continue;
         }
-        let score = score_by_nid.get(&nid).copied().unwrap_or(0.0);
+        let score = score_by_nid.get(&row.node_id).copied().unwrap_or(0.0);
         ranked.push(RankedHit {
-            node_id: nid,
-            label: lbl,
-            content,
+            node_id: row.node_id,
+            label: row.label,
+            content: row.content,
             raw_score: score,
         });
     }
@@ -1427,20 +1302,6 @@ async fn phase2_graph_activation(
         "phase2_graph_activation complete",
     );
     ranked
-}
-
-/// Build a `Value::Temporal(Btic { ... })` covering `[lo, hi)` for use
-/// as a Cypher parameter to the `btic_overlaps()` UDF.
-fn temporal_window_to_btic_value(
-    lo: chrono::DateTime<chrono::Utc>,
-    hi: chrono::DateTime<chrono::Utc>,
-) -> uni_db::Value {
-    let btic = uniko_store::schema::btic::btic_query_window(lo, hi);
-    uni_db::Value::Temporal(uni_db::common::TemporalValue::Btic {
-        lo: btic.lo(),
-        hi: btic.hi(),
-        meta: btic.meta(),
-    })
 }
 
 /// Min-max normalise a `RankedHit` list's `raw_score` field in-place
@@ -1483,33 +1344,22 @@ async fn session_boost_signals(
         return boosts;
     }
 
-    let session = kb.db().session();
     for fact in phase1_items {
         if !matches!(fact.tier, RecallTier::Semantic | RecallTier::Procedural) {
             continue;
         }
-        // One Cypher round-trip per Fact.  Cheap relative to the LLM
-        // call that follows; could be batched if profiling shows it.
-        let cypher = format!(
-            "MATCH (f) WHERE id(f) = {nid} \
-             MATCH (f)<-[:SUPPORTED_BY]-(:Observation)-[:OBSERVED_IN]->(:Message) \
-                  -[:IN_SESSION]->(:Session)-[:HAS_CHUNK]->(c:Chunk) \
-             RETURN DISTINCT id(c) AS chunk_id",
-            nid = fact.node_id,
-        );
-        let result = session.query_with(&cypher).fetch_all().await;
-        let result = match result {
-            Ok(r) => r,
+        // One round-trip per Fact.  Cheap relative to the LLM call that
+        // follows; could be batched if profiling shows it.
+        let chunk_ids = match kb.fact_session_chunk_ids(fact.node_id).await {
+            Ok(ids) => ids,
             Err(e) => {
                 tracing::debug!(error = %e, fact_id = fact.node_id, "session_boost walk failed");
                 continue;
             }
         };
         let delta = fact.score * alpha;
-        for row in result.rows() {
-            if let Ok(cid) = row.get::<i64>("chunk_id") {
-                *boosts.entry(cid).or_insert(0.0) += delta;
-            }
+        for cid in chunk_ids {
+            *boosts.entry(cid).or_insert(0.0) += delta;
         }
     }
     boosts
@@ -1558,27 +1408,11 @@ async fn entity_type_match(
     node_id: uniko_store::NodeId,
     target_type: &str,
 ) -> bool {
-    let session = kb.db().session();
-    // Bind both the node id and the target type as parameters — never
-    // interpolate values into Cypher (issue #2: this site previously
-    // hand-escaped quotes, an injection-prone substitute for binding).
-    let q = "MATCH (n) WHERE id(n) = $nid \
-         OPTIONAL MATCH (n)-[:MENTIONS|ABOUT]->(e1:Entity {entity_type: $t}) \
-         OPTIONAL MATCH (n)<-[:ABOUT]-(:Observation)-[:ABOUT]->(e2:Entity {entity_type: $t}) \
-         RETURN (n.entity_type = $t OR e1 IS NOT NULL OR e2 IS NOT NULL) AS hit \
-         LIMIT 1";
-    match session
-        .query_with(q)
-        .param("nid", node_id)
-        .param("t", target_type)
-        .fetch_all()
-        .await
-    {
-        Ok(result) => result
-            .rows()
-            .first()
-            .and_then(|row| row.get::<bool>("hit").ok())
-            .unwrap_or(false),
+    // The store binds both the node id and the target type as parameters
+    // (issue #2). Treat a query error as "no match" so a transient
+    // failure can't accidentally re-rank items downward.
+    match kb.entity_type_matches(node_id, target_type).await {
+        Ok(hit) => hit,
         Err(e) => {
             tracing::debug!(error = %e, node_id, "entity_type_match: query failed");
             false
@@ -1611,150 +1445,28 @@ async fn run_recall_for_variant(
     entity_refs: &[String],
     config: &RecallConfig,
 ) -> Vec<RankedHit> {
-    let session = kb.db().session();
-    let mut scored: HashMap<NodeId, (String, String, f64)> = HashMap::new();
-    let has_vec = !qvec.is_empty();
-
-    // Hybrid (vector + BM25) over chunk types — same query shape, only
-    // the chunk_type filter differs.
-    let (sources, queries, fusion, needs_qvec, needs_qtxt) = if has_vec {
-        (
-            "[m.embedding, m.text]",
-            "[$qvec, $qtxt]",
-            format!(
-                ", {{method: 'weighted', weights: [{}, {}]}}",
-                config.vector_weight, config.bm25_weight
-            ),
-            true,
-            true,
+    // Hybrid chunk search (vector+BM25 over session/observation chunks)
+    // plus the entity-scoped fan-out, max-merged per node id by the store
+    // (which binds every value and interpolates only structural lists).
+    let scored = kb
+        .recall_chunk_and_entity_scoped(
+            qvec,
+            qtxt,
+            entity_refs,
+            config.per_variant_limit as i64,
+            config.vector_weight,
+            config.bm25_weight,
         )
-    } else {
-        ("m.text", "$qtxt", String::new(), false, true)
-    };
-
-    for chunk_type in ["session", "observation"] {
-        // `sources`/`queries`/`fusion` are structural (column lists + fusion
-        // method) and must be interpolated; the chunk_type VALUE is bound as a
-        // parameter, never inlined (issue #2).
-        let cypher = format!(
-            "MATCH (m:Chunk) WHERE m.chunk_type = $ctype \
-             RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                    m.text AS content, \
-                    similar_to({sources}, {queries}{fusion}) AS score \
-             ORDER BY score DESC LIMIT $lim"
-        );
-
-        let mut builder = session.query_with(&cypher);
-        builder = builder.param("ctype", chunk_type);
-        builder = builder.param("lim", config.per_variant_limit as i64);
-        if needs_qvec {
-            builder = builder.param("qvec", uni_db::Value::Vector(qvec.to_vec()));
-        }
-        if needs_qtxt {
-            builder = builder.param("qtxt", qtxt);
-        }
-
-        match builder.fetch_all().await {
-            Ok(result) => merge_scored_rows(result.rows(), &mut scored),
-            Err(e) => {
-                tracing::debug!(chunk_type, error = %e, "hybrid similar_to failed")
-            }
-        }
-    }
-
-    // Entity-scoped fan-out. The cypher per target depends only on
-    // `has_vec` + the per-target tuple, not on `entity_name`, so we
-    // build the 6 templates once and bind $ename per entity.
-    let entity_scoped_targets: &[(&str, &str, &str, &str)] = &[
-        (
-            "Chunk",
-            "text",
-            "embedding",
-            "(m)<-[:HAS_CHUNK]-(:Session)<-[:PARTICIPATED_IN]-(:Participant {name: $ename})",
-        ),
-        (
-            "Chunk",
-            "text",
-            "embedding",
-            "(m)-[:ABOUT]->(:Participant {name: $ename})",
-        ),
-        (
-            "Chunk",
-            "text",
-            "embedding",
-            "(m)-[:ABOUT]->(:Entity {name: $ename})",
-        ),
-        (
-            "Observation",
-            "content",
-            "embedding",
-            "(m)-[:ABOUT]->(:Participant {name: $ename})",
-        ),
-        (
-            "Observation",
-            "content",
-            "embedding",
-            "(m)-[:ABOUT]->(:Entity {name: $ename})",
-        ),
-        ("Observation", "content", "embedding", "m.subject = $ename"),
-    ];
-    let entity_cyphers: Vec<(String, &str)> = entity_scoped_targets
-        .iter()
-        .map(|&(label, content_field, embed_field, pattern)| {
-            let cypher = if has_vec {
-                format!(
-                    "MATCH (m:{label}) WHERE {pattern} \
-                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                            m.{content_field} AS content, \
-                            similar_to([m.{embed_field}, m.{content_field}], [$qvec, $qtxt]) AS score \
-                     ORDER BY score DESC LIMIT $lim"
-                )
-            } else {
-                format!(
-                    "MATCH (m:{label}) WHERE {pattern} \
-                     RETURN id(m) AS nid, labels(m)[0] AS lbl, \
-                            m.{content_field} AS content, \
-                            similar_to(m.{content_field}, $qtxt) AS score \
-                     ORDER BY score DESC LIMIT $lim"
-                )
-            };
-            (cypher, label)
-        })
-        .collect();
-
-    for entity_name in entity_refs {
-        for (cypher, label) in &entity_cyphers {
-            let mut builder = session.query_with(cypher);
-            builder = builder
-                .param("ename", entity_name.as_str())
-                .param("qtxt", qtxt)
-                .param("lim", config.per_variant_limit as i64);
-            if has_vec {
-                builder = builder.param("qvec", uni_db::Value::Vector(qvec.to_vec()));
-            }
-
-            match builder.fetch_all().await {
-                Ok(result) => merge_scored_rows(result.rows(), &mut scored),
-                Err(e) => {
-                    tracing::debug!(
-                        entity = entity_name,
-                        label,
-                        error = %e,
-                        "entity-scoped search failed"
-                    )
-                }
-            }
-        }
-    }
+        .await;
 
     let mut hits: Vec<RankedHit> = scored
         .into_iter()
-        .filter(|(_, (_, content, _))| !content.is_empty())
-        .map(|(node_id, (label, content, raw_score))| RankedHit {
-            node_id,
-            label,
-            content,
-            raw_score,
+        .filter(|r| !r.content.is_empty())
+        .map(|r| RankedHit {
+            node_id: r.node_id,
+            label: r.label,
+            content: r.content,
+            raw_score: r.score,
         })
         .collect();
     crate::sort_by_score_desc(&mut hits, |x| x.raw_score);
@@ -1783,21 +1495,6 @@ where
         }
     }
     fused
-}
-
-/// Merge a row batch into the per-variant `scored` accumulator, keeping
-/// the max score per node id.
-fn merge_scored_rows(rows: &[uni_db::Row], scored: &mut HashMap<NodeId, (String, String, f64)>) {
-    for row in rows {
-        let nid: i64 = row.get("nid").unwrap_or(0);
-        let lbl: String = row.get("lbl").unwrap_or_default();
-        let content: String = row.get("content").unwrap_or_default();
-        let score: f64 = row.get("score").unwrap_or(0.0);
-        scored
-            .entry(nid)
-            .and_modify(|(_, _, s)| *s = s.max(score))
-            .or_insert((lbl, content, score));
-    }
 }
 
 fn empty_bundle() -> ContextBundle {

@@ -23,10 +23,10 @@
 use std::collections::HashMap;
 
 use serde::Serialize;
-use uni_db::Value;
-use uniko_store::schema::{edges, labels};
+use uniko_store::repository::topics::{CoPair, EntityRow};
+use uniko_store::schema::labels;
 use uniko_store::types::datetime_value;
-use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+use uniko_store::{KnowledgeBase, NodeId, UnikoError, Value};
 
 /// Configuration for the topic detection pass.
 #[derive(Debug, Clone, Copy)]
@@ -103,7 +103,7 @@ pub async fn detect_topics_once_with_llm(
     cfg: TopicConfig,
     llm_alias: Option<&str>,
 ) -> Result<TopicReport, UnikoError> {
-    let entities = fetch_entities(kb).await?;
+    let entities = kb.fetch_all_entities().await?;
     if entities.is_empty() {
         return Ok(TopicReport::default());
     }
@@ -114,7 +114,7 @@ pub async fn detect_topics_once_with_llm(
         .map(|(i, e)| (e.node_id, i))
         .collect();
 
-    let pairs = fetch_cooccurrence_pairs(kb, cfg.max_pairs).await?;
+    let pairs = kb.fetch_cooccurrence_pairs(cfg.max_pairs).await?;
     let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); entities.len()];
     for CoPair { a, b, weight } in &pairs {
         let (Some(&ia), Some(&ib)) = (id_to_idx.get(a), id_to_idx.get(b)) else {
@@ -148,89 +148,6 @@ pub async fn detect_topics_once_with_llm(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-struct EntityRow {
-    node_id: NodeId,
-    entity_id: String,
-    name: String,
-    /// Kniv-assigned NER type (e.g. `"PERSON"`, `"ORG"`, `"LOC"`).
-    /// Empty when ingest used rule-based fallback only.  Used by
-    /// [`community_summary`] to group members by type so the
-    /// summary reads like "Topic of 5 entities (3 PERSON, 2 ORG)"
-    /// instead of a flat name list.
-    entity_type: String,
-    embedding: Option<Vec<f32>>,
-}
-
-struct CoPair {
-    a: NodeId,
-    b: NodeId,
-    weight: f64,
-}
-
-async fn fetch_entities(kb: &KnowledgeBase) -> Result<Vec<EntityRow>, UnikoError> {
-    let session = kb.db().session();
-    let cypher = "MATCH (e:Entity) \
-                  RETURN id(e) AS nid, e.entity_id AS eid, e.name AS name, \
-                         coalesce(e.entity_type, '') AS etype, \
-                         e.embedding AS emb";
-    let result = session.query_with(cypher).fetch_all().await?;
-
-    let mut out = Vec::new();
-    for row in result.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let eid: String = row.get("eid").unwrap_or_default();
-        let name: String = row.get("name").unwrap_or_default();
-        let entity_type: String = row.get("etype").unwrap_or_default();
-        let embedding: Option<Vec<f32>> = row.get::<Vec<f32>>("emb").ok();
-        out.push(EntityRow {
-            node_id: nid,
-            entity_id: eid,
-            name,
-            entity_type,
-            embedding,
-        });
-    }
-    Ok(out)
-}
-
-/// Aggregate co-occurrence across MENTIONS-source labels (Message,
-/// Chunk, Episode, Action, Artifact).  Returns ordered pairs (a < b)
-/// to dedupe the undirected co-occurrence relation.
-async fn fetch_cooccurrence_pairs(
-    kb: &KnowledgeBase,
-    max_pairs: i64,
-) -> Result<Vec<CoPair>, UnikoError> {
-    let session = kb.db().session();
-    let cypher = "MATCH (src)-[:MENTIONS]->(a:Entity) \
-                  MATCH (src)-[:MENTIONS]->(b:Entity) \
-                  WHERE id(a) < id(b) \
-                  WITH id(a) AS a, id(b) AS b, count(*) AS w \
-                  RETURN a, b, w \
-                  ORDER BY w DESC \
-                  LIMIT $lim";
-    let result = session
-        .query_with(cypher)
-        .param("lim", max_pairs)
-        .fetch_all()
-        .await?;
-
-    let mut out = Vec::new();
-    for row in result.rows() {
-        let Ok(a) = row.get::<i64>("a") else { continue };
-        let Ok(b) = row.get::<i64>("b") else { continue };
-        let w: i64 = row.get("w").unwrap_or(1);
-        out.push(CoPair {
-            a,
-            b,
-            weight: w as f64,
-        });
-    }
-    Ok(out)
-}
 
 /// Weighted LPA.  Each entity adopts the label most heavily weighted
 /// among its neighbours.  Ties broken by smaller label id for
@@ -327,34 +244,10 @@ async fn upsert_topic(
         .merge_node(labels::TOPIC, "topic_id", topic_id, &props)
         .await?;
 
-    // uni-db 2.0 supports edge-MERGE, so BELONGS_TO is idempotent on
-    // re-run — no duplicate edges. Replaces the old bare `create_edge`
-    // plus swallow-the-"duplicate"/"already" storage-error dance.
-    let cypher = format!(
-        "MATCH (m), (t) WHERE id(m) = $m AND id(t) = $t \
-         MERGE (m)-[:{}]->(t)",
-        edges::BELONGS_TO
-    );
+    // BELONGS_TO is idempotent on re-run (edge-MERGE in the store helper),
+    // replacing the old bare `create_edge` + swallow-the-"duplicate" dance.
     let member_ids: Vec<_> = members.iter().map(|m| m.node_id).collect();
-    kb.transact_with_retry(uni_db::RetryOptions::default(), move |tx| {
-        let cypher = cypher.clone();
-        let member_ids = member_ids.clone();
-        async move {
-            let r = async {
-                for mid in member_ids {
-                    tx.query_with(&cypher)
-                        .param("m", mid)
-                        .param("t", topic_node)
-                        .fetch_all()
-                        .await?;
-                }
-                Ok(())
-            }
-            .await;
-            (tx, r)
-        }
-    })
-    .await?;
+    kb.merge_belongs_to_edges(topic_node, &member_ids).await?;
 
     Ok(!existing)
 }
@@ -398,7 +291,7 @@ async fn community_name_llm(
     members: &[EntityRow],
     llm_alias: &str,
 ) -> Option<String> {
-    use uni_db::xervo::{GenerationOptions, Message};
+    use uniko_store::xervo::{GenerationOptions, Message};
 
     let bucket = bucket_by_type(members);
     let types = if bucket.is_empty() {
@@ -429,14 +322,9 @@ async fn community_name_llm(
         ..Default::default()
     };
 
-    let res = kb
-        .db()
-        .xervo()
-        .generate(llm_alias, &messages, options)
-        .await
-        .ok()?;
+    let res = kb.generate(llm_alias, &messages, options).await.ok()?;
 
-    let trimmed = res.text.trim();
+    let trimmed = res.trim();
     if trimmed.is_empty() {
         return None;
     }

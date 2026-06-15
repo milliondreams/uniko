@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use uni_db::Value;
+use uniko_store::Value;
 
 use uniko_store::id::new_id;
 use uniko_store::schema::labels;
@@ -157,7 +157,7 @@ pub async fn apply_decay_cycle(
     kb: &KnowledgeBase,
     cfg: RuleLifecycleConfig,
 ) -> Result<DecayReport, UnikoError> {
-    let rules = fetch_lifecycle_rules(kb).await?;
+    let rules = kb.fetch_lifecycle_rules().await?;
     let mut report = DecayReport::default();
     let now = Utc::now();
 
@@ -219,7 +219,7 @@ pub async fn record_rule_match(
     name: &str,
     cfg: RuleLifecycleConfig,
 ) -> Result<(), UnikoError> {
-    let rule = fetch_rule_by_name(kb, name).await?;
+    let rule = kb.fetch_rule_by_name(name).await?;
     if is_stdlib_rule(&rule.source_type) {
         // Stdlib confidence is fixed at 1.0; no state changes.
         return Ok(());
@@ -254,68 +254,6 @@ pub struct DecayReport {
     pub promoted: usize,
     /// Rules transitioned to terminal `pruned`.
     pub pruned: usize,
-}
-
-/// Snapshot of a Rule node loaded for lifecycle work.
-#[derive(Debug, Clone)]
-struct RuleSnapshot {
-    node_id: NodeId,
-    name: String,
-    source_type: String,
-    status: String,
-    confidence: f64,
-    missed_cycles: i64,
-    last_scored_at: Option<DateTime<Utc>>,
-}
-
-/// Standard `RETURN` clause for Rule snapshots — kept in one place so
-/// `fetch_lifecycle_rules` and `fetch_rule_by_name` always project the
-/// same columns and `row_to_snapshot` can decode them uniformly.
-const RULE_SNAPSHOT_RETURN: &str = "RETURN id(r) AS nid, r.name AS name, \
-                                    coalesce(r.source_type, 'authored') AS st, \
-                                    coalesce(r.status, 'candidate') AS status, \
-                                    coalesce(r.confidence, 0.5) AS conf, \
-                                    coalesce(r.missed_cycles, 0) AS mc, \
-                                    r.last_scored_at AS lsa";
-
-async fn fetch_lifecycle_rules(kb: &KnowledgeBase) -> Result<Vec<RuleSnapshot>, UnikoError> {
-    let session = kb.db().session();
-    let cypher = format!("MATCH (r:Rule) {RULE_SNAPSHOT_RETURN}");
-    let result = session.query_with(&cypher).fetch_all().await?;
-    Ok(result.rows().iter().filter_map(row_to_snapshot).collect())
-}
-
-async fn fetch_rule_by_name(kb: &KnowledgeBase, name: &str) -> Result<RuleSnapshot, UnikoError> {
-    let session = kb.db().session();
-    let cypher = format!("MATCH (r:Rule) WHERE r.name = $n {RULE_SNAPSHOT_RETURN} LIMIT 1");
-    let result = session
-        .query_with(&cypher)
-        .param("n", name)
-        .fetch_all()
-        .await?;
-    let row = result
-        .rows()
-        .first()
-        .ok_or_else(|| UnikoError::Storage(format!("rule '{name}' not found")))?;
-    row_to_snapshot(row).ok_or_else(|| UnikoError::Storage(format!("rule '{name}' missing nid")))
-}
-
-/// Decode a Rule row produced by [`RULE_SNAPSHOT_RETURN`] into a
-/// [`RuleSnapshot`].  Returns `None` when `nid` is unreadable —
-/// callers either skip or surface a missing-rule error.
-fn row_to_snapshot(row: &uni_db::Row) -> Option<RuleSnapshot> {
-    let nid: i64 = row.get("nid").ok()?;
-    Some(RuleSnapshot {
-        node_id: nid,
-        name: row.get("name").unwrap_or_default(),
-        source_type: row.get("st").unwrap_or_else(|_| "authored".into()),
-        status: row
-            .get("status")
-            .unwrap_or_else(|_| STATUS_CANDIDATE.into()),
-        confidence: row.get("conf").unwrap_or(0.5),
-        missed_cycles: row.get("mc").unwrap_or(0),
-        last_scored_at: crate::value_convert::extract_optional_dt(row, "lsa"),
-    })
 }
 
 fn days_since(last: &Option<DateTime<Utc>>, now: DateTime<Utc>) -> i64 {

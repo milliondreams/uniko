@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use uni_db::Value;
+use uniko_store::Value;
 
 use uniko_store::schema::constants::edges;
 use uniko_store::types::datetime_value;

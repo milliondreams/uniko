@@ -21,8 +21,6 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use uni_db::Value;
-
 use uniko_store::schema::labels;
 use uniko_store::{KnowledgeBase, UnikoError};
 
@@ -39,23 +37,6 @@ pub const DEFAULT_TOKEN_BUDGET: usize = 8192;
 /// but ~50 tokens is close enough for budget enforcement and keeps the
 /// traversal latency budget intact.
 const APPROX_TOKENS_PER_ITEM: usize = 50;
-
-/// Maximum candidate rows fetched per category before ranking.
-///
-/// Wider than the final bundle so the per-tier ranking has room to
-/// surface the best candidates.  Latency stays well under NF17 because
-/// each category is one indexed query.
-const CANDIDATES_PER_CATEGORY: i64 = 50;
-
-/// Cypher fragment matching any Session bound to an in-scope Goal,
-/// either directly (`FOR_GOAL`) or via a Task (`FOR_TASK → PART_OF`).
-///
-/// Variable `s` must be bound to the candidate Session and the
-/// parameter `$ids` to a `List<String>` of goal ids — the same shape
-/// [`goal_ids_value`] produces.  Inlined into every per-category
-/// fetcher so they all share the same scope semantics.
-const SESSION_IN_GOAL_SCOPE: &str = "(EXISTS { (s)-[:FOR_GOAL]->(g:Goal) WHERE g.goal_id IN $ids } \
-                                    OR EXISTS { (s)-[:FOR_TASK]->(:Task)-[:PART_OF]->(g:Goal) WHERE g.goal_id IN $ids })";
 
 /// Inputs for [`working_memory`].
 #[derive(Debug, Clone, Default)]
@@ -127,14 +108,15 @@ pub async fn working_memory(
 ) -> Result<ContextBundle, UnikoError> {
     let budget = params.budget.unwrap_or(DEFAULT_TOKEN_BUDGET);
     let per_tier_limit = params.per_tier_limit.max(1);
-    let session = kb.db().session();
 
     // ── Step 1: Resolve goal scope ──
     //
     // The scope is "this goal + (optionally) all descendant goals via
     // PARENT_GOAL*".  We collect goal_ids as strings so subsequent
     // queries can use a flat IN-list, which uni-db plans efficiently.
-    let goal_ids = collect_goal_scope(kb, &params).await?;
+    let goal_ids = kb
+        .goal_scope_ids(&params.goal_id, params.include_subgoals)
+        .await?;
     if goal_ids.is_empty() {
         return Ok(empty_bundle());
     }
@@ -145,12 +127,12 @@ pub async fn working_memory(
     // NF17 < 200 ms target achievable when goals expand to many
     // sessions/tasks/messages.
     let (goals_res, tasks_res, sessions_res, messages_res, facts_res, entities_res) = tokio::join!(
-        fetch_goal_items(&session, &goal_ids),
-        fetch_task_items(&session, &goal_ids),
-        fetch_session_items(&session, &goal_ids),
-        fetch_message_items(&session, &goal_ids),
-        fetch_fact_items(&session, &goal_ids),
-        fetch_entity_items(&session, &goal_ids),
+        fetch_goal_items(kb, &goal_ids),
+        fetch_task_items(kb, &goal_ids),
+        fetch_session_items(kb, &goal_ids),
+        fetch_message_items(kb, &goal_ids),
+        fetch_fact_items(kb, &goal_ids),
+        fetch_entity_items(kb, &goal_ids),
     );
 
     let mut items = Vec::new();
@@ -182,303 +164,145 @@ pub async fn working_memory(
     })
 }
 
-/// Compute the goal scope: the input goal plus, if requested, every
-/// descendant reachable via `PARENT_GOAL*`.
-async fn collect_goal_scope(
-    kb: &KnowledgeBase,
-    params: &WorkingMemoryParams,
-) -> Result<Vec<String>, UnikoError> {
-    // First confirm the goal exists.
-    let exists = kb
-        .get_node_by_ext_id(labels::GOAL, "goal_id", &params.goal_id)
-        .await?
-        .is_some();
-    if !exists {
-        return Ok(Vec::new());
-    }
-
-    if !params.include_subgoals {
-        return Ok(vec![params.goal_id.clone()]);
-    }
-
-    let session = kb.db().session();
-    let cypher = "MATCH (g:Goal {goal_id: $gid}) \
-                  OPTIONAL MATCH (sub:Goal)-[:PARENT_GOAL*1..5]->(g) \
-                  WITH collect(DISTINCT g.goal_id) + collect(DISTINCT sub.goal_id) AS ids \
-                  UNWIND ids AS gid \
-                  WITH gid WHERE gid IS NOT NULL \
-                  RETURN DISTINCT gid AS gid";
-    let result = session
-        .query_with(cypher)
-        .param("gid", params.goal_id.as_str())
-        .fetch_all()
-        .await?;
-
-    let ids: Vec<String> = result
-        .rows()
-        .iter()
-        .filter_map(|row| row.get::<String>("gid").ok())
-        .collect();
-    if ids.is_empty() {
-        Ok(vec![params.goal_id.clone()])
-    } else {
-        Ok(ids)
-    }
-}
-
 /// Fetch the Goal nodes themselves so callers see the goal title in
 /// the bundle.  Always small (≤ depth of PARENT_GOAL hierarchy).
 async fn fetch_goal_items(
-    session: &uni_db::Session,
+    kb: &KnowledgeBase,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = "MATCH (g:Goal) WHERE g.goal_id IN $ids \
-                  RETURN id(g) AS nid, \
-                         coalesce(g.title, g.goal_id) AS content, \
-                         coalesce(g.status, 'active') AS status";
-    let result = session
-        .query_with(cypher)
-        .param("ids", goal_ids_value(goal_ids))
-        .fetch_all()
-        .await?;
-
-    let mut items = Vec::new();
-    for row in result.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let content: String = row.get("content").unwrap_or_default();
-        let status: String = row.get("status").unwrap_or_default();
-        let score = if status == "active" { 1.0 } else { 0.6 };
-        items.push(RecallItem {
-            node_id: nid,
-            node_type: labels::GOAL.to_string(),
-            score: score * RecallTier::Semantic.weight(),
-            content,
-            tier: RecallTier::Semantic,
-        });
-    }
-    Ok(items)
+    let rows = kb.fetch_wm_goals(goal_ids).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let score = if r.status == "active" { 1.0 } else { 0.6 };
+            RecallItem {
+                node_id: r.node_id,
+                node_type: labels::GOAL.to_string(),
+                score: score * RecallTier::Semantic.weight(),
+                content: r.content,
+                tier: RecallTier::Semantic,
+            }
+        })
+        .collect())
 }
 
 /// Fetch Tasks that are part of any in-scope goal.
 async fn fetch_task_items(
-    session: &uni_db::Session,
+    kb: &KnowledgeBase,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = "MATCH (t:Task)-[:PART_OF]->(g:Goal) \
-                  WHERE g.goal_id IN $ids \
-                  RETURN id(t) AS nid, \
-                         coalesce(t.title, t.task_id) AS content, \
-                         coalesce(t.priority, 0.5) AS prio, \
-                         coalesce(t.status, 'pending') AS status \
-                  LIMIT $lim";
-    let result = session
-        .query_with(cypher)
-        .param("ids", goal_ids_value(goal_ids))
-        .param("lim", CANDIDATES_PER_CATEGORY)
-        .fetch_all()
-        .await?;
-
-    let mut items = Vec::new();
-    for row in result.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let content: String = row.get("content").unwrap_or_default();
-        let prio: f64 = row.get("prio").unwrap_or(0.5);
-        let status: String = row.get("status").unwrap_or_default();
-        // Active/in-progress tasks score higher than completed ones; a
-        // tied-priority active task should beat a completed one.
-        let status_boost = match status.as_str() {
-            "active" | "in_progress" | "pending" => 1.0,
-            "completed" => 0.5,
-            _ => 0.75,
-        };
-        let score = prio.clamp(0.0, 1.0) * status_boost * RecallTier::Procedural.weight();
-        items.push(RecallItem {
-            node_id: nid,
-            node_type: labels::TASK.to_string(),
-            score,
-            content,
-            tier: RecallTier::Procedural,
-        });
-    }
-    Ok(items)
+    let rows = kb.fetch_wm_tasks(goal_ids).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            // Active/in-progress tasks score higher than completed ones; a
+            // tied-priority active task should beat a completed one.
+            let status_boost = match r.status.as_str() {
+                "active" | "in_progress" | "pending" => 1.0,
+                "completed" => 0.5,
+                _ => 0.75,
+            };
+            let score = r.priority.clamp(0.0, 1.0) * status_boost * RecallTier::Procedural.weight();
+            RecallItem {
+                node_id: r.node_id,
+                node_type: labels::TASK.to_string(),
+                score,
+                content: r.content,
+                tier: RecallTier::Procedural,
+            }
+        })
+        .collect())
 }
 
 /// Fetch Sessions linked to any in-scope goal or its tasks.
 async fn fetch_session_items(
-    session: &uni_db::Session,
+    kb: &KnowledgeBase,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = format!(
-        "MATCH (s:Session) WHERE {SESSION_IN_GOAL_SCOPE} \
-         RETURN id(s) AS nid, \
-                coalesce(s.topic, s.session_id) AS content, \
-                s.started_at AS started_at \
-         ORDER BY s.started_at DESC \
-         LIMIT $lim"
-    );
-    let result = session
-        .query_with(&cypher)
-        .param("ids", goal_ids_value(goal_ids))
-        .param("lim", CANDIDATES_PER_CATEGORY)
-        .fetch_all()
-        .await?;
-
-    // Sessions are time-bearing: rank by recency.  The query already
-    // orders by started_at DESC; we map ordinal recency to a [0..1]
-    // boost without making another temporal call.
-    let mut items = Vec::new();
-    let rows = result.rows();
+    // Sessions are time-bearing: the query returns them newest-first, so
+    // we map ordinal recency to a [0.4..1.0] boost without a temporal call.
+    let rows = kb.fetch_wm_sessions(goal_ids).await?;
     let n = rows.len().max(1) as f64;
-    for (idx, row) in rows.iter().enumerate() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let content: String = row.get("content").unwrap_or_default();
-        // 1.0 for the newest, decaying linearly toward 0.4 for the oldest.
-        let recency = ordinal_recency(idx, n);
-        items.push(RecallItem {
-            node_id: nid,
-            node_type: labels::SESSION.to_string(),
-            score: recency * RecallTier::Episodic.weight(),
-            content,
-            tier: RecallTier::Episodic,
-        });
-    }
-    Ok(items)
+    Ok(rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, r)| {
+            let recency = ordinal_recency(idx, n);
+            RecallItem {
+                node_id: r.node_id,
+                node_type: labels::SESSION.to_string(),
+                score: recency * RecallTier::Episodic.weight(),
+                content: r.content,
+                tier: RecallTier::Episodic,
+            }
+        })
+        .collect())
 }
 
 /// Fetch Messages from any in-scope session.
 async fn fetch_message_items(
-    session: &uni_db::Session,
+    kb: &KnowledgeBase,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = format!(
-        "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
-         WHERE {SESSION_IN_GOAL_SCOPE} \
-         RETURN id(m) AS nid, \
-                m.content AS content \
-         ORDER BY m.timestamp DESC \
-         LIMIT $lim"
-    );
-    let result = session
-        .query_with(&cypher)
-        .param("ids", goal_ids_value(goal_ids))
-        .param("lim", CANDIDATES_PER_CATEGORY)
-        .fetch_all()
-        .await?;
-
-    let mut items = Vec::new();
-    let rows = result.rows();
+    let rows = kb.fetch_wm_messages(goal_ids).await?;
     let n = rows.len().max(1) as f64;
-    for (idx, row) in rows.iter().enumerate() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let content: String = row.get("content").unwrap_or_default();
-        let recency = ordinal_recency(idx, n);
-        items.push(RecallItem {
-            node_id: nid,
-            node_type: labels::MESSAGE.to_string(),
-            score: recency * RecallTier::Provenance.weight(),
-            content,
-            tier: RecallTier::Provenance,
-        });
-    }
-    Ok(items)
+    Ok(rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, r)| {
+            let recency = ordinal_recency(idx, n);
+            RecallItem {
+                node_id: r.node_id,
+                node_type: labels::MESSAGE.to_string(),
+                score: recency * RecallTier::Provenance.weight(),
+                content: r.content,
+                tier: RecallTier::Provenance,
+            }
+        })
+        .collect())
 }
 
 /// Fetch Facts whose subject is mentioned in any in-scope message.
 async fn fetch_fact_items(
-    session: &uni_db::Session,
+    kb: &KnowledgeBase,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    // Facts attach to the graph via DERIVED_FROM → Episode/Action and
-    // via SUPPORTED_BY → Observation → MENTIONS → Entity.  The cheapest
-    // path that anchors a fact to a goal is through Entity mentions in
-    // any in-scope Message.  We bound the join with an IN-list of
-    // goal_ids to keep the planner happy.
-    let cypher = format!(
-        "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
-         WHERE {SESSION_IN_GOAL_SCOPE} \
-         MATCH (m)-[:MENTIONS]->(ent:Entity) \
-         MATCH (f:Fact) WHERE f.subject = ent.name \
-         RETURN DISTINCT id(f) AS nid, \
-                coalesce(f.object, f.subject) AS content, \
-                coalesce(f.confidence, 0.5) AS conf \
-         ORDER BY conf DESC \
-         LIMIT $lim"
-    );
-    let result = session
-        .query_with(&cypher)
-        .param("ids", goal_ids_value(goal_ids))
-        .param("lim", CANDIDATES_PER_CATEGORY)
-        .fetch_all()
-        .await?;
-
-    let mut items = Vec::new();
-    for row in result.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let content: String = row.get("content").unwrap_or_default();
-        let conf: f64 = row.get("conf").unwrap_or(0.5);
-        items.push(RecallItem {
-            node_id: nid,
+    let rows = kb.fetch_wm_facts(goal_ids).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| RecallItem {
+            node_id: r.node_id,
             node_type: labels::FACT.to_string(),
-            score: conf.clamp(0.0, 1.0) * RecallTier::Semantic.weight(),
-            content,
+            score: r.confidence.clamp(0.0, 1.0) * RecallTier::Semantic.weight(),
+            content: r.content,
             tier: RecallTier::Semantic,
-        });
-    }
-    Ok(items)
+        })
+        .collect())
 }
 
 /// Fetch Entities mentioned in any in-scope message.
 async fn fetch_entity_items(
-    session: &uni_db::Session,
+    kb: &KnowledgeBase,
     goal_ids: &[String],
 ) -> Result<Vec<RecallItem>, UnikoError> {
-    let cypher = format!(
-        "MATCH (m:Message)-[:IN_SESSION]->(s:Session) \
-         WHERE {SESSION_IN_GOAL_SCOPE} \
-         MATCH (m)-[r:MENTIONS]->(ent:Entity) \
-         RETURN DISTINCT id(ent) AS nid, \
-                ent.name AS content, \
-                coalesce(ent.frequency, 1) AS freq \
-         ORDER BY freq DESC \
-         LIMIT $lim"
-    );
-    let result = session
-        .query_with(&cypher)
-        .param("ids", goal_ids_value(goal_ids))
-        .param("lim", CANDIDATES_PER_CATEGORY)
-        .fetch_all()
-        .await?;
-
-    let mut items = Vec::new();
-    let rows = result.rows();
+    // The query returns entities highest-frequency first; map ordinal
+    // salience the same way the time-ordered fetchers map recency.
+    let rows = kb.fetch_wm_entities(goal_ids).await?;
     let n = rows.len().max(1) as f64;
-    for (idx, row) in rows.iter().enumerate() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let content: String = row.get("content").unwrap_or_default();
-        // Rank by frequency ordinal: highest-freq entity gets full
-        // weight, tapering off to 0.4 at the bottom of the list.
-        let salience = ordinal_recency(idx, n);
-        items.push(RecallItem {
-            node_id: nid,
-            node_type: labels::ENTITY.to_string(),
-            score: salience * RecallTier::KnowledgeBase.weight(),
-            content,
-            tier: RecallTier::KnowledgeBase,
-        });
-    }
-    Ok(items)
+    Ok(rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, r)| {
+            let salience = ordinal_recency(idx, n);
+            RecallItem {
+                node_id: r.node_id,
+                node_type: labels::ENTITY.to_string(),
+                score: salience * RecallTier::KnowledgeBase.weight(),
+                content: r.content,
+                tier: RecallTier::KnowledgeBase,
+            }
+        })
+        .collect())
 }
 
 /// Linear ordinal-recency boost in `[0.4, 1.0]`: newest row scores 1.0,
@@ -496,16 +320,6 @@ fn push_results(out: &mut Vec<RecallItem>, mut tier_items: Vec<RecallItem>, limi
         tier_items.truncate(limit);
     }
     out.extend(tier_items);
-}
-
-/// Build a uni-db `Value::List` of strings for IN-list parameters.
-fn goal_ids_value(goal_ids: &[String]) -> Value {
-    Value::List(
-        goal_ids
-            .iter()
-            .map(|id| Value::String(id.clone()))
-            .collect(),
-    )
 }
 
 /// Compute a simple coverage score for working memory.

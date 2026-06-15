@@ -59,41 +59,11 @@ impl Viewer {
         participant_id: impl Into<String>,
     ) -> Result<Self, UnikoError> {
         let pid = participant_id.into();
-        let session = kb.db().session();
-        let cypher = "MATCH (p:Participant) WHERE p.participant_id = $pid \
-                      OPTIONAL MATCH (p)-[:PART_OF_TEAM]->(t:Team) \
-                      OPTIONAL MATCH (t)-[:TEAM_IN_ORG]->(o1:Organization) \
-                      OPTIONAL MATCH (p)-[:MEMBER_OF]->(o2:Organization) \
-                      RETURN collect(DISTINCT t.team_id) AS teams, \
-                             collect(DISTINCT o1.org_id) AS orgs1, \
-                             collect(DISTINCT o2.org_id) AS orgs2";
-        let result = session
-            .query_with(cypher)
-            .param("pid", pid.as_str())
-            .fetch_all()
-            .await?;
-
-        let mut teams = HashSet::new();
-        let mut orgs = HashSet::new();
-        if let Some(row) = result.rows().first() {
-            let team_ids: Vec<String> = row.get("teams").unwrap_or_default();
-            let org_ids_a: Vec<String> = row.get("orgs1").unwrap_or_default();
-            let org_ids_b: Vec<String> = row.get("orgs2").unwrap_or_default();
-            for t in team_ids {
-                if !t.is_empty() {
-                    teams.insert(t);
-                }
-            }
-            for o in org_ids_a.into_iter().chain(org_ids_b) {
-                if !o.is_empty() {
-                    orgs.insert(o);
-                }
-            }
-        }
+        let m = kb.resolve_participant_memberships(&pid).await?;
         Ok(Self {
             participant_id: pid,
-            teams,
-            orgs,
+            teams: m.teams.into_iter().collect(),
+            orgs: m.orgs.into_iter().collect(),
         })
     }
 
@@ -164,7 +134,7 @@ pub async fn filter_bundle(
         return Ok(());
     }
 
-    let visibilities = fetch_visibilities(kb, &policy_node_ids).await?;
+    let visibilities = kb.fetch_visibilities(&policy_node_ids).await?;
     bundle.items.retain(|item| {
         visibility_for(item, &visibilities)
             .is_none_or(|v| visibility_admits(Some(v.as_str()), viewer))
@@ -183,30 +153,6 @@ fn visibility_for<'a>(
         return None;
     }
     visibilities.get(&item.node_id)
-}
-
-async fn fetch_visibilities(
-    kb: &KnowledgeBase,
-    node_ids: &[NodeId],
-) -> Result<std::collections::HashMap<NodeId, String>, UnikoError> {
-    let session = kb.db().session();
-    let ids: Vec<uni_db::Value> = node_ids.iter().map(|n| uni_db::Value::Int(*n)).collect();
-    let cypher = "MATCH (n) WHERE id(n) IN $ids \
-                  RETURN id(n) AS nid, coalesce(n.visibility, '') AS vis";
-    let result = session
-        .query_with(cypher)
-        .param("ids", uni_db::Value::List(ids))
-        .fetch_all()
-        .await?;
-    let mut out = std::collections::HashMap::new();
-    for row in result.rows() {
-        let Ok(nid) = row.get::<i64>("nid") else {
-            continue;
-        };
-        let vis: String = row.get("vis").unwrap_or_default();
-        out.insert(nid, vis);
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

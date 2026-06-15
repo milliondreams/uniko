@@ -38,6 +38,25 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: uni-db seal (no raw uni-db in product crates)
+        run: |
+          # Product crates (memory/extract/cortex/pipes) must reach the graph
+          # only through uniko-store's typed API (issue #2). Forbid `use uni_db`
+          # and the `.db()` escape hatch in their src/. Comments are exempt, as
+          # are intentional uses tagged `// ALLOW:`. Tests (tests/ dirs) and the
+          # bench crate are intentionally out of scope.
+          matches=$(rg -n -e 'use uni_db' -e '\.db\(\)' \
+            crates/uniko-memory/src crates/uniko-extract/src \
+            crates/uniko-cortex/src crates/uniko-pipes/src \
+            | grep -vE ':[0-9]+:[[:space:]]*//' \
+            | grep -v 'ALLOW:' || true)
+          if [ -n "$matches" ]; then
+            echo "$matches"
+            echo "::error::raw uni-db usage found in a sealed product crate (route it through uniko-store)"
+            exit 1
+          fi
+          echo "uni-db seal intact"
+
       - name: cargo check
         run: cargo check --workspace
 

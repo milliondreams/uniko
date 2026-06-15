@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
-use uni_db::Value;
+use uniko_store::Value;
 
 use uniko_pipes::types::IngestArtifact;
 use uniko_store::storage::blob::MergeContent;

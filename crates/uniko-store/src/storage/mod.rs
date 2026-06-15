@@ -307,10 +307,32 @@ impl KnowledgeBase {
 
     /// Direct access to the underlying uni-db instance.
     ///
-    /// Escape hatch for advanced operations not covered by the
-    /// [`KnowledgeBase`] API.
+    /// Escape hatch for advanced operations not covered by the typed
+    /// [`KnowledgeBase`] API — intended for **tests** (graph assertions)
+    /// and the **benchmark** crate (raw microbenchmarks). Product crates
+    /// (`uniko-{memory,extract,cortex,pipes}`) must NOT use this: a CI gate
+    /// forbids `.db()` and `use uni_db` in their `src/` (issue #2). Reach
+    /// the graph through a typed method (`repository`/`operations`/`model`)
+    /// or [`begin_tx`](Self::begin_tx) instead.
     pub fn db(&self) -> &Uni {
         &self.db
+    }
+
+    /// Open a fresh read-write [`Transaction`](uni_db::Transaction).
+    ///
+    /// The sanctioned way for higher crates to run a multi-statement write
+    /// that [`transact_with_retry`](Self::transact_with_retry) can't wrap —
+    /// e.g. one holding external [`StripedLocks`](crate::locks::StripedLocks)
+    /// guards across the whole transaction (the entity-ingest path). The
+    /// caller commits/rolls back the returned transaction and drives it
+    /// only through validated `*_in_tx` helpers, never raw Cypher.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] (or [`UnikoError::Conflict`]) if the
+    /// transaction cannot be opened.
+    pub async fn begin_tx(&self) -> Result<uni_db::Transaction> {
+        Ok(self.db.session().tx().await?)
     }
 
     /// Run `f` inside a transaction, automatically retrying transient

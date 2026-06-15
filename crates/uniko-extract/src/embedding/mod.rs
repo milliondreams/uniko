@@ -2,7 +2,7 @@
 //!
 //! Auto-embed (Message, Chunk, Observation, Summary) is handled
 //! automatically by uni-db when the schema configures
-//! [`EmbeddingCfg`](uni_db::api::schema::EmbeddingCfg) on the vector
+//! the embedding config on the vector
 //! index.  No application code is needed for those nodes.
 //!
 //! This module provides helpers for *computed* embeddings — nodes
@@ -11,8 +11,7 @@
 
 use std::collections::HashMap;
 
-use uni_db::Value;
-
+use uniko_store::Value;
 use uniko_store::schema::EMBED_ALIAS;
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
@@ -54,16 +53,7 @@ pub async fn embed_query(kb: &KnowledgeBase, text: &str) -> Result<Vec<f32>, Uni
 /// Low-level function — prefer [`embed_document`] or [`embed_query`]
 /// which apply the correct model-specific prefix.
 pub async fn embed_raw(kb: &KnowledgeBase, text: &str) -> Result<Vec<f32>, UnikoError> {
-    let xervo = kb.db().xervo();
-    if !xervo.is_available() {
-        return Err(UnikoError::Embedding(
-            "Xervo embedding runtime not available".into(),
-        ));
-    }
-    let results = xervo
-        .embed(EMBED_ALIAS, &[text])
-        .await
-        .map_err(|e| UnikoError::Embedding(e.to_string()))?;
+    let results = kb.embed(EMBED_ALIAS, &[text]).await?;
     results
         .into_iter()
         .next()
@@ -80,18 +70,9 @@ pub async fn embed_batch(
     texts: &[&str],
     prefix: Option<&str>,
 ) -> Result<Vec<Vec<f32>>, UnikoError> {
-    let xervo = kb.db().xervo();
-    if !xervo.is_available() {
-        return Err(UnikoError::Embedding(
-            "Xervo embedding runtime not available".into(),
-        ));
-    }
     let prefixed: Vec<String> = texts.iter().map(|t| apply_prefix(t, prefix)).collect();
     let refs: Vec<&str> = prefixed.iter().map(|s| s.as_str()).collect();
-    xervo
-        .embed(EMBED_ALIAS, &refs)
-        .await
-        .map_err(|e| UnikoError::Embedding(e.to_string()))
+    kb.embed(EMBED_ALIAS, &refs).await
 }
 
 /// Embed many texts via repeated [`embed_batch`] calls of at most `chunk_size`.

@@ -20,7 +20,7 @@ pub use input::{PdfIngestOptions, PdfInput};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use uni_db::Value;
+use uniko_store::Value;
 
 use uniko_store::storage::blob::MergeContent;
 use uniko_store::{KnowledgeBase, NodeId};

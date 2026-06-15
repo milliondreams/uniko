@@ -6,9 +6,7 @@
 
 use std::collections::HashMap;
 
-use uni_db::Value;
-
-use uniko_store::{KnowledgeBase, UnikoError};
+use uniko_store::{KnowledgeBase, UnikoError, Value};
 
 /// Rule definitions: (rule_id, name, natural_language, locy_source).
 const STDLIB_RULES: &[(&str, &str, &str, &str)] = &[

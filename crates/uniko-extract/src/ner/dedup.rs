@@ -6,11 +6,9 @@
 
 use std::collections::HashMap;
 
-use uni_db::{Transaction, Value};
-
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::types::datetime_value;
-use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+use uniko_store::{KnowledgeBase, NodeId, Transaction, UnikoError, Value};
 
 use super::types::{EntityMatch, RawEntity};
 
@@ -33,71 +31,6 @@ pub fn deduplicate_raw(raw: Vec<RawEntity>) -> Vec<(RawEntity, u32)> {
             .or_insert((entity, 1));
     }
     map.into_values().collect()
-}
-
-/// Upsert deduplicated entities into the graph and create MENTIONS edges.
-///
-/// Split-batch implementation that avoids `MERGE`'s per-row executor
-/// loop (rustic-ai/uni-db#69). Issues four batched operations per call:
-///
-/// 1. Read-only `UNWIND … MATCH (n:Entity {entity_id: eid})` to find
-///    which entity ids already exist — one indexed lookup per row, no
-///    writer lock.
-/// 2. [`KnowledgeBase::batch_create_nodes`] for the not-found subset —
-///    one bulk `UNWIND … CREATE` that uni-db optimizes via the
-///    HashJoin-friendly fast path.
-/// 3. `UNWIND … MATCH WHERE id(n)=u.nid SET …` to bump frequency /
-///    last_seen / confidence on the found subset — `id()`-equality
-///    triggers the HashJoin rewrite (uni-db #53/#54).
-/// 4. [`KnowledgeBase::batch_create_edges_fast`] for MENTIONS edges from
-///    `source_node_id` to every resolved entity. Safe to create (not
-///    MERGE): `source_node_id` is the freshly-ingested `Message` node,
-///    so no prior MENTIONS edges from it can exist.
-///
-/// `entity_id` is `"{type}:{canonical_name}"` and uniquely identifies
-/// an entity. On a match: frequency is incremented by `mention_count`,
-/// `last_seen` is refreshed, confidence is raised to the new value if
-/// higher. On a create: all properties initialised from the input.
-///
-/// Returns one [`EntityMatch`] per input row in input order.
-///
-/// # Errors
-///
-/// Returns [`UnikoError::Storage`] if any underlying query or
-/// transaction fails. Partial state is possible if the run aborts
-/// between phases (e.g. nodes created but their MENTIONS edges not
-/// wired); the original per-entity loop had the same property.
-pub async fn upsert_entities(
-    kb: &KnowledgeBase,
-    source_node_id: NodeId,
-    deduped: Vec<(RawEntity, u32)>,
-) -> uniko_store::Result<Vec<EntityMatch>> {
-    if deduped.is_empty() {
-        return Ok(Vec::new());
-    }
-    let phase_start = std::time::Instant::now();
-    let prep = prepare_entity_upsert(kb, deduped).await?;
-    // Hold the per-entity RMW locks across the tx + commit (see
-    // `apply_entity_upsert` / `lock_entity_ids`): lock before opening the tx
-    // so the snapshot reflects prior committed entities.
-    let _entity_guards = kb.lock_entity_ids(&prep.entity_ids).await;
-    let session = kb.db().session();
-    let tx = session.tx().await?;
-    let matches = apply_entity_upsert(kb, &tx, source_node_id, prep).await?;
-    let commit_start = std::time::Instant::now();
-    tx.commit().await?;
-    let commit_ms = commit_start.elapsed().as_millis() as u64;
-    let total_ms = phase_start.elapsed().as_millis() as u64;
-    tracing::info!(commit_ms, "dedup commit");
-    tracing::info!(
-        target: "tx_perf",
-        tx_phase = "entity_upsert",
-        total_ms,
-        commit_ms,
-        entity_count = matches.len() as u64,
-        "tx phase",
-    );
-    Ok(matches)
 }
 
 /// Pre-tx prep: compute the canonical `entity_id`s for the batch and
@@ -181,38 +114,15 @@ pub async fn apply_entity_upsert(
     // reflects every committed entity and no concurrent writer can create
     // one of `entity_ids` until we commit and release. This is what makes
     // the check-then-create below race-free (issue #1 / RC2).
-    let existing: HashMap<String, (NodeId, i64, f64)> = if entity_ids.is_empty() {
-        HashMap::new()
-    } else {
-        let eids_list: Vec<Value> = entity_ids.iter().cloned().map(Value::String).collect();
-        let match_cypher = "\
-            UNWIND $eids AS eid \
-            MATCH (n:Entity {entity_id: eid}) \
-            RETURN eid AS entity_id, id(n) AS nid, \
-                   n.frequency AS frequency, n.confidence AS confidence";
-        let match_result = tx
-            .query_with(match_cypher)
-            .param("eids", Value::List(eids_list))
-            .fetch_all()
-            .await?;
-        let mut map: HashMap<String, (NodeId, i64, f64)> =
-            HashMap::with_capacity(match_result.rows().len());
-        for row in match_result.rows() {
-            let entity_id: String = row.get("entity_id")?;
-            let nid: i64 = row.get("nid")?;
-            let frequency: i64 = row.get("frequency")?;
-            let confidence: f64 = row.get("confidence")?;
-            map.insert(entity_id, (nid, frequency, confidence));
-        }
-        map
-    };
+    let existing: HashMap<String, (NodeId, i64, f64)> =
+        kb.fetch_entities_for_upsert_in_tx(tx, &entity_ids).await?;
 
     // Partition into (existing → batched UPDATE) and (new → batched
     // CREATE). `matches` is pre-filled with the right length so we can
     // fill node_id by index for the new rows once batch_create_nodes
     // returns them.
     let mut matches: Vec<EntityMatch> = Vec::with_capacity(deduped.len());
-    let mut updates_list: Vec<Value> = Vec::new();
+    let mut updates: Vec<(NodeId, i64, f64)> = Vec::new();
     let mut new_props: Vec<HashMap<String, Value>> = Vec::new();
     let mut new_indices: Vec<usize> = Vec::new();
 
@@ -227,11 +137,7 @@ pub async fn apply_entity_upsert(
                 old_conf
             };
 
-            let mut update = HashMap::with_capacity(3);
-            update.insert("nid".into(), Value::Int(nid));
-            update.insert("new_frequency".into(), Value::Int(new_freq));
-            update.insert("new_confidence".into(), Value::Float(new_conf));
-            updates_list.push(Value::Map(update));
+            updates.push((nid, new_freq, new_conf));
 
             matches.push(EntityMatch {
                 canonical_name: entity.canonical_name.clone(),
@@ -290,18 +196,9 @@ pub async fn apply_entity_upsert(
     // :Entity label hint to avoid the per-row multi-label scan that
     // previously cost ~18 ms/row (investigated 2026-05-20, fixed upstream).
     let phase3_start = std::time::Instant::now();
-    let update_count = updates_list.len();
-    if !updates_list.is_empty() {
-        let update_cypher = "\
-            UNWIND $updates AS u \
-            MATCH (n) WHERE id(n) = u.nid \
-            SET n.frequency = u.new_frequency, \
-                n.last_seen = $now, \
-                n.confidence = u.new_confidence";
-        tx.execute_with(update_cypher)
-            .param("updates", Value::List(updates_list))
-            .param("now", now_value)
-            .run()
+    let update_count = updates.len();
+    if !updates.is_empty() {
+        kb.batch_update_entity_counters_in_tx(tx, &updates, now_value)
             .await?;
     }
     let phase3_update_ms = phase3_start.elapsed().as_millis();

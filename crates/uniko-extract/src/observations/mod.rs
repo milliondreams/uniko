@@ -23,7 +23,7 @@ pub use types::{ContradictionFlag, RawObservation};
 
 use std::collections::HashMap;
 
-use uni_db::Value;
+use uniko_store::Value;
 
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::{NodeId, UnikoError};
@@ -372,7 +372,7 @@ pub async fn prepare_observations(
 /// Returns [`UnikoError::Storage`] on any batched write failure.
 pub async fn apply_observations(
     kb: &uniko_store::KnowledgeBase,
-    tx: &uni_db::Transaction,
+    tx: &uniko_store::Transaction,
     message_node_id: NodeId,
     prep: ObservationPrep,
 ) -> Result<Vec<NodeId>, UnikoError> {

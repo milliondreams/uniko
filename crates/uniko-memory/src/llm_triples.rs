@@ -10,8 +10,8 @@
 //! parses leave the Observation's existing triple untouched.
 
 use futures::stream::{self, StreamExt};
-use uni_db::xervo::{GenerationOptions, Message};
 
+use uniko_store::xervo::{GenerationOptions, Message};
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 /// Concurrent in-flight LLM calls.
@@ -101,13 +101,8 @@ async fn extract_one(
         ..Default::default()
     };
 
-    let result = match kb
-        .db()
-        .xervo()
-        .generate(llm_alias, &messages, options)
-        .await
-    {
-        Ok(r) => r,
+    let text = match kb.generate(llm_alias, &messages, options).await {
+        Ok(t) => t,
         Err(e) => {
             tracing::warn!(
                 target: "llm_triples",
@@ -119,7 +114,7 @@ async fn extract_one(
         }
     };
 
-    parse_triple(&result.text, input.node_id)
+    parse_triple(&text, input.node_id)
 }
 
 /// Parse the LLM response into a triple, or `None` for SKIP / malformed.
