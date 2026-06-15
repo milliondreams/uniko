@@ -79,28 +79,43 @@ pub(crate) async fn ensure_participant(
     Ok(nid)
 }
 
-/// Create a `PARTICIPATED_IN` edge from participant to session.
+/// Idempotently create a `PARTICIPATED_IN` edge from participant to
+/// session.
 ///
-/// Call exactly once per (participant, session) pair — typically at
-/// session start. No idempotency check; the caller is responsible
-/// for not calling this twice for the same pair.
+/// Skips the create when the edge already exists, so concurrent ingests
+/// of the same session (each holding the per-participant setup lock via
+/// [`KnowledgeBase::lock_session_setup`]) don't accumulate duplicate
+/// `PARTICIPATED_IN` edges. The existence check is authoritative only
+/// under that lock; callers outside the locked first-sight path must not
+/// rely on it for cross-process exclusion.
 ///
 /// # Errors
 ///
-/// Returns a storage error if the edge creation fails.
+/// Returns a storage error if the edge lookup or creation fails.
 pub(crate) async fn link_participant_to_session(
     kb: &KnowledgeBase,
     participant_nid: NodeId,
     session_nid: NodeId,
 ) -> uniko_store::Result<()> {
     let start = std::time::Instant::now();
-    kb.create_edge(
-        edges::PARTICIPATED_IN,
-        participant_nid,
-        session_nid,
-        &HashMap::new(),
-    )
-    .await?;
+    let already_linked = kb
+        .get_edges(
+            participant_nid,
+            edges::PARTICIPATED_IN,
+            uniko_store::storage::edges::Direction::Outgoing,
+        )
+        .await?
+        .iter()
+        .any(|e| e.to == session_nid);
+    if !already_linked {
+        kb.create_edge(
+            edges::PARTICIPATED_IN,
+            participant_nid,
+            session_nid,
+            &HashMap::new(),
+        )
+        .await?;
+    }
     let ms = start.elapsed().as_millis() as u64;
     tracing::info!(
         target: "tx_perf",

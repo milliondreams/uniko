@@ -1,6 +1,6 @@
 //! Adapter: xervo `NlpModel` output → uniko's [`NlpResult`].
 //!
-//! xervo 0.13 decodes POS/NER/DEP/SRL/CLS internally and returns a
+//! xervo decodes POS/NER/DEP/SRL/CLS internally and returns a
 //! token-oriented [`uni_xervo::traits::NlpResult`]. uniko's downstream
 //! (`ner`, `observations`) consumes a word-oriented
 //! [`crate::nlp::types::NlpResult`]. This module reconciles the three
@@ -12,9 +12,10 @@
 //!    continues the previous one. Grouping on that boundary recovers
 //!    uniko's `token_to_word` word units (and folds trailing punctuation
 //!    such as `.` back onto the number it follows).
-//! 2. **Dependency heads** — xervo's `DepLink.head` is effectively
-//!    CoNLL-U numbered (1-based, `0` = root) despite its docstring saying
-//!    0-based; we map `head − 1` back to a word, treating `0`/self as root.
+//! 2. **Dependency heads** — xervo's `DepLink.head` (0.14+) is an
+//!    `Option<usize>` 0-based *global* token index, `None` = sentence
+//!    root; we map the head token to its word, treating `None`/self as
+//!    root (the word-level [`DepArc::head`] sentinel is `usize::MAX`).
 //! 3. **NER** — xervo returns raw per-token BIO tags (`B-PERSON`, …), so
 //!    we BIO-merge them into spans via [`super::decode::build_span`] /
 //!    [`super::decode::parse_ner_type`], exactly as the in-crate decoder
@@ -84,11 +85,11 @@ pub fn xervo_to_uniko(x: &XervoNlp, labels: &LabelMaps, srl_enabled: bool) -> Nl
         let Some(d) = x.tokens[i].dep.as_ref() else {
             continue;
         };
-        // CoNLL-U head: 1-based, `0` = root. Map back to a word; a head
-        // landing in the same word (or `0`) is the sentence root.
+        // xervo head: 0-based global token index, `None` = sentence root.
+        // Map the head token back to a word; a head landing in the same
+        // word (or `None`) is the sentence root.
         let head = d
             .head
-            .checked_sub(1)
             .and_then(|ht| tok2word.get(ht).copied())
             .filter(|&hw| hw != w)
             .unwrap_or(usize::MAX);

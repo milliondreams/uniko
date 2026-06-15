@@ -155,6 +155,31 @@ pub(crate) fn content_lock_key(content_id: &str) -> Vec<u8> {
     k
 }
 
+/// Lock key for a `:Session` row, keyed by its `session_id`.
+///
+/// Serializes the first-sight get-or-create of the Session node so
+/// concurrent ingests with independent `SessionContext`s don't race into
+/// a duplicate or an SSI antidependency conflict.
+#[must_use]
+pub(crate) fn session_lock_key(session_id: &str) -> Vec<u8> {
+    let mut k = Vec::with_capacity(8 + session_id.len());
+    k.extend_from_slice(b"session:");
+    k.extend_from_slice(session_id.as_bytes());
+    k
+}
+
+/// Lock key for a `:Participant` row, keyed by its `participant_id`.
+///
+/// Serializes the first-sight ensure of the Participant node and its
+/// `PARTICIPATED_IN` edge against the same antidependency race.
+#[must_use]
+pub(crate) fn participant_lock_key(participant_id: &str) -> Vec<u8> {
+    let mut k = Vec::with_capacity(12 + participant_id.len());
+    k.extend_from_slice(b"participant:");
+    k.extend_from_slice(participant_id.as_bytes());
+    k
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

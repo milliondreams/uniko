@@ -36,7 +36,7 @@ uni-db = { path = "../uni/crates/uni", features = ["mimalloc"] }
 # uses uni-xervo internally but does not re-export the type. Version
 # pinned to whatever uni-db currently depends on (see
 # `../uni/Cargo.toml`).
-uni-xervo = { version = "0.13.0", default-features = false }
+uni-xervo = { version = "0.14.0", default-features = false }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

@@ -382,14 +382,10 @@ fn xervo_dep_words(
         }
         seen[w] = true;
         if let Some(d) = &tok.dep {
-            // xervo heads follow CoNLL-U numbering: 1-based, `0` = root
-            // (the `[CLS]`/BOS slot xervo's `tokens` array omits). Map the
-            // 1-based head back to a 0-based token index, then to its word.
-            let head = match d
-                .head
-                .checked_sub(1)
-                .and_then(|ht| tok2word.get(ht).copied())
-            {
+            // xervo heads are 0-based global token indices, `None` = root
+            // (the token attaches to the sentence root). Map the head
+            // token index to its word.
+            let head = match d.head.and_then(|ht| tok2word.get(ht).copied()) {
                 Some(hw) if hw != w => surf(hw),
                 _ => "root".to_string(),
             };

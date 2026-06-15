@@ -123,6 +123,25 @@ pub(crate) async fn ensure_session_and_sender(
     msg: &IngestMessage,
     session_ctx: &mut super::context::SessionContext,
 ) -> uniko_store::Result<(NodeId, NodeId)> {
+    let need_session = session_ctx.session_nid == 0;
+    let need_participant = session_ctx
+        .participant_nid(&msg.sender_id)
+        .is_none_or(|nid| nid == 0);
+
+    // Cold-path serialization: hold the per-session/-participant setup
+    // locks across the check-then-create of these shared rows so
+    // concurrent ingests of the same session (each with an independent
+    // `SessionContext`, hence none cached) don't race into a duplicate
+    // Session/Participant/`PARTICIPATED_IN` or an SSI read-write
+    // antidependency abort. The warm path (both ids cached) skips the
+    // lock and all DB work. Guards drop at function exit, after every
+    // get-or-create commit below.
+    let _setup_guards = if need_session || need_participant {
+        Some(kb.lock_session_setup(&msg.session_id, &msg.sender_id).await)
+    } else {
+        None
+    };
+
     let session_nid = if session_ctx.session_nid != 0 {
         session_ctx.session_nid
     } else {
@@ -206,14 +225,18 @@ pub async fn create_chunks(
         return Ok(Vec::new());
     }
     let start = std::time::Instant::now();
-    let tx = kb.begin_tx().await?;
-    let nids =
-        create_chunks_in_tx(kb, &tx, parent_ext_id, parent_nid, chunks, parent_label).await?;
-    let commit_start = std::time::Instant::now();
-    tx.commit()
-        .await
-        .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
-    let commit_ms = commit_start.elapsed().as_millis() as u64;
+    // Retry on retriable SSI conflicts (a conflict aborts the whole tx, so
+    // a fresh attempt recreates the same deterministic chunk_ids — no
+    // duplicates). The wrapper commits internally, so the separate
+    // commit_ms is no longer measurable here; total_ms covers the retried
+    // op (matching every other `transact_with_retry` site).
+    let nids = kb
+        .transact_with_retry(uniko_store::RetryOptions::default(), |tx| async {
+            let r =
+                create_chunks_in_tx(kb, &tx, parent_ext_id, parent_nid, chunks, parent_label).await;
+            (tx, r)
+        })
+        .await?;
     let total_ms = start.elapsed().as_millis() as u64;
     tracing::info!(
         target: "tx_perf",
@@ -223,7 +246,6 @@ pub async fn create_chunks(
             _ => "chunks_standalone",
         },
         total_ms,
-        commit_ms,
         chunk_count = chunks.len() as u64,
         "tx phase",
     );

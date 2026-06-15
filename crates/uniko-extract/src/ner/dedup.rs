@@ -10,7 +10,55 @@ use uniko_store::schema::constants::{edges, labels};
 use uniko_store::types::datetime_value;
 use uniko_store::{KnowledgeBase, NodeId, Transaction, UnikoError, Value};
 
-use super::types::{EntityMatch, RawEntity};
+use super::types::{EntityMatch, EntityType, ExtractionSource, RawEntity};
+
+/// Drop ONNX-NER entities overlapping a format-structured rule entity.
+///
+/// Email and URL entities are defined by their surface *format*, so the
+/// regex extractor is authoritative for them. When the ONNX NER cascade
+/// tags the same characters differently — an email address reads as
+/// name-like and gets a `Person` tag, for instance — that guess is
+/// spurious: keeping it would mint a second, bogus `:Entity` for one
+/// span. This drops any [`ExtractionSource::OnnxModel`] entity whose byte
+/// span overlaps a rule-based [`EntityType::Email`] or
+/// [`EntityType::Url`], leaving the rule entity as the single canonical
+/// one. Cross-source overlap resolution: the in-regex pass already
+/// suppresses overlaps within `rules`, but ONNX entities are merged in
+/// afterward and never cross that filter.
+///
+/// A no-op on builds without the `onnx` feature, which emit no
+/// `OnnxModel` entities.
+///
+/// # Examples
+///
+/// ```ignore
+/// let kept = suppress_onnx_over_structured(all_raw);
+/// ```
+pub fn suppress_onnx_over_structured(mut raw: Vec<RawEntity>) -> Vec<RawEntity> {
+    let structured: Vec<(usize, usize)> = raw
+        .iter()
+        .filter(|e| {
+            e.source == ExtractionSource::RuleBased
+                && matches!(e.entity_type, EntityType::Email | EntityType::Url)
+        })
+        .map(|e| (e.start_byte, e.end_byte))
+        .collect();
+    if structured.is_empty() {
+        return raw;
+    }
+    raw.retain(|e| {
+        e.source != ExtractionSource::OnnxModel
+            || !structured
+                .iter()
+                .any(|&(s, t)| spans_overlap(e.start_byte, e.end_byte, s, t))
+    });
+    raw
+}
+
+/// Whether two half-open byte ranges `[s1, e1)` and `[s2, e2)` overlap.
+fn spans_overlap(s1: usize, e1: usize, s2: usize, e2: usize) -> bool {
+    s1 < e2 && s2 < e1
+}
 
 /// Merge raw entities by canonical name within a single extraction batch.
 ///
@@ -69,7 +117,10 @@ pub async fn prepare_entity_upsert(
 /// Output of [`prepare_entity_upsert`]. Holds the new-vs-existing split
 /// inputs needed at apply time. The existence map is *not* precomputed
 /// here — `apply_entity_upsert` reads it authoritatively under lock.
-#[derive(Debug)]
+///
+/// `Clone` so the atomic ingest retry loop can hand a fresh copy to
+/// [`apply_entity_upsert`] (which consumes it by value) on each attempt.
+#[derive(Debug, Clone)]
 pub struct EntityUpsertPrep {
     /// Raw entities (with mention counts) to upsert, in input order.
     pub deduped: Vec<(RawEntity, u32)>,
@@ -287,5 +338,96 @@ mod tests {
     fn test_dedup_empty() {
         let deduped = deduplicate_raw(Vec::new());
         assert!(deduped.is_empty());
+    }
+
+    fn raw_span(
+        name: &str,
+        entity_type: EntityType,
+        source: ExtractionSource,
+        start: usize,
+        end: usize,
+    ) -> RawEntity {
+        RawEntity {
+            surface_form: name.to_string(),
+            canonical_name: name.to_lowercase(),
+            entity_type,
+            confidence: 0.9,
+            source,
+            start_byte: start,
+            end_byte: end,
+        }
+    }
+
+    #[test]
+    fn test_suppress_onnx_person_overlapping_email() {
+        // The NER cascade tags an email address as a PERSON over the same
+        // span the email regex matched; the ONNX guess must be dropped.
+        let raw = vec![
+            raw_span(
+                "dedup@example.com",
+                EntityType::Email,
+                ExtractionSource::RuleBased,
+                12,
+                29,
+            ),
+            raw_span(
+                "dedup@example.com",
+                EntityType::Person,
+                ExtractionSource::OnnxModel,
+                12,
+                29,
+            ),
+        ];
+        let kept = suppress_onnx_over_structured(raw);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].entity_type, EntityType::Email);
+        assert_eq!(kept[0].source, ExtractionSource::RuleBased);
+    }
+
+    #[test]
+    fn test_suppress_keeps_nonoverlapping_onnx() {
+        // A PERSON elsewhere in the text is unrelated to the email span
+        // and must survive.
+        let raw = vec![
+            raw_span(
+                "dedup@example.com",
+                EntityType::Email,
+                ExtractionSource::RuleBased,
+                12,
+                29,
+            ),
+            raw_span(
+                "Alice",
+                EntityType::Person,
+                ExtractionSource::OnnxModel,
+                0,
+                5,
+            ),
+        ];
+        let kept = suppress_onnx_over_structured(raw);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn test_suppress_noop_without_structured() {
+        // No Email/URL entity → nothing is suppressed even on overlap.
+        let raw = vec![
+            raw_span(
+                "Alice",
+                EntityType::Person,
+                ExtractionSource::RuleBased,
+                0,
+                5,
+            ),
+            raw_span(
+                "Alice",
+                EntityType::Person,
+                ExtractionSource::OnnxModel,
+                0,
+                5,
+            ),
+        ];
+        let kept = suppress_onnx_over_structured(raw);
+        assert_eq!(kept.len(), 2);
     }
 }

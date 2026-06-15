@@ -29,6 +29,7 @@ use super::message::{
 };
 use crate::ner::dedup::{
     EntityUpsertPrep, apply_entity_upsert, deduplicate_raw, prepare_entity_upsert,
+    suppress_onnx_over_structured,
 };
 use crate::ner::types::RawEntity;
 use crate::observations::{
@@ -67,6 +68,21 @@ pub struct AtomicTimings {
     pub apply_obs_ms: u128,
     pub commit_ms: u128,
     pub total_ms: u128,
+}
+
+/// Jitterless exponential backoff between ingest-tx retry attempts.
+///
+/// Mirrors uniko-store's internal `retry_backoff` (which is private to
+/// that crate): `base_backoff * 2^(attempt - 2)` clamped to `max_backoff`.
+/// `attempt` is the upcoming attempt number, so `attempt == 2` (the first
+/// retry) sleeps exactly `base_backoff`.
+async fn ingest_retry_backoff(opts: &uniko_store::RetryOptions, attempt: u32) {
+    let steps = attempt.saturating_sub(2).min(20);
+    let delay = opts
+        .base_backoff
+        .saturating_mul(1u32 << steps)
+        .min(opts.max_backoff);
+    tokio::time::sleep(delay).await;
 }
 
 /// Atomic per-message ingest: extract → single tx → commit.
@@ -135,64 +151,143 @@ pub async fn ingest_message_atomic(
     //    Guards drop at function exit, after `tx.commit()`.
     let _entity_guards = kb.lock_entity_ids(&entity_prep.entity_ids).await;
 
-    // 6. Open tx (snapshot taken after the entity locks are held).
-    let tx = kb.begin_tx().await?;
-
-    // 6. apply Message writes.
+    // Stable across attempts (the message/recipient set and the sender
+    // reference don't change between retries).
     let setup = MessageSetup {
         session_nid,
         participant_nid,
         recipient_nids,
         prev_msg_nid: session_ctx.prev_message_nid,
     };
-    let writes = apply_message_writes_in_tx(kb, &tx, msg, &setup).await?;
-    let message_nid = writes.message_node_id;
-
-    // 7. apply entity upsert (Entity + MENTIONS).
-    let apply_entity_start = std::time::Instant::now();
-    let entity_matches = apply_entity_upsert(kb, &tx, message_nid, entity_prep).await?;
-    let apply_entity_ms = apply_entity_start.elapsed().as_millis();
-
-    // 8. apply observations (Observation + OBSERVED_IN + ABOUT).
-    let extracted_entities: Vec<(NodeId, String)> = entity_matches
-        .iter()
-        .map(|m| (m.node_id, m.canonical_name.clone()))
-        .collect();
     let sender_ref = Some((participant_nid, msg.sender_id.clone()));
-
-    let apply_obs_start = std::time::Instant::now();
     let timestamp = msg.timestamp;
     let rules_path = kb.config().observation_rules_path.clone();
-    let inputs = ObservationInputs {
-        kb,
-        message_node_id: message_nid,
-        content: &msg.content,
-        content_type: &msg.content_type,
-        sender: sender_ref.clone(),
-        extracted_entities: &extracted_entities,
-        #[cfg(feature = "onnx")]
-        nlp_results: nlp_results.as_deref(),
-        seed_sentence_ctx: Some(&session_ctx.sentence_ctx),
-        timestamp,
-        observation_rules_path: rules_path.as_deref(),
-    };
-    let obs_outcome = prepare_observations(inputs).await?;
-    let (extracted_observations, sentence_ctx_updated) = match obs_outcome {
-        ObservationPrepOutcome::Skip(_) => (Vec::new(), None),
-        ObservationPrepOutcome::Ready(prep) => {
-            let sc_updated = prep.sentence_ctx_updated.clone();
-            let obs_nids = apply_observations(kb, &tx, message_nid, prep).await?;
-            (obs_nids, sc_updated)
+
+    // 6-9. Tx body, retried on retriable uni-db SSI conflicts. The entity
+    //       locks (step 5) are held across EVERY attempt, so the
+    //       single-writer-per-entity invariant survives retries. A
+    //       retriable conflict aborts the whole tx (nothing persists), so a
+    //       fresh attempt re-reads entity existence authoritatively
+    //       (`apply_entity_upsert`) and recreates the rolled-back
+    //       Message/Observation rows — no duplicates. uni-db SSI surfaces
+    //       conflicts at commit, but an in-body retriable error is handled
+    //       identically for safety. `session_ctx` is advanced only AFTER a
+    //       successful commit, so `prepare_observations` re-seeds from the
+    //       same unmutated `sentence_ctx` each attempt.
+    let retry_opts = uniko_store::RetryOptions::default();
+    let mut attempts: u32 = 0;
+    let (
+        writes,
+        extracted_entities,
+        extracted_observations,
+        sentence_ctx_updated,
+        apply_entity_ms,
+        apply_obs_ms,
+        commit_ms,
+    ) = loop {
+        attempts += 1;
+        // `apply_entity_upsert` consumes the prep; hand it a fresh clone so
+        // a retry can re-run. The happy path pays exactly one clone.
+        let entity_prep_attempt = entity_prep.clone();
+        let tx = kb.begin_tx().await?;
+
+        let body: uniko_store::Result<_> = async {
+            let writes = apply_message_writes_in_tx(kb, &tx, msg, &setup).await?;
+            let message_nid = writes.message_node_id;
+
+            // 7. apply entity upsert (Entity + MENTIONS).
+            let apply_entity_start = std::time::Instant::now();
+            let entity_matches =
+                apply_entity_upsert(kb, &tx, message_nid, entity_prep_attempt).await?;
+            let apply_entity_ms = apply_entity_start.elapsed().as_millis();
+
+            // 8. apply observations (Observation + OBSERVED_IN + ABOUT).
+            let extracted_entities: Vec<(NodeId, String)> = entity_matches
+                .iter()
+                .map(|m| (m.node_id, m.canonical_name.clone()))
+                .collect();
+
+            let apply_obs_start = std::time::Instant::now();
+            let inputs = ObservationInputs {
+                kb,
+                message_node_id: message_nid,
+                content: &msg.content,
+                content_type: &msg.content_type,
+                sender: sender_ref.clone(),
+                extracted_entities: &extracted_entities,
+                #[cfg(feature = "onnx")]
+                nlp_results: nlp_results.as_deref(),
+                seed_sentence_ctx: Some(&session_ctx.sentence_ctx),
+                timestamp,
+                observation_rules_path: rules_path.as_deref(),
+            };
+            let obs_outcome = prepare_observations(inputs).await?;
+            let (extracted_observations, sentence_ctx_updated) = match obs_outcome {
+                ObservationPrepOutcome::Skip(_) => (Vec::new(), None),
+                ObservationPrepOutcome::Ready(prep) => {
+                    let sc_updated = prep.sentence_ctx_updated.clone();
+                    let obs_nids = apply_observations(kb, &tx, message_nid, prep).await?;
+                    (obs_nids, sc_updated)
+                }
+            };
+            let apply_obs_ms = apply_obs_start.elapsed().as_millis();
+
+            Ok((
+                writes,
+                extracted_entities,
+                extracted_observations,
+                sentence_ctx_updated,
+                apply_entity_ms,
+                apply_obs_ms,
+            ))
+        }
+        .await;
+
+        match body {
+            Ok((
+                writes,
+                extracted_entities,
+                extracted_observations,
+                sentence_ctx_updated,
+                apply_entity_ms,
+                apply_obs_ms,
+            )) => {
+                // 9. Commit.
+                let commit_start = std::time::Instant::now();
+                match tx.commit().await {
+                    Ok(_) => {
+                        break (
+                            writes,
+                            extracted_entities,
+                            extracted_observations,
+                            sentence_ctx_updated,
+                            apply_entity_ms,
+                            apply_obs_ms,
+                            commit_start.elapsed().as_millis(),
+                        );
+                    }
+                    // `commit` consumed `tx`; nothing to roll back.
+                    Err(e) => {
+                        let err = uniko_store::UnikoError::from(e);
+                        if err.is_retriable() && attempts < retry_opts.max_attempts {
+                            ingest_retry_backoff(&retry_opts, attempts + 1).await;
+                            continue;
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+            Err(err) => {
+                tx.rollback();
+                if err.is_retriable() && attempts < retry_opts.max_attempts {
+                    ingest_retry_backoff(&retry_opts, attempts + 1).await;
+                    continue;
+                }
+                return Err(err);
+            }
         }
     };
-    let apply_obs_ms = apply_obs_start.elapsed().as_millis();
-
-    // 9. Commit.
-    let commit_start = std::time::Instant::now();
-    tx.commit()
-        .await
-        .map_err(|e| uniko_store::UnikoError::Storage(e.to_string()))?;
-    let commit_ms = commit_start.elapsed().as_millis();
+    let message_nid = writes.message_node_id;
 
     // 10. Post-commit: update session_ctx.
     session_ctx.prev_message_nid = Some(message_nid);
@@ -226,6 +321,7 @@ pub async fn ingest_message_atomic(
         apply_obs_ms = timings.apply_obs_ms as u64,
         commit_ms = timings.commit_ms as u64,
         total_ms = timings.total_ms as u64,
+        attempts = attempts as u64,
         entities = extracted_entities.len(),
         observations = extracted_observations.len(),
         "atomic ingest",
@@ -320,7 +416,9 @@ async fn extract_entities_and_nlp(
         }
     }
 
-    // 4. Dedup.
+    // 4. Suppress ONNX-NER guesses overlapping a format-structured rule
+    //    entity (Email/URL), then dedup the remainder by canonical name.
+    let all_raw = suppress_onnx_over_structured(all_raw);
     let deduped = deduplicate_raw(all_raw);
 
     EntityExtractionOutput {

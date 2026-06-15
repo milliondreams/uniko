@@ -440,6 +440,39 @@ impl KnowledgeBase {
         guards
     }
 
+    /// Acquire the per-session and per-participant RMW locks for a
+    /// first-sight session/sender setup, in a deadlock-free order.
+    ///
+    /// The Session get-or-create, the Participant merge, and the
+    /// `PARTICIPATED_IN` link are check-then-create operations on rows
+    /// shared by every ingest of the same session. uni-db's `entity_id`
+    /// (and equivalent) indexes are non-unique and SSI does not catch an
+    /// insert-phantom, so concurrent ingests with independent
+    /// `SessionContext`s would otherwise duplicate those rows or abort on
+    /// a read-write antidependency. The caller holds these guards across
+    /// the existence checks and their commits so a second writer cannot
+    /// interleave; the guards drop when the returned `Vec` goes out of
+    /// scope. Keys are de-duplicated and sorted so concurrent callers
+    /// acquire shared keys in the same order, preventing deadlock (mirrors
+    /// [`KnowledgeBase::lock_entity_ids`]).
+    pub async fn lock_session_setup(
+        &self,
+        session_id: &str,
+        participant_id: &str,
+    ) -> Vec<tokio::sync::MutexGuard<'_, ()>> {
+        let mut keys = vec![
+            crate::locks::session_lock_key(session_id),
+            crate::locks::participant_lock_key(participant_id),
+        ];
+        keys.sort_unstable();
+        keys.dedup();
+        let mut guards = Vec::with_capacity(keys.len());
+        for k in &keys {
+            guards.push(self.rmw_locks.lock(k).await);
+        }
+        guards
+    }
+
     /// Runtime configuration.
     pub fn config(&self) -> &UnikoConfig {
         &self.config
