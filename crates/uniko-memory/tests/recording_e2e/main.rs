@@ -11,3 +11,4 @@
 mod action_e2e;
 mod episode_e2e;
 mod query_episode_e2e;
+mod tools_e2e;

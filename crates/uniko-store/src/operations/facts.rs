@@ -646,6 +646,30 @@ fn extract_btic(value: Option<&Value>) -> Option<Btic> {
 }
 
 impl KnowledgeBase {
+    /// Load the `valid_at` BTIC of a single Fact by node id.
+    ///
+    /// Returns `None` when the node is absent or has no decodable
+    /// `valid_at`.  Used by the `invalidate_fact` agent tool to obtain
+    /// the interval it must close without a second-guessing read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn fact_valid_at(&self, fact_node: NodeId) -> Result<Option<Btic>> {
+        let session = self.db.session();
+        // Bare projection returns the raw `Value::Temporal(Btic{..})`
+        // — same readback pattern as `find_stale_open_facts`.
+        let result = session
+            .query_with("MATCH (f:Fact) WHERE id(f) = $vid RETURN f.valid_at AS valid_at")
+            .param("vid", fact_node)
+            .fetch_all()
+            .await?;
+        let Some(row) = result.rows().first() else {
+            return Ok(None);
+        };
+        Ok(extract_btic(row.value("valid_at")))
+    }
+
     /// Find every open-BTIC Fact for `(subject, predicate)` whose
     /// `object` differs from `current_object`.
     ///

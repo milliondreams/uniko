@@ -6,7 +6,10 @@
 //! decide to record.
 
 pub use uniko_memory::{
-    RecordActionParams, RecordActionResult, RecordEpisodeParams, WorkingMemoryParams,
+    AddObservationParams, Agent, AssertFactParams, CreateGoalParams, CreateTaskParams,
+    InvalidateFactParams, RecordActionParams, RecordActionResult, RecordEpisodeParams,
+    WorkingMemoryParams, add_observation, assert_fact, create_goal, create_task,
+    generate_session_summary, invalidate_fact,
     nl_to_cypher::{is_safe_read_only, translate as translate_nl_to_cypher},
     policy::{Viewer, filter_bundle, visibility_admits},
     record_action, record_episode,

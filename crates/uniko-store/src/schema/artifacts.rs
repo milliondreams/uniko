@@ -113,4 +113,16 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
         .edge_type(edges::MODIFIED_BY, &[labels::ARTIFACT], &[labels::ACTION])
         .property_nullable("diff_summary", DataType::String)
         .done()
+        // ATTACHED_TO: an Artifact shared mid-conversation links to the
+        // Session and/or Message that introduced it (F22/F30), so a file
+        // dropped into a chat is reachable from its context instead of
+        // orphaning. Used when no producing Action exists (Actions use
+        // PRODUCED instead).
+        .edge_type(
+            edges::ATTACHED_TO,
+            &[labels::ARTIFACT],
+            &[labels::SESSION, labels::MESSAGE],
+        )
+        .property_nullable("attached_at", DataType::DateTime)
+        .done()
 }

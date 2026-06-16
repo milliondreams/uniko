@@ -35,6 +35,7 @@ fn test_artifact(id: &str, content: &str, kind: &str, path: Option<&str>) -> Ing
         kind: kind.to_string(),
         path: path.map(String::from),
         metadata: HashMap::new(),
+        ..Default::default()
     }
 }
 
@@ -270,4 +271,119 @@ async fn test_ingest_artifact_deterministic_chunk_ids() {
         let expected = format!("art-det:{i}");
         assert_eq!(cid, expected);
     }
+}
+
+#[tokio::test]
+async fn test_ingest_artifact_links_conversational_context() {
+    use uni_db::Value;
+    use uniko_store::types::datetime_value;
+
+    let kb = test_kb().await;
+    let now = Utc::now();
+
+    // Seed the context an agent would reference when sharing a file
+    // mid-conversation: a Session, the Message that introduced it, and
+    // the Action that produced it.
+    let mut sprops: HashMap<String, Value> = HashMap::new();
+    sprops.insert("session_id".into(), Value::String("sess-ctx".into()));
+    sprops.insert("started_at".into(), datetime_value(now));
+    kb.merge_node("Session", "session_id", "sess-ctx", &sprops)
+        .await
+        .unwrap();
+
+    let mut mprops: HashMap<String, Value> = HashMap::new();
+    mprops.insert("message_id".into(), Value::String("msg-ctx".into()));
+    mprops.insert("content".into(), Value::String("here is the file".into()));
+    mprops.insert("timestamp".into(), datetime_value(now));
+    kb.merge_node("Message", "message_id", "msg-ctx", &mprops)
+        .await
+        .unwrap();
+
+    let mut aprops: HashMap<String, Value> = HashMap::new();
+    aprops.insert("action_id".into(), Value::String("act-ctx".into()));
+    aprops.insert("action_type".into(), Value::String("file_write".into()));
+    kb.merge_node("Action", "action_id", "act-ctx", &aprops)
+        .await
+        .unwrap();
+
+    let art = IngestArtifact {
+        artifact_id: "art-ctx".into(),
+        content: "contextual file body".into(),
+        kind: "file".into(),
+        path: Some("notes.txt".into()),
+        metadata: HashMap::new(),
+        session_id: Some("sess-ctx".into()),
+        triggered_by_message_id: Some("msg-ctx".into()),
+        produced_by_action_id: Some("act-ctx".into()),
+    };
+    let result = uniko_extract::ingest::artifact::ingest_artifact(&kb, &art)
+        .await
+        .unwrap();
+    assert!(!result.was_deduplicated);
+
+    // Assert each contextual edge by matching specific endpoint node
+    // ids. We deliberately avoid relying on a target-label predicate in
+    // the pattern (e.g. `(a)-[:ATTACHED_TO]->(m:Message)`): the Artifact
+    // has two ATTACHED_TO edges to different labels (Session + Message),
+    // and uni-db does not reliably prune the other-label target by the
+    // pattern's label under that shape. Counting the edge between the two
+    // concrete node ids is label-independent and fully deterministic.
+    let aid = result.artifact_node_id;
+    let (session_nid, _) = kb
+        .get_node_by_ext_id("Session", "session_id", "sess-ctx")
+        .await
+        .unwrap()
+        .expect("session node");
+    let (message_nid, _) = kb
+        .get_node_by_ext_id("Message", "message_id", "msg-ctx")
+        .await
+        .unwrap()
+        .expect("message node");
+    let (action_nid, _) = kb
+        .get_node_by_ext_id("Action", "action_id", "act-ctx")
+        .await
+        .unwrap()
+        .expect("action node");
+
+    assert_eq!(
+        edge_count(&kb, "ATTACHED_TO", aid, session_nid).await,
+        1,
+        "Artifact must ATTACHED_TO its Session"
+    );
+    assert_eq!(
+        edge_count(&kb, "ATTACHED_TO", aid, message_nid).await,
+        1,
+        "Artifact must ATTACHED_TO its Message"
+    );
+    assert_eq!(
+        edge_count(&kb, "PRODUCED", action_nid, aid).await,
+        1,
+        "producing Action must PRODUCED the Artifact"
+    );
+}
+
+/// Count directed `edge_type` edges from `from` to `to` by node id.
+#[cfg(test)]
+async fn edge_count(
+    kb: &uniko_store::storage::KnowledgeBase,
+    edge_type: &str,
+    from: i64,
+    to: i64,
+) -> i64 {
+    let cypher = format!(
+        "MATCH (a)-[r:{edge_type}]->(b) WHERE id(a) = $from AND id(b) = $to RETURN count(r) AS c"
+    );
+    kb.db()
+        .session()
+        .query_with(&cypher)
+        .param("from", from)
+        .param("to", to)
+        .fetch_all()
+        .await
+        .unwrap()
+        .rows()
+        .first()
+        .expect("count row")
+        .get::<i64>("c")
+        .expect("count")
 }

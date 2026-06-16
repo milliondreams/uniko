@@ -670,6 +670,12 @@ pub struct UnikoConfig {
     /// Phase-2 temporal channel already handles query-side temporal
     /// cues via BTIC overlap.
     pub consolidation_date_augment_embedding: bool,
+
+    /// Inactivity window, in seconds, after which an open Session is
+    /// auto-closed (F14).  A Session whose most recent message is older
+    /// than this is stamped with `ended_at` and summarised (F59) on the
+    /// next maintenance sweep.  Zero disables auto-close.
+    pub session_inactivity_secs: u64,
 }
 
 impl Default for UnikoConfig {
@@ -733,6 +739,9 @@ impl Default for UnikoConfig {
             phase2_graph_edge_weights: std::collections::HashMap::new(),
             consolidation_cluster_objects: true,
             consolidation_date_augment_embedding: true,
+            // 1 hour matches the FOLLOWED_BY session-continuity heuristic
+            // used by record_episode.
+            session_inactivity_secs: 3_600,
         }
     }
 }

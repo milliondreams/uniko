@@ -109,6 +109,11 @@ pub async fn ingest_artifact(
     kb.create_edge("HAS_CONTENT", artifact_nid, content_nid, &edge_props)
         .await?;
 
+    // 6b. Contextual provenance (F18/F22/F30). Best-effort: a missing
+    // referenced node is skipped with a debug rather than failing
+    // ingestion. Corpus ingestion (no context fields) wires nothing.
+    link_artifact_context(kb, artifact_nid, artifact).await?;
+
     // 5. Select chunker and create chunks. A caller-supplied
     // `metadata["content_type"]` wins (e.g. a fetched URL whose bytes
     // are HTML), so URL / upload ingestion uses the right chunker even
@@ -145,6 +150,84 @@ pub async fn ingest_artifact(
         chunk_node_ids: chunk_nids,
         was_deduplicated: false,
     })
+}
+
+/// Wire an artifact's optional conversational-context edges.
+///
+/// `PRODUCED` (Action → Artifact) when `produced_by_action_id` resolves;
+/// `ATTACHED_TO` (Artifact → Session) when `session_id` resolves;
+/// `ATTACHED_TO` (Artifact → Message) when `triggered_by_message_id`
+/// resolves.  Each is best-effort: an unresolved reference is logged at
+/// debug and skipped, so a stale id never aborts ingestion.
+async fn link_artifact_context(
+    kb: &KnowledgeBase,
+    artifact_nid: NodeId,
+    artifact: &IngestArtifact,
+) -> uniko_store::Result<()> {
+    use uniko_store::schema::{edges, labels};
+
+    let attach_props = || {
+        let mut p = HashMap::new();
+        p.insert(
+            "attached_at".into(),
+            uniko_store::types::datetime_value(chrono::Utc::now()),
+        );
+        p
+    };
+
+    // PRODUCED: Action → Artifact (note the reversed direction — the
+    // producing Action is the edge source, matching record_action).
+    if let Some(action_id) = artifact.produced_by_action_id.as_deref() {
+        match kb
+            .get_node_by_ext_id(labels::ACTION, "action_id", action_id)
+            .await?
+        {
+            Some((action_nid, _)) => {
+                kb.create_edge(edges::PRODUCED, action_nid, artifact_nid, &HashMap::new())
+                    .await?;
+            }
+            None => tracing::debug!(
+                action_id,
+                "ingest_artifact: producing Action not found — PRODUCED skipped"
+            ),
+        }
+    }
+
+    // ATTACHED_TO: Artifact → Session.
+    if let Some(session_id) = artifact.session_id.as_deref() {
+        match kb
+            .get_node_by_ext_id(labels::SESSION, "session_id", session_id)
+            .await?
+        {
+            Some((session_nid, _)) => {
+                kb.create_edge(edges::ATTACHED_TO, artifact_nid, session_nid, &attach_props())
+                    .await?;
+            }
+            None => tracing::debug!(
+                session_id,
+                "ingest_artifact: Session not found — ATTACHED_TO skipped"
+            ),
+        }
+    }
+
+    // ATTACHED_TO: Artifact → Message.
+    if let Some(msg_id) = artifact.triggered_by_message_id.as_deref() {
+        match kb
+            .get_node_by_ext_id(labels::MESSAGE, "message_id", msg_id)
+            .await?
+        {
+            Some((msg_nid, _)) => {
+                kb.create_edge(edges::ATTACHED_TO, artifact_nid, msg_nid, &attach_props())
+                    .await?;
+            }
+            None => tracing::debug!(
+                msg_id,
+                "ingest_artifact: triggering Message not found — ATTACHED_TO skipped"
+            ),
+        }
+    }
+
+    Ok(())
 }
 
 /// Best-effort MIME from kind + detected language.

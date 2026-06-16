@@ -45,6 +45,10 @@ pub(crate) struct ConsolidationWorker {
     /// so multiple agents firing in the same window should not re-run
     /// it back-to-back.
     last_topic_sweep_at: Option<Instant>,
+    /// Last time the session-maintenance sweep (F14 auto-close + F59
+    /// summarisation) ran globally — sessions are agent-agnostic, so
+    /// this is throttled once across all agents like the topic sweep.
+    last_session_sweep_at: Option<Instant>,
 }
 
 impl ConsolidationWorker {
@@ -69,6 +73,7 @@ impl ConsolidationWorker {
             agent_cycles_since_cortex: HashMap::new(),
             agent_last_procedure_at: HashMap::new(),
             last_topic_sweep_at: None,
+            last_session_sweep_at: None,
         }
     }
 
@@ -223,6 +228,63 @@ impl ConsolidationWorker {
         self.run_procedure_sweep(agent_id, now).await;
         self.run_topic_sweep(agent_id, now).await;
         self.run_decay_sweep(agent_id).await;
+        self.run_session_maintenance_sweep(agent_id, now).await;
+    }
+
+    /// Auto-close inactive Sessions (F14) and summarise each one (F59).
+    ///
+    /// Global like the topic sweep: Sessions are agent-agnostic, so the
+    /// run is throttled once across all agents by `cortex_min_interval`.
+    /// A zero `session_inactivity_secs` disables auto-close, in which
+    /// case `close_inactive_sessions` returns nothing and no summaries
+    /// are produced.  Failures are logged and dropped — maintenance must
+    /// never destabilise consolidation.
+    async fn run_session_maintenance_sweep(&mut self, agent_id: &str, now: Instant) {
+        if let Some(last) = self.last_session_sweep_at
+            && now.duration_since(last) < self.cortex_min_interval
+        {
+            return;
+        }
+        self.last_session_sweep_at = Some(now);
+
+        let inactivity_secs = self.kb.config().session_inactivity_secs;
+        let wall_now = chrono::Utc::now();
+        let closed = match self
+            .kb
+            .close_inactive_sessions(inactivity_secs, wall_now)
+            .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(
+                    agent = %agent_id,
+                    error = %e,
+                    "session auto-close failed — continuing",
+                );
+                return;
+            }
+        };
+
+        for session_id in &closed {
+            // Extractive, offline summary (no LLM alias) on the same
+            // cadence; idempotent on the stable per-session summary id.
+            if let Err(e) =
+                crate::summary::generate_session_summary(&self.kb, session_id, wall_now, None).await
+            {
+                tracing::warn!(
+                    session_id,
+                    error = %e,
+                    "session summary generation failed — continuing",
+                );
+            }
+        }
+
+        if !closed.is_empty() {
+            tracing::info!(
+                closed = closed.len(),
+                "session maintenance: closed and summarised inactive sessions",
+            );
+        }
     }
 
     /// Run F50 memory decay for one agent: prune Episodes whose

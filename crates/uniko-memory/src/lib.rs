@@ -27,22 +27,36 @@
 #![recursion_limit = "256"]
 
 pub mod action;
+pub mod agent;
 pub mod consolidation;
 pub mod episode;
+pub mod fact;
+pub mod goal;
 pub mod llm_triples;
 pub mod nl_to_cypher;
+pub mod observation;
 pub mod pipeline;
 pub mod policy;
 pub mod query;
 pub mod recall;
 pub mod rules;
+pub mod summary;
+pub mod task;
 pub(crate) mod value_convert;
 pub mod working_memory;
 
 #[doc(inline)]
 pub use action::{RecordActionParams, RecordActionResult, record_action};
 #[doc(inline)]
+pub use agent::Agent;
+#[doc(inline)]
 pub use episode::{RecordEpisodeParams, record_episode};
+#[doc(inline)]
+pub use fact::{AssertFactParams, InvalidateFactParams, assert_fact, invalidate_fact};
+#[doc(inline)]
+pub use goal::{CreateGoalParams, create_goal};
+#[doc(inline)]
+pub use observation::{AddObservationParams, add_observation};
 #[doc(inline)]
 pub use pipeline::PipelineSystem;
 #[doc(inline)]
@@ -50,6 +64,10 @@ pub use query::{
     GeneratedAnswer, QueryOutcome, QueryRecordOptions, RecordQueryEpisodeParams, answer_query,
     record_query_episode,
 };
+#[doc(inline)]
+pub use summary::generate_session_summary;
+#[doc(inline)]
+pub use task::{CreateTaskParams, create_task};
 #[doc(inline)]
 pub use working_memory::{WorkingMemoryParams, working_memory};
 

@@ -28,7 +28,11 @@ fn test_label_count() {
 
 #[test]
 fn test_edge_count() {
-    assert_eq!(edges::ALL.len(), 48, "expected 48 edge types");
+    // 50 = original 48 + REINFORCED (Cycle → Fact, prior increment) +
+    // ATTACHED_TO (Artifact → Session/Message, contextual artifact
+    // provenance, F22/F30). REINFORCED was added to `edges::ALL` without
+    // updating this count, so it was already failing before this change.
+    assert_eq!(edges::ALL.len(), 50, "expected 50 edge types");
 }
 
 #[test]

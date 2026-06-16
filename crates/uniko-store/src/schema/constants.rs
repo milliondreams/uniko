@@ -107,6 +107,9 @@ pub mod edges {
     pub const HAS_CONTENT: &str = "HAS_CONTENT";
     pub const CREATED_BY: &str = "CREATED_BY";
     pub const MODIFIED_BY: &str = "MODIFIED_BY";
+    /// Attaches an Artifact to the conversational context (Session or
+    /// Message) it was shared in, when no producing Action exists.
+    pub const ATTACHED_TO: &str = "ATTACHED_TO";
 
     // Layer 4 edges
     pub const OBSERVED_IN: &str = "OBSERVED_IN";
@@ -167,6 +170,7 @@ pub mod edges {
         HAS_CONTENT,
         CREATED_BY,
         MODIFIED_BY,
+        ATTACHED_TO,
         OBSERVED_IN,
         OBSERVED_DURING,
         ABOUT,

@@ -35,7 +35,7 @@ pub struct IngestMessage {
 }
 
 /// An artifact (file, document, URL) to ingest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IngestArtifact {
     /// Caller-provided or auto-generated UUID v7.
     pub artifact_id: String,
@@ -47,6 +47,21 @@ pub struct IngestArtifact {
     pub path: Option<String>,
     /// Arbitrary caller metadata.
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Optional `session_id` this artifact was shared in.  When set and
+    /// resolvable, an `ATTACHED_TO` edge links the Artifact to the
+    /// Session (F22).
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Optional `message_id` that introduced this artifact.  When set and
+    /// resolvable, an `ATTACHED_TO` edge links the Artifact to the
+    /// Message (F30).
+    #[serde(default)]
+    pub triggered_by_message_id: Option<String>,
+    /// Optional `action_id` that produced this artifact.  When set and
+    /// resolvable, a `PRODUCED` edge links the Action to the Artifact
+    /// (F18).
+    #[serde(default)]
+    pub produced_by_action_id: Option<String>,
 }
 
 /// Source of PDF bytes — mirrors `uniko_extract::ingest::pdf::PdfInput`.

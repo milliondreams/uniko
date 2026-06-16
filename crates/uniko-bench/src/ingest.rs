@@ -218,6 +218,7 @@ pub async fn ingest_into_kb_with_observer(
                         kind: "image".to_string(),
                         path: img_path,
                         metadata: HashMap::new(),
+                        ..Default::default()
                     };
 
                     if let Err(e) = ingest_artifact(kb, &artifact).await {

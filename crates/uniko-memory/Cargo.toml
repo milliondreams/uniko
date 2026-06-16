@@ -25,3 +25,6 @@ lru = { workspace = true }
 
 [features]
 onnx = ["uniko-extract/onnx"]
+# Enable the abstractive (LLM-rewritten) path for F59 summaries. When
+# absent, summary generation stays deterministic/extractive and offline.
+llm = ["uniko-cortex/llm"]

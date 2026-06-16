@@ -52,6 +52,12 @@ pub struct RecordEpisodeParams {
     pub importance: Option<f64>,
     /// Wall-clock time the episode happened.  Defaults to `now()`.
     pub timestamp: Option<DateTime<Utc>>,
+    /// Optional `message_id` of the Message that triggered this episode.
+    /// When set and resolvable, a `TRIGGERED_BY` edge is created (F15).
+    pub triggered_by_message_id: Option<String>,
+    /// `action_id`s of the Actions this episode involved.  Each
+    /// resolvable one gets an `INVOLVES` edge (F19, best-effort).
+    pub involved_action_ids: Vec<String>,
 }
 
 /// Window for linking consecutive episodes via `FOLLOWED_BY`.
@@ -155,6 +161,44 @@ pub async fn record_episode(
         edge_props.insert("gap_ms".into(), Value::Int(gap_ms));
         kb.create_edge(edges::FOLLOWED_BY, prev_id, episode_node, &edge_props)
             .await?;
+    }
+
+    // ── Optional TRIGGERED_BY (Episode → Message) ──
+    if let Some(msg_id) = params.triggered_by_message_id.as_deref() {
+        match kb
+            .get_node_by_ext_id(labels::MESSAGE, "message_id", msg_id)
+            .await?
+        {
+            Some(msg) => {
+                kb.create_edge(edges::TRIGGERED_BY, episode_node, msg.0, &HashMap::new())
+                    .await?;
+            }
+            None => {
+                tracing::debug!(
+                    msg_id,
+                    "record_episode: triggered_by Message not found — TRIGGERED_BY skipped"
+                );
+            }
+        }
+    }
+
+    // ── Optional INVOLVES (Episode → Action), best-effort ──
+    for action_id in &params.involved_action_ids {
+        match kb
+            .get_node_by_ext_id(labels::ACTION, "action_id", action_id)
+            .await?
+        {
+            Some(action) => {
+                kb.create_edge(edges::INVOLVES, episode_node, action.0, &HashMap::new())
+                    .await?;
+            }
+            None => {
+                tracing::debug!(
+                    action_id,
+                    "record_episode: involved Action not found — INVOLVES skipped"
+                );
+            }
+        }
     }
 
     // Compute and store the topic embedding.
