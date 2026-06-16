@@ -130,6 +130,7 @@ pub mod edges {
     pub const PROCESSED: &str = "PROCESSED";
     pub const INVOLVED: &str = "INVOLVED";
     pub const CREATED: &str = "CREATED";
+    pub const REINFORCED: &str = "REINFORCED";
     pub const INVALIDATED: &str = "INVALIDATED";
     pub const PROMOTED: &str = "PROMOTED";
     pub const APPLIED_RULE: &str = "APPLIED_RULE";
@@ -183,6 +184,7 @@ pub mod edges {
         PROCESSED,
         INVOLVED,
         CREATED,
+        REINFORCED,
         INVALIDATED,
         PROMOTED,
         APPLIED_RULE,

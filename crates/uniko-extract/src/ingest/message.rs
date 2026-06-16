@@ -21,6 +21,9 @@ pub struct MessageSetup {
     /// Caller is responsible for updating `session_ctx` after a
     /// successful commit.
     pub prev_msg_nid: Option<NodeId>,
+    /// Timestamp of the previous message in the chain, used to compute
+    /// `NEXT.gap_ms`. `None` for the first message in a session.
+    pub prev_msg_ts: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Per-phase write metrics; useful for callers that want to log a
@@ -81,14 +84,29 @@ pub(crate) async fn apply_message_writes_in_tx(
     // Create all per-message edges in ONE Cypher statement.
     let edges_start = std::time::Instant::now();
     let edge_count = 2 + setup.recipient_nids.len() + usize::from(setup.prev_msg_nid.is_some());
+    // SENT_BY.role reflects the sender's kind so "messages from agents"
+    // queries work. Callers signal it via `metadata["sender_role"]`
+    // (e.g. "human" / "agent" / "service"); absent it, default "user".
+    let sender_role = msg
+        .metadata
+        .get("sender_role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("user");
+    // NEXT.gap_ms = ms between this message and the previous one in the
+    // chain. `None` for the first message; clamped to >= 0 to absorb
+    // out-of-order timestamps.
+    let gap_ms = setup
+        .prev_msg_ts
+        .map(|prev| (msg.timestamp - prev).num_milliseconds().max(0));
     kb.create_message_edges_in_tx(
         tx,
         message_nid,
         setup.participant_nid,
-        "user",
+        sender_role,
         setup.session_nid,
         &setup.recipient_nids,
         setup.prev_msg_nid,
+        gap_ms,
     )
     .await?;
     let edges_ms = edges_start.elapsed().as_millis();

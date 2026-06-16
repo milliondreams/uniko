@@ -250,6 +250,11 @@ pub struct RecallConfig {
     /// [`ViewerScope::Unrestricted`] (no filtering) — set this for any
     /// caller serving a specific participant. See issue #5.
     pub viewer: ViewerScope,
+    /// F58 drift override. When `true` (default) and any query entity ref
+    /// resolves to an Entity flagged `unstable` (F39 drift), the Phase-1
+    /// early exit is suppressed and the cascade always runs Phase 2+ so
+    /// queries about volatile entities check recent episodic evidence.
+    pub drift_override_enabled: bool,
 }
 
 impl Default for RecallConfig {
@@ -294,6 +299,7 @@ impl Default for RecallConfig {
             enable_video_channel: false,
             enable_multimodal_channel: false,
             viewer: ViewerScope::Unrestricted,
+            drift_override_enabled: true,
         }
     }
 }
@@ -364,6 +370,7 @@ impl RecallConfig {
             enable_video_channel: false,
             enable_multimodal_channel: false,
             viewer: ViewerScope::Unrestricted,
+            drift_override_enabled: true,
         }
     }
 }
@@ -483,7 +490,21 @@ async fn recall_unfiltered(
     let phase1_coverage = compute_coverage(&phase1_items, intent.facet_count);
     let phase1_sufficient = phase1_coverage >= COVERAGE_GATE_PHASE1 && phase1_items.len() >= 3;
 
-    if phase1_sufficient {
+    // F58 drift override: when the query references an entity flagged
+    // `unstable` (F39), do not trust the compiled Phase-1 view — force
+    // Phase 2+ so recent episodic evidence is consulted. Only worth the
+    // lookup when Phase 1 would otherwise have exited early.
+    let drift_forced = phase1_sufficient
+        && config.drift_override_enabled
+        && kb.any_unstable_entities(&intent.entity_refs).await;
+    if drift_forced {
+        tracing::info!(
+            entity_refs = ?intent.entity_refs,
+            "drift override: unstable entity referenced — forcing phase 2+"
+        );
+    }
+
+    if phase1_sufficient && !drift_forced {
         tracing::info!(
             phase1_items = phase1_items.len(),
             coverage = phase1_coverage,

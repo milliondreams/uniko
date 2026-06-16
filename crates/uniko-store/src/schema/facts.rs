@@ -56,6 +56,10 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
         .done()
         .edge_type(edges::INVALIDATES, &[labels::FACT], &[labels::FACT])
         .property_nullable("reason", DataType::String)
+        // Timestamp of the invalidation, so F39 drift detection can count
+        // invalidations within a rolling window (e.g. last 30 days)
+        // instead of cumulatively.
+        .property_nullable("invalidated_at", DataType::DateTime)
         .done()
         .edge_type(edges::SHARED_FROM, &[labels::FACT], &[labels::FACT])
         .property_nullable("shared_by", DataType::String)

@@ -1,6 +1,6 @@
 //! Layer 4: Summary node type.
 
-use uni_db::{DataType, IndexType, SchemaBuilder};
+use uni_db::{DataType, IndexType, ScalarType, SchemaBuilder};
 
 use super::constants::{edges, labels};
 use crate::config::UnikoConfig;
@@ -21,6 +21,12 @@ pub(crate) fn register_labels<'a>(
                 dimensions: config.embedding.dimensions,
             },
         )
+        // Hash index on the ext-id so `merge_node(SUMMARY, "summary_id", …)`
+        // resolves idempotently (summaries are upserted by the P7d sweep).
+        .index("summary_id", IndexType::Scalar(ScalarType::Hash))
+        // F27: fulltext over summary text so Phase-3 recall can BM25-match
+        // summaries, not just vector-search them.
+        .index("text", IndexType::FullText)
         .index(
             "embedding",
             IndexType::Vector(super::auto_embed_vector_index("text", config)),

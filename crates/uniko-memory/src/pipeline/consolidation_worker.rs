@@ -222,6 +222,42 @@ impl ConsolidationWorker {
         let now = Instant::now();
         self.run_procedure_sweep(agent_id, now).await;
         self.run_topic_sweep(agent_id, now).await;
+        self.run_decay_sweep(agent_id).await;
+    }
+
+    /// Run F50 memory decay for one agent: prune Episodes whose
+    /// age-decayed importance has fallen at or below the configured
+    /// `prune_below` threshold.
+    ///
+    /// Shares the cortex cadence gate (runs every `cortex_every_n`
+    /// cycles). Decay is computed from the immutable stored `importance`,
+    /// so the prune is monotonic and safe to repeat. Failures are logged
+    /// and dropped — decay must never destabilize consolidation.
+    async fn run_decay_sweep(&mut self, agent_id: &str) {
+        let cfg = self.kb.config();
+        let half_life_days = cfg.half_life_days;
+        let prune_below = cfg.prune_below;
+        let now = chrono::Utc::now();
+        match self
+            .kb
+            .prune_decayed_episodes(agent_id, half_life_days, prune_below, now)
+            .await
+        {
+            Ok(pruned) => {
+                if pruned > 0 {
+                    tracing::info!(
+                        agent = %agent_id,
+                        pruned,
+                        "memory decay pruned stale episodes",
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                agent = %agent_id,
+                error = %e,
+                "memory decay sweep failed — continuing",
+            ),
+        }
     }
 
     /// Run P5 — procedure promotion — for one agent.

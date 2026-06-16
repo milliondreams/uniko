@@ -54,6 +54,15 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
             &[labels::FACT],
         )
         .done()
+        // REINFORCED: facts this cycle re-observed (vs newly CREATED).
+        // Distinct edge so provenance does not overload INVOLVED, which
+        // targets Episode.
+        .edge_type(
+            edges::REINFORCED,
+            &[labels::CONSOLIDATION_CYCLE],
+            &[labels::FACT],
+        )
+        .done()
         .edge_type(
             edges::INVALIDATED,
             &[labels::CONSOLIDATION_CYCLE],

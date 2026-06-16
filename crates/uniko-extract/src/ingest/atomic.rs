@@ -158,6 +158,7 @@ pub async fn ingest_message_atomic(
         participant_nid,
         recipient_nids,
         prev_msg_nid: session_ctx.prev_message_nid,
+        prev_msg_ts: session_ctx.prev_message_ts,
     };
     let sender_ref = Some((participant_nid, msg.sender_id.clone()));
     let timestamp = msg.timestamp;
@@ -291,6 +292,7 @@ pub async fn ingest_message_atomic(
 
     // 10. Post-commit: update session_ctx.
     session_ctx.prev_message_nid = Some(message_nid);
+    session_ctx.prev_message_ts = Some(msg.timestamp);
     if let Some(sc) = sentence_ctx_updated {
         session_ctx.sentence_ctx = sc;
     }

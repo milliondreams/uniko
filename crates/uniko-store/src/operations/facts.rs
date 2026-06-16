@@ -603,7 +603,7 @@ impl KnowledgeBase {
                 processed_observations,
             ),
             (edges::CREATED, labels::FACT, created_facts),
-            (edges::INVOLVED, labels::FACT, reinforced_facts),
+            (edges::REINFORCED, labels::FACT, reinforced_facts),
             (edges::INVALIDATED, labels::FACT, invalidated_facts),
             (edges::APPLIED_RULE, labels::RULE, applied_rules),
         ];
@@ -818,6 +818,8 @@ impl KnowledgeBase {
             if let Some(r) = reason {
                 edge_props.insert("reason".into(), Value::String(r.to_string()));
             }
+            // Stamp the edge so F39 can window invalidations by time.
+            edge_props.insert("invalidated_at".into(), crate::types::datetime_value(now));
             self.create_edge(edges::INVALIDATES, new_fact, stale_fact, &edge_props)
                 .await?;
         }
@@ -896,12 +898,15 @@ impl KnowledgeBase {
             crate::types::datetime_value(now),
         );
 
-        // Drift gate: count invalidations within the last 30 days by
-        // matching INVALIDATES edges on Facts whose subject equals this
-        // entity.  Falls back to the cumulative count when the windowed
-        // query yields nothing (e.g., no INVALIDATES edges yet because
-        // the caller hasn't wired one for the current invalidation).
-        let window_count = self.count_recent_invalidations(key).await?.max(new_count);
+        // Drift gate (F39): count INVALIDATES edges on this entity's Facts
+        // stamped within the last 30 days. The contradiction path creates
+        // the current edge (with `invalidated_at`) before this runs, so it
+        // is included. Edges predating the `invalidated_at` field (NULL)
+        // fall outside the window and are not counted — acceptable
+        // migration behavior.
+        const DRIFT_WINDOW_DAYS: i64 = 30;
+        let since = now - chrono::Duration::days(DRIFT_WINDOW_DAYS);
+        let window_count = self.count_recent_invalidations(key, since).await?;
         let now_unstable = window_count > drift_threshold;
         updates.insert("unstable".into(), Value::Bool(now_unstable));
         self.update_node(nid, &updates).await?;
@@ -909,19 +914,25 @@ impl KnowledgeBase {
         Ok(now_unstable && !prior_unstable)
     }
 
-    /// Count `INVALIDATES` edges on Facts with `subject = entity_name`.
+    /// Count `INVALIDATES` edges on Facts with `subject = entity_name`
+    /// stamped at or after `since`.
     ///
-    /// The cited "last 30 days" window in the surrounding caller is
-    /// implemented by the caller-side `.max(new_count)` fallback; this
-    /// function is the pure cumulative count.
-    async fn count_recent_invalidations(&self, entity_name: &str) -> Result<i64> {
+    /// Backs F39's rolling-window drift gate. Edges without an
+    /// `invalidated_at` (created before that field existed) are excluded
+    /// by the range predicate.
+    async fn count_recent_invalidations(
+        &self,
+        entity_name: &str,
+        since: DateTime<Utc>,
+    ) -> Result<i64> {
         let session = self.db.session();
         let cypher = "MATCH (new:Fact)-[r:INVALIDATES]->(old:Fact) \
-                      WHERE old.subject = $n \
+                      WHERE old.subject = $n AND r.invalidated_at >= $since \
                       RETURN count(r) AS k";
         let result = session
             .query_with(cypher)
             .param("n", entity_name)
+            .param("since", crate::types::datetime_value(since))
             .fetch_all()
             .await?;
         match result.rows().first() {

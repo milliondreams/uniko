@@ -74,6 +74,10 @@ pub(crate) fn register_labels<'a>(
         .index("artifact_id", IndexType::Scalar(ScalarType::Hash))
         .index("path", IndexType::Scalar(ScalarType::BTree))
         .index("kind", IndexType::Scalar(ScalarType::Hash))
+        // F29: content-hash dedup. Hash index keeps the
+        // "have I already ingested these exact bytes?" probe O(1)
+        // instead of a table scan during ingest.
+        .index("hash", IndexType::Scalar(ScalarType::Hash))
         .index("content", IndexType::FullText)
         .index("language", IndexType::Scalar(ScalarType::Hash))
         .index("mime_type", IndexType::Scalar(ScalarType::Hash))

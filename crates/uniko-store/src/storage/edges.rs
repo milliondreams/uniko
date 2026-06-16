@@ -199,6 +199,7 @@ impl KnowledgeBase {
         session_nid: NodeId,
         recipient_nids: &[NodeId],
         prev_msg_nid: Option<NodeId>,
+        gap_ms: Option<i64>,
     ) -> Result<()> {
         use uni_db::Vid;
         let t_start = std::time::Instant::now();
@@ -244,10 +245,12 @@ impl KnowledgeBase {
             tx.bulk_insert_edges("ADDRESSED_TO", edges).await?;
         }
 
-        // NEXT — 0 or 1 edge, with gap_ms=0 (Phase 3 will populate).
+        // NEXT — 0 or 1 edge. `gap_ms` is the inter-message delay computed
+        // by the caller from the previous message's timestamp; defaults to
+        // 0 when unknown (e.g. first message or a caller that omits it).
         if let Some(prev_nid) = prev_msg_nid {
             let mut next_props: HashMap<String, Value> = HashMap::with_capacity(1);
-            next_props.insert("gap_ms".into(), Value::Int(0));
+            next_props.insert("gap_ms".into(), Value::Int(gap_ms.unwrap_or(0)));
             super::batch_record::record_edge_batch("NEXT", || vec![next_props.clone()]);
             tx.bulk_insert_edges(
                 "NEXT",

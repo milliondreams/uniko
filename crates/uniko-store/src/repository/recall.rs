@@ -144,6 +144,42 @@ impl KnowledgeBase {
         }
     }
 
+    /// Whether any of `names` resolves to an `:Entity` flagged
+    /// `unstable` (F39 drift). Backs the F58 recall drift override.
+    ///
+    /// Best-effort: logs and returns `false` on query error or when
+    /// `names` is empty, matching the cascade's best-effort contract.
+    #[must_use]
+    pub async fn any_unstable_entities(&self, names: &[String]) -> bool {
+        if names.is_empty() {
+            return false;
+        }
+        let session = self.db.session();
+        let cypher = "UNWIND $names AS name \
+                      MATCH (e:Entity) \
+                      WHERE e.name = name AND e.unstable = true \
+                      RETURN count(e) AS k";
+        let names_param: Vec<Value> = names.iter().map(|n| Value::String(n.clone())).collect();
+        match session
+            .query_with(cypher)
+            .param("names", Value::List(names_param))
+            .fetch_all()
+            .await
+        {
+            Ok(r) => {
+                r.rows()
+                    .first()
+                    .and_then(|row| row.get::<i64>("k").ok())
+                    .unwrap_or(0)
+                    > 0
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "any_unstable_entities query failed");
+                false
+            }
+        }
+    }
+
     /// Temporal-channel fan-out over `[lo, hi)`: Fact via BTIC overlap,
     /// Observation + Episode via BTree range, with per-arm limits.
     ///

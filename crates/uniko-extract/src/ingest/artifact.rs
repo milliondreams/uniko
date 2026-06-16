@@ -109,8 +109,16 @@ pub async fn ingest_artifact(
     kb.create_edge("HAS_CONTENT", artifact_nid, content_nid, &edge_props)
         .await?;
 
-    // 5. Select chunker and create chunks.
-    let content_type = if language.is_some() { "code" } else { "text" };
+    // 5. Select chunker and create chunks. A caller-supplied
+    // `metadata["content_type"]` wins (e.g. a fetched URL whose bytes
+    // are HTML), so URL / upload ingestion uses the right chunker even
+    // without a file extension; otherwise infer from detected language.
+    let hinted_content_type = artifact
+        .metadata
+        .get("content_type")
+        .and_then(|v| v.as_str());
+    let content_type = hinted_content_type
+        .unwrap_or(if language.is_some() { "code" } else { "text" });
     let chunker = select_chunker(content_type, language.as_deref());
     let chunk_cfg = ChunkConfig::from_uniko_config(kb.config());
     let chunks = chunker.chunk(&artifact.content, &chunk_cfg);

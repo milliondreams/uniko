@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use uniko_store::NodeId;
@@ -31,6 +32,8 @@ pub struct SessionContext {
     pub other_speakers: Vec<String>,
     /// Previous message node ID for NEXT edge linking.
     pub prev_message_nid: Option<NodeId>,
+    /// Timestamp of the previous message, for computing `NEXT.gap_ms`.
+    pub prev_message_ts: Option<DateTime<Utc>>,
     /// Pronoun resolution context window.
     pub sentence_ctx: SentenceContext,
 }
@@ -45,6 +48,7 @@ impl SessionContext {
             current_speaker: String::new(),
             other_speakers: Vec::new(),
             prev_message_nid: None,
+            prev_message_ts: None,
             sentence_ctx: SentenceContext::default(),
         }
     }
