@@ -57,7 +57,7 @@ impl KnowledgeBase {
     /// supported way to run a rule registered with [`KnowledgeBase::create_rule`]
     /// — unlike [`KnowledgeBase::execute_rule`], which treats its argument as a
     /// Locy *program* and so cannot be handed a bare rule name (uni-db parses
-    /// it as a query and fails; see `bugs/UNI_DB_WORKAROUNDS.md` RC12).
+    /// it as a query and fails; see the uni-db workarounds notes RC12).
     ///
     /// `return_cols` must name the rule's `YIELD` aliases; the result rows are
     /// keyed by those names. Pass rule body parameters (e.g. `$agent_id`) via

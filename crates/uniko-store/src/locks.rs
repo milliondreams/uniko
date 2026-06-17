@@ -13,7 +13,7 @@
 //! pattern ("does this row exist? if not, CREATE it"), where two
 //! concurrent transactions can each read "absent" and both insert a
 //! duplicate row: an insert-phantom uni-db's read-set SSI does not
-//! always catch (see `bugs/UNI_DB_WORKAROUNDS.md` RC2). They provide
+//! always catch (see the uni-db workarounds notes RC2). They provide
 //! this without paying per-key allocation.
 //!
 //! # Design

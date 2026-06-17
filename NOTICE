@@ -1,0 +1,71 @@
+uniko
+Copyright 2024-2026 Dragonscale Industries Inc.
+
+This product includes software developed at Dragonscale Industries Inc.
+It is licensed under the Apache License, Version 2.0 (the "License"); you
+may not use this product except in compliance with the License. You may
+obtain a copy of the License in the accompanying LICENSE file or at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+================================================================================
+This product depends on / uses:
+================================================================================
+
+Runtime dependencies
+--------------------
+
+- uni-db (Apache-2.0)
+  The embedded multi-model graph engine that uniko is built on. Provides
+  graph storage, OpenCypher querying, Locy logic programming, and
+  vector/hybrid search. https://crates.io/crates/uni-db
+
+- uni-xervo (license: see upstream)
+  Model runtime used to register and invoke local ONNX models (embeddings,
+  NLP cascade, and cross-encoder reranker) and to route remote providers.
+  https://crates.io/crates/uni-xervo
+
+- ONNX Runtime, via the `ort` crate (ONNX Runtime: MIT; `ort` crate: see upstream)
+  Inference engine used to execute the local ONNX embedding, NLP, and
+  reranker models at write-time and during recall.
+
+- tree-sitter (MIT) and language grammars tree-sitter-python,
+  tree-sitter-rust, tree-sitter-javascript, tree-sitter-typescript
+  (license: see upstream)
+  Incremental parsers used for code-aware chunking and extraction.
+
+Other notable third-party runtime crates (each under its own license;
+see upstream for exact terms) include: serde / serde_json / serde_yaml,
+chrono, uuid, thiserror, anyhow, async-trait, rand, tokio / tokio-util /
+futures, metrics / metrics-exporter-prometheus, tracing /
+tracing-subscriber, tiktoken-rs, ndarray, tokenizers, rust-stemmers,
+regex, lru, sha2, hex, and object_store. A complete, authoritative
+dependency-and-license inventory is enforced in CI via cargo-deny.
+
+Default models
+--------------
+
+uniko ships with no model weights. The following models are referenced as
+defaults and are downloaded from their upstream sources (e.g. the Hugging
+Face Hub) at runtime. Each model is governed by its own upstream license
+and terms of use; consult the upstream model card before redistribution
+or production use.
+
+- BAAI/bge-small-en-v1.5 (license: see upstream)
+  Default text embedding model (384-dimensional). Used to produce vector
+  embeddings for hybrid search.
+
+- dragonscale-ai/kniv-deberta-nlp-base-en-xsmall (license: see upstream)
+  Default NLP cascade model (INT8 ONNX, artifact `onnx/cascade-int8.onnx`).
+  Used at write-time for local NER, observation, and related NLP
+  extraction — no LLM in the recall hot path.
+
+- cross-encoder/ms-marco-MiniLM-L-6-v2 (license: see upstream)
+  Default cross-encoder reranker. Used to re-score top hybrid-search
+  candidates during recall.
+
+================================================================================
+
+For licenses of the dependencies and models listed above, see the
+respective upstream projects. Where a specific license is not asserted
+here, refer to the upstream source for the authoritative terms.

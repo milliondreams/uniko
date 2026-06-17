@@ -1,6 +1,6 @@
 //! PDF ingest — text-only path with a pluggable extractor.
 //!
-//! See `initial-docs/multimodal-knowledge-store-design.md` §5.3.4.
+//! See the multimodal design notes §5.3.4.
 //!
 //! Rasterization for VLM is deliberately out of scope: no production-
 //! ready pure-Rust PDF rasterizer exists today, and pdfium / mupdf /

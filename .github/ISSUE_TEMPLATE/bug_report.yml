@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a problem in uniko so we can fix it
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+        Before submitting, please search [existing issues](https://github.com/rustic-ai/uniko/issues)
+        to avoid duplicates. uniko is an embedded Rust library — please include enough detail
+        for us to reproduce the problem locally.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug, including the actual behavior you observed.
+      placeholder: When I call ... uniko returns/panics/hangs ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps (ideally a small code snippet or test) that reliably reproduce the issue.
+      placeholder: |
+        1. Build with ...
+        2. Ingest ...
+        3. Call recall with ...
+        4. Observe ...
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: The uniko version (crate version) or git commit SHA you are running.
+      placeholder: "e.g. v0.1.0 or commit b07a479"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and Rust toolchain version.
+      placeholder: |
+        - OS: e.g. Fedora 42 / Ubuntu 24.04 / macOS 15
+        - Rust version: output of `rustc --version` (MSRV is 1.85)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: Paste any relevant log output, backtraces, or error messages. This is automatically formatted as code, so no backticks are needed.
+      render: shell
+    validations:
+      required: false

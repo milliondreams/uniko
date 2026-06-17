@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://rustic-ai.github.io/uniko/
+    about: Read the uniko documentation before opening an issue — your question may already be answered.
+  - name: GitHub Discussions
+    url: https://github.com/rustic-ai/uniko/discussions
+    about: Ask questions, share ideas, and discuss usage with the community here.

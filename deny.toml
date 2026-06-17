@@ -1,23 +1,49 @@
+# cargo-deny configuration (schema for cargo-deny >= 0.18).
+# https://embarkstudios.github.io/cargo-deny/
+
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
+# Limit "unmaintained" checks to first-party/workspace deps to avoid noise
+# from transitive crates we don't control. Security vulnerabilities and yanked
+# crates are still flagged across the whole graph.
+unmaintained = "workspace"
+yanked = "deny"
+# Transitive advisories accepted for the 0.1.0 release. None are in uniko's own
+# code; revisit each as upstreams publish fixes. See SECURITY.md.
+ignore = [
+    "RUSTSEC-2023-0071", # `rsa` Marvin timing side-channel — no fixed upstream release; transitive via mistralrs (uni-xervo).
+    "RUSTSEC-2026-0104", # `rustls` CRL-parsing panic — transitive TLS stack (ort / hf-hub); track upstream bump.
+    "RUSTSEC-2026-0177", # unsound `IterMut` — transitive; awaiting upstream fix.
+    "RUSTSEC-2025-0020", # `pyo3` < 0.24 PyString::from_object overflow — only via the non-shipped uniko-py skeleton (publish = false).
+    "RUSTSEC-2026-0002", # `pyo3` Sync bound on new_closure — only via the non-shipped uniko-py skeleton; bump pyo3 when it is built out.
+]
 
 [licenses]
+# Permissive licenses compatible with Apache-2.0 distribution.
 allow = [
     "MIT",
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
     "OpenSSL",
+    "0BSD",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "NCSA",
+    "bzip2-1.0.6",
 ]
 confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

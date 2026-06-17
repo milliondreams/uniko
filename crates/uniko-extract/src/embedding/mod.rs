@@ -153,7 +153,7 @@ fn apply_prefix(text: &str, prefix: Option<&str>) -> String {
 ///
 /// Spec Part VIII names this as the v5 fix: Episodes must embed the
 /// *topic* from their `state` JSON, not a generic action/outcome string.
-/// Priority order (per `initial-docs/embedding-analysis.md`):
+/// Priority order (per the embedding analysis notes):
 ///
 /// 1. `state.topic`
 /// 2. `state.question`

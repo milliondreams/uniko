@@ -1,9 +1,16 @@
 [package]
 name = "uniko-cortex"
-description = "Layer 5: Higher reasoning — procedures, topics, MCTS planning, rule induction"
+description = "Layer 5: Higher reasoning — procedure promotion and topic detection"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 uniko-store = { workspace = true }

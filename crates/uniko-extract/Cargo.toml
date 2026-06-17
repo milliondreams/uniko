@@ -3,7 +3,14 @@ name = "uniko-extract"
 description = "Layer 3: Content processing — NER, observations, chunking, ingest, embedding"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 uniko-pipes = { workspace = true }

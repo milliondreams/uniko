@@ -3,7 +3,16 @@ name = "uniko-py"
 description = "Python binding for uniko cognitive memory (PyO3)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Work-in-progress PyO3 skeleton (Phase 4) — not functional yet, not published.
+publish = false
 
 [lib]
 name = "uniko"

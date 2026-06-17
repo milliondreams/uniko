@@ -1,13 +1,16 @@
-# Linker config — mirrors ../uni/.cargo/config.toml.
+# Cargo configuration.
 #
-# `cc_no_usrlib.sh` is a shell wrapper around cc that drops `-L /usr/lib`
-# from the argv. Without it, the linker picks up the 32-bit i386 multilib
-# `libcuda.so` under /usr/lib before the real 64-bit one under /usr/lib64
-# and errors with `incompatible with elf64-x86-64`. Needed for the
-# `gpu-cuda` feature; harmless otherwise.
+# No build settings are forced here so that a fresh `git clone` builds with
+# the standard system linker on every platform (CI and external contributors
+# included).
 #
-# `-fuse-ld=mold` swaps the link backend from GNU ld to mold. Saves
-# ~20–60s on cold link of the workspace binaries; matches uni's setup.
-[target.'cfg(target_os = "linux")']
-linker = "/tmp/cc_no_usrlib.sh"
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# Optional local speed-up: install `mold` and uncomment the block below to
+# use it as the link backend (saves ~20-60s on a cold link of the workspace):
+#
+# [target.'cfg(target_os = "linux")']
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+#
+# Building the `gpu-cuda` feature on a machine with i386 multilib may pick up a
+# 32-bit `libcuda.so` under /usr/lib and fail with "incompatible with
+# elf64-x86-64". If you hit that, point `linker` at a small `cc` wrapper that
+# drops `-L /usr/lib` from argv. See CONTRIBUTING.md for details.

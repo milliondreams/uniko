@@ -416,7 +416,7 @@ impl KnowledgeBase {
     /// Entity dedup is a check-then-create across a transaction the caller
     /// owns. uni-db's `entity_id` index is non-unique, so two concurrent
     /// ingests that both read "absent" would both CREATE a duplicate row
-    /// (an insert-phantom SSI does not catch — see `bugs/UNI_DB_WORKAROUNDS.md`
+    /// (an insert-phantom SSI does not catch — see the uni-db workarounds notes
     /// RC2). The caller must hold these guards across BOTH the existence
     /// re-read AND the commit so a second writer cannot interleave; the guards
     /// are dropped when the returned `Vec` goes out of scope (after commit).

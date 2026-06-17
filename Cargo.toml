@@ -14,23 +14,30 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.91"
 license = "Apache-2.0"
+authors = ["Dragonscale Industries Inc. <dev@dragonscale.ai>"]
+repository = "https://github.com/rustic-ai/uniko"
+homepage = "https://www.rustic.ai"
+documentation = "https://rustic-ai.github.io/uniko"
+keywords = ["memory", "agents", "knowledge-graph", "embeddings", "llm"]
+categories = ["database", "text-processing"]
 
 [workspace.dependencies]
-# Internal crates
-uniko-store = { path = "crates/uniko-store" }
-uniko-pipes = { path = "crates/uniko-pipes" }
-uniko-extract = { path = "crates/uniko-extract" }
-uniko-memory = { path = "crates/uniko-memory" }
-uniko-cortex = { path = "crates/uniko-cortex" }
-uniko-api = { path = "crates/uniko-api" }
-uniko-bench = { path = "crates/uniko-bench" }
+# Internal crates (version required so `cargo publish` accepts the path deps)
+uniko-store = { path = "crates/uniko-store", version = "0.1.0" }
+uniko-pipes = { path = "crates/uniko-pipes", version = "0.1.0" }
+uniko-extract = { path = "crates/uniko-extract", version = "0.1.0" }
+uniko-memory = { path = "crates/uniko-memory", version = "0.1.0" }
+uniko-cortex = { path = "crates/uniko-cortex", version = "0.1.0" }
+uniko-api = { path = "crates/uniko-api", version = "0.1.0" }
+uniko-bench = { path = "crates/uniko-bench", version = "0.1.0" }
 
 # Database — uni-db default features already include lance-backend,
 # provider-onnx (embeddings + NLP + reranker), and every remote provider.
 # GPU accelerators (gpu-cuda / gpu-metal) are opt-in via uniko-store /
 # uniko-bench passthrough features.
-uni-db = { path = "../uni/crates/uni", features = ["mimalloc"] }
+uni-db = { version = "2.2.1", features = ["mimalloc"] }
 # Direct dep on uni-xervo so uniko-store can name `ModelRuntime` in
 # `KnowledgeBase::build_shared_runtime` / `open_with_runtime`. uni-db
 # uses uni-xervo internally but does not re-export the type. Version

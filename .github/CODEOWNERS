@@ -1,0 +1,4 @@
+# Default owners for everything in the repository.
+# These owners will be requested for review on every pull request
+# unless a later, more specific rule matches.
+* @rustic-ai/uniko-maintainers

@@ -14,20 +14,18 @@ jobs:
     name: Check, Lint, Format, Test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout uniko
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Checkout uni-db
-        uses: actions/checkout@v4
-        with:
-          repository: rustic-ai/uni-db
-          path: ../projectX/uni-db
-          token: ${{ secrets.UNI_DB_TOKEN }}
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo registry and build
         uses: actions/cache@v4
@@ -41,10 +39,10 @@ jobs:
       - name: uni-db seal (no raw uni-db in product crates)
         run: |
           # Product crates (memory/extract/cortex/pipes) must reach the graph
-          # only through uniko-store's typed API (issue #2). Forbid `use uni_db`
-          # and the `.db()` escape hatch in their src/. Comments are exempt, as
-          # are intentional uses tagged `// ALLOW:`. Tests (tests/ dirs) and the
-          # bench crate are intentionally out of scope.
+          # only through uniko-store's typed API. Forbid `use uni_db` and the
+          # `.db()` escape hatch in their src/. Comments are exempt, as are
+          # intentional uses tagged `// ALLOW:`. Tests and the bench crate are
+          # intentionally out of scope.
           matches=$(rg -n -e 'use uni_db' -e '\.db\(\)' \
             crates/uniko-memory/src crates/uniko-extract/src \
             crates/uniko-cortex/src crates/uniko-pipes/src \
@@ -64,10 +62,21 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: cargo fmt
-        run: cargo fmt --workspace --check
+        run: cargo fmt --all --check
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
       - name: cargo nextest run
         run: cargo nextest run --workspace
+
+  deny:
+    name: cargo-deny (licenses & advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
