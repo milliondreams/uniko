@@ -10,8 +10,8 @@ repository = "https://github.com/rustic-ai/uniko"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-zensical = ">=0.0.31"
-pymdown-extensions = "^10.0"
+zensical = ">=0.0.45,<0.1"
+pymdown-extensions = "^10.21"
 
 [build-system]
 requires = ["poetry-core"]
