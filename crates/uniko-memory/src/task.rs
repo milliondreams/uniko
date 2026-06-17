@@ -115,7 +115,15 @@ pub async fn create_task(
 
     // ── Optional PART_OF (Task → Goal) ──
     if let Some(goal_id) = params.goal_id.as_deref() {
-        link_best_effort(kb, edges::PART_OF, task_node, labels::GOAL, "goal_id", goal_id).await?;
+        link_best_effort(
+            kb,
+            edges::PART_OF,
+            task_node,
+            labels::GOAL,
+            "goal_id",
+            goal_id,
+        )
+        .await?;
     }
 
     // ── Optional DEPENDS_ON (Task → Task) ──
@@ -167,7 +175,10 @@ async fn link_best_effort(
     id_field: &str,
     ext_id: &str,
 ) -> Result<(), UnikoError> {
-    match kb.get_node_by_ext_id(target_label, id_field, ext_id).await? {
+    match kb
+        .get_node_by_ext_id(target_label, id_field, ext_id)
+        .await?
+    {
         Some(target) => {
             kb.create_edge(edge_type, from, target.0, &HashMap::new())
                 .await?;

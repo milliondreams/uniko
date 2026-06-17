@@ -56,7 +56,10 @@ pub async fn generate_session_summary(
         .get_node_by_ext_id(labels::SESSION, "session_id", session_id)
         .await?
     else {
-        tracing::debug!(session_id, "generate_session_summary: Session not found — skipped");
+        tracing::debug!(
+            session_id,
+            "generate_session_summary: Session not found — skipped"
+        );
         return Ok(None);
     };
     let session_node = session.0;

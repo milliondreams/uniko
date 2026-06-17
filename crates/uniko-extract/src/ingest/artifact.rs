@@ -122,8 +122,8 @@ pub async fn ingest_artifact(
         .metadata
         .get("content_type")
         .and_then(|v| v.as_str());
-    let content_type = hinted_content_type
-        .unwrap_or(if language.is_some() { "code" } else { "text" });
+    let content_type =
+        hinted_content_type.unwrap_or(if language.is_some() { "code" } else { "text" });
     let chunker = select_chunker(content_type, language.as_deref());
     let chunk_cfg = ChunkConfig::from_uniko_config(kb.config());
     let chunks = chunker.chunk(&artifact.content, &chunk_cfg);
@@ -200,8 +200,13 @@ async fn link_artifact_context(
             .await?
         {
             Some((session_nid, _)) => {
-                kb.create_edge(edges::ATTACHED_TO, artifact_nid, session_nid, &attach_props())
-                    .await?;
+                kb.create_edge(
+                    edges::ATTACHED_TO,
+                    artifact_nid,
+                    session_nid,
+                    &attach_props(),
+                )
+                .await?;
             }
             None => tracing::debug!(
                 session_id,

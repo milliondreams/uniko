@@ -39,7 +39,12 @@ async fn seed_participant(kb: &KnowledgeBase, agent_id: &str) {
         .expect("participant created");
 }
 
-async fn seed_message(kb: &KnowledgeBase, message_id: &str, content: &str, ts: chrono::DateTime<Utc>) -> i64 {
+async fn seed_message(
+    kb: &KnowledgeBase,
+    message_id: &str,
+    content: &str,
+    ts: chrono::DateTime<Utc>,
+) -> i64 {
     let mut props: HashMap<String, Value> = HashMap::new();
     props.insert("message_id".into(), Value::String(message_id.into()));
     props.insert("content".into(), Value::String(content.into()));
@@ -49,7 +54,11 @@ async fn seed_message(kb: &KnowledgeBase, message_id: &str, content: &str, ts: c
         .expect("message created")
 }
 
-async fn seed_session(kb: &KnowledgeBase, session_id: &str, started_at: chrono::DateTime<Utc>) -> i64 {
+async fn seed_session(
+    kb: &KnowledgeBase,
+    session_id: &str,
+    started_at: chrono::DateTime<Utc>,
+) -> i64 {
     let mut props: HashMap<String, Value> = HashMap::new();
     props.insert("session_id".into(), Value::String(session_id.into()));
     props.insert("started_at".into(), datetime_value(started_at));
@@ -101,7 +110,12 @@ async fn create_goal_wires_owned_by() {
         .fetch_all()
         .await
         .expect("query");
-    let pid: String = rows.rows().first().expect("OWNED_BY edge").get("pid").expect("pid");
+    let pid: String = rows
+        .rows()
+        .first()
+        .expect("OWNED_BY edge")
+        .get("pid")
+        .expect("pid");
     assert_eq!(pid, "agent-1");
 }
 
@@ -208,14 +222,17 @@ async fn assert_fact_creates_then_invalidate_closes_btic() {
     .expect("invalidate_fact");
 
     let rows2 = session
-        .query_with(
-            "MATCH (f:Fact {fact_id: $fid}) RETURN btic_is_unbounded(f.valid_at) AS open",
-        )
+        .query_with("MATCH (f:Fact {fact_id: $fid}) RETURN btic_is_unbounded(f.valid_at) AS open")
         .param("fid", fact_id)
         .fetch_all()
         .await
         .expect("query");
-    let still_open: bool = rows2.rows().first().expect("fact row").get("open").expect("open");
+    let still_open: bool = rows2
+        .rows()
+        .first()
+        .expect("fact row")
+        .get("open")
+        .expect("open");
     assert!(!still_open, "BTIC must be closed after invalidate_fact");
 }
 
@@ -255,7 +272,12 @@ async fn add_observation_anchors_to_message() {
         .fetch_all()
         .await
         .expect("query");
-    let mid: String = rows.rows().first().expect("OBSERVED_IN edge").get("mid").expect("mid");
+    let mid: String = rows
+        .rows()
+        .first()
+        .expect("OBSERVED_IN edge")
+        .get("mid")
+        .expect("mid");
     assert_eq!(mid, "msg-1");
 }
 
@@ -336,7 +358,12 @@ async fn close_inactive_sessions_stamps_ended_at() {
         .fetch_all()
         .await
         .expect("query");
-    let is_closed: bool = rows.rows().first().expect("session").get("closed").expect("closed");
+    let is_closed: bool = rows
+        .rows()
+        .first()
+        .expect("session")
+        .get("closed")
+        .expect("closed");
     assert!(is_closed, "ended_at must be set after auto-close");
 }
 
@@ -374,7 +401,9 @@ async fn generate_session_summary_creates_node_and_edge() {
     if skip_embedding(&res) {
         return;
     }
-    let summary = res.expect("generate_session_summary").expect("summary produced");
+    let summary = res
+        .expect("generate_session_summary")
+        .expect("summary produced");
 
     let session = kb.db().session();
     let rows = session
@@ -425,7 +454,11 @@ async fn agent_facade_delegates_create_goal() {
         .await
         .expect("query");
     assert_eq!(
-        rows.rows().first().expect("goal").get::<String>("gid").expect("gid"),
+        rows.rows()
+            .first()
+            .expect("goal")
+            .get::<String>("gid")
+            .expect("gid"),
         "goal-facade"
     );
 }
