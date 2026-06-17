@@ -157,9 +157,9 @@ single canonical one — and `deduplicate_raw` collapses the remainder by canoni
 keeping the highest-confidence extraction and accumulating a mention count.
 
 !!! note "Feature gating"
-    On builds without the `onnx` feature, the NLP cascade is unavailable and extraction
-    falls back to rules only (plus code AST if `code-parse` is enabled). The pipeline
-    degrades gracefully rather than failing.
+    Extraction is feature-gated. Without `onnx`, rule-based plus code-AST extraction runs
+    offline; with `onnx`, the ML cascade adds higher accuracy on top. Both paths produce a
+    fully ingested subgraph.
 
 ### The NLP cascade
 
@@ -307,21 +307,21 @@ distinguish stored content from queries. For batch work, `embed_batch_chunked` i
 large set of texts in fixed-size sub-batches (default 64) to keep each ONNX forward pass
 within the runtime's memory arena while preserving order.
 
-!!! warning "Auto-embed vs. computed-embed prefixes"
-    For auto-embed nodes (Message, Chunk, Summary) uni-db applies the query prefix
-    automatically inside `similar_to()` at search time. `embed_query` is only needed when
-    you are searching against *computed-embedding* nodes (such as Entities) yourself.
+!!! note "Auto-embed vs. computed-embed prefixes"
+    Auto-embed nodes (Message, Chunk, Summary) get the query prefix applied automatically
+    inside `similar_to()` at search time. Use `embed_query` when you search computed-embedding
+    nodes (such as Entities) directly.
 
 ---
 
 ## See also
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Domain Model](../concepts/data-model.md)
 The node and edge types this pipeline writes: Message, Chunk, Entity, Observation.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Architecture](../concepts/architecture.md)
 How uniko-extract (Layer 3) sits over uniko-store and uni-db.
 </div>

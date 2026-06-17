@@ -1,27 +1,72 @@
 # Installation
 
-uniko is an embedded, Rust-native cognitive memory system. There is no
-server to deploy and no daemon to run — you add a crate to your `Cargo.toml`,
-open a [`KnowledgeBase`](../concepts/architecture.md), and the whole memory
-system lives in your process. Storage, vector and hybrid search, NLP
-extraction, and the recall cascade all run in-process, backed by the embedded
-[uni-db](https://github.com/rustic-ai/uni-db) graph database and the
-uni-xervo model runtime.
+**There is nothing to deploy.** uniko is a Rust library: you add two crates to `Cargo.toml`, open
+a [`KnowledgeBase`](../concepts/architecture.md), and the entire memory system — storage, vector
+and hybrid search, local NLP extraction, and the recall cascade — runs inside your process, backed
+by the embedded [uni-db](https://github.com/rustic-ai/uni-db) engine and the uni-xervo model
+runtime. No server, no daemon, no external vector store.
 
-This page covers how to depend on the uniko crates, the Cargo feature flags
-that matter, the models that load at runtime, and the system prerequisites
-they imply.
+This page gives you the standard install first, then the advanced knobs — feature flags, model
+selection, and GPU acceleration — that you reach for only when you need them.
 
-!!! note "Rust library, layered crates"
-    uniko ships as a small set of layered crates in a Cargo workspace. You
-    pick the layer you need — most applications depend on `uniko-api` (the
-    public facade) or one of the product crates directly.
+## Add the dependency
+
+uniko lives in a Cargo workspace and is not yet published to crates.io. Add the crates you need as
+path or git dependencies. The workspace uses `edition = "2024"`, so your consuming crate needs a
+stable toolchain that supports it.
+
+=== "Path dependency"
+
+    ```toml
+    # Cargo.toml
+    [dependencies]
+    uniko-api = { path = "../uniko/crates/uniko-api" }
+    # ...or depend on a specific layer directly:
+    uniko-memory = { path = "../uniko/crates/uniko-memory" }
+    uniko-store  = { path = "../uniko/crates/uniko-store" }
+    ```
+
+=== "Git dependency"
+
+    ```toml
+    # Cargo.toml
+    [dependencies]
+    uniko-api = { git = "https://github.com/rustic-ai/uniko" }
+    ```
+
+## Open a KnowledgeBase
+
+Opening a knowledge base is the entry point. Everything else hangs off the `KnowledgeBase` handle:
+
+```rust
+use uniko_store::{KnowledgeBase, config::UnikoConfig};
+
+# async fn demo() -> uniko_store::Result<()> {
+// Persistent KB on disk. Registers the schema (idempotent) and
+// eagerly warms the embedding / NLP models.
+let kb = KnowledgeBase::open("./memory.db", UnikoConfig::default()).await?;
+
+// Or an ephemeral in-memory KB, e.g. for tests:
+let kb = KnowledgeBase::in_memory(UnikoConfig::default()).await?;
+# Ok(())
+# }
+```
+
+!!! tip "Runs fully offline by default"
+    Out of the box — BGE-small embeddings, the INT8 NLP cascade, the MiniLM reranker, and **no**
+    `llm` feature — uniko runs entirely on CPU with zero external API calls. That makes it a fit
+    for edge agents, air-gapped deployments, and privacy-sensitive workloads with no extra
+    configuration. Summary generation stays extractive and offline unless you opt into the `llm`
+    feature for LLM-rewritten summaries.
+
+That is the whole standard install. The sections below are for when you want to understand the
+crate layering, accelerate on a GPU, or swap models.
 
 ## The crates
 
-uniko is organized as a strict layer stack. Each crate depends only on the
-ones below it, and the graph database (`uni-db`) is sealed behind the bottom
-layer so higher crates never touch it directly.
+uniko is organized as a strict layer stack. Each crate depends only on the ones below it, and the
+graph database (`uni-db`) is sealed behind the bottom layer so higher crates never touch it
+directly.
 
 | Crate | Layer | Responsibility |
 |-------|-------|----------------|
@@ -48,63 +93,20 @@ flowchart TB
 ```
 
 !!! tip "Which crate do I add?"
-    If you just want to record and recall memories, depend on `uniko-api` (or
-    `uniko-memory`). If you only need the typed graph store, vector search, and
-    Locy runtime, `uniko-store` alone is enough.
-
-## Adding the dependency
-
-uniko lives in a Cargo workspace and is not yet published to crates.io. Add
-the crates you need either as path or git dependencies. The workspace uses
-`edition = "2024"`, so your consuming crate needs a toolchain that supports it.
-
-=== "Path dependency"
-
-    ```toml
-    # Cargo.toml
-    [dependencies]
-    uniko-api = { path = "../uniko/crates/uniko-api" }
-    # ...or depend on a specific layer directly:
-    uniko-memory = { path = "../uniko/crates/uniko-memory" }
-    uniko-store  = { path = "../uniko/crates/uniko-store" }
-    ```
-
-=== "Git dependency"
-
-    ```toml
-    # Cargo.toml
-    [dependencies]
-    uniko-api = { git = "https://github.com/rustic-ai/uniko" }
-    ```
-
-Opening a knowledge base is the entry point. Everything else hangs off the
-`KnowledgeBase` handle:
-
-```rust
-use uniko_store::{KnowledgeBase, config::UnikoConfig};
-
-# async fn demo() -> uniko_store::Result<()> {
-// Persistent KB on disk. Registers the schema (idempotent) and
-// eagerly warms the embedding / NLP models.
-let kb = KnowledgeBase::open("./memory.db", UnikoConfig::default()).await?;
-
-// Or an ephemeral in-memory KB, e.g. for tests:
-let kb = KnowledgeBase::in_memory(UnikoConfig::default()).await?;
-# Ok(())
-# }
-```
+    If you just want to record and recall memories, depend on `uniko-api` (or `uniko-memory`). If
+    you only need the typed graph store, vector search, and Locy runtime, `uniko-store` alone is
+    enough.
 
 !!! note "Sharing one model runtime across knowledge bases"
-    If you open many knowledge bases in one process, you don't want each one
-    to load its own ONNX sessions. Build a shared runtime once with
-    `KnowledgeBase::build_shared_runtime` and hand it to each
-    `KnowledgeBase::open_with_runtime` call so the model weights and
-    activation arenas stay resident exactly once.
+    If you open many knowledge bases in one process, you don't want each one to load its own ONNX
+    sessions. Build a shared runtime once with `KnowledgeBase::build_shared_runtime` and hand it to
+    each `KnowledgeBase::open_with_runtime` call so the model weights and activation arenas stay
+    resident exactly once.
 
-## Cargo feature flags
+## Advanced: Cargo feature flags
 
-The defaults are tuned for a CPU-only build. The flags below let you turn on
-optional content-processing paths and hardware acceleration.
+The defaults are tuned for a CPU-only build. The flags below turn on optional content-processing
+paths and hardware acceleration.
 
 ### `uniko-extract`
 
@@ -134,18 +136,16 @@ uniko-extract = { path = "../uniko/crates/uniko-extract", features = ["onnx"] }
 | `batch-record` | off | Diagnostic-only: captures bulk-write batches in a process-global buffer so benchmarks can replay them. Never enable in production. |
 
 !!! warning "GPU features are build-time"
-    `gpu-cuda` and `gpu-metal` are passthrough features that flip the
-    corresponding uni-db features. They require the matching toolchain present
-    when you compile (CUDA toolkit for `gpu-cuda`). Without them, inference
-    runs on CPU via ONNX Runtime.
+    `gpu-cuda` and `gpu-metal` are passthrough features that flip the corresponding uni-db
+    features. They require the matching toolchain present when you compile (CUDA toolkit for
+    `gpu-cuda`). Without them, inference runs on CPU via ONNX Runtime.
 
-## Models used at runtime
+## Advanced: models used at runtime
 
-uniko registers three model *aliases* in the uni-xervo catalog when a
-knowledge base opens. Each resolves to a model that uni-xervo loads and runs
-in-process. With the default configuration the catalog warms models lazily on
-first use; `open` eagerly pre-warms them so the first query doesn't pay
-cold-start latency.
+uniko registers three model *aliases* in the uni-xervo catalog when a knowledge base opens. Each
+resolves to a model that uni-xervo loads and runs in-process. With the default configuration the
+catalog warms models lazily on first use; `open` eagerly pre-warms them so the first query doesn't
+pay cold-start latency.
 
 | Alias | Task | Default model | Notes |
 |-------|------|---------------|-------|
@@ -154,74 +154,62 @@ cold-start latency.
 | `rerank/default` | Rerank | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder reranker, **enabled by default**. 22M params; re-scores the top RRF candidates during recall. |
 
 !!! note "Where these defaults live"
-    These values come from `UnikoConfig`'s defaults:
-    `EmbeddingConfig::bge_small_en_v15()` (384-dim), the `NlpConfig` defaults
-    (`kniv-deberta-nlp-base-en-xsmall` + `onnx/cascade-int8.onnx`), and
-    `RerankerConfig::default()` (MS-MARCO MiniLM-L-6-v2, enabled). Every one is
-    overridable on `UnikoConfig` before you call `open`.
+    These values come from `UnikoConfig`'s defaults: `EmbeddingConfig::bge_small_en_v15()`
+    (384-dim), the `NlpConfig` defaults (`kniv-deberta-nlp-base-en-xsmall` +
+    `onnx/cascade-int8.onnx`), and `RerankerConfig::default()` (MS-MARCO MiniLM-L-6-v2, enabled).
+    Every one is overridable on `UnikoConfig` before you call `open`.
 
 ### Embedding
 
-Embeddings power vector search across every semantically indexed node —
-Message, Chunk, Observation, Summary, Entity, Fact, and more. The default
-embedder is **BGE-small-en-v1.5** at 384 dimensions. Other presets ship in
-`EmbeddingConfig` (e.g. `bge_large_en_v15()` at 1024-dim, `minilm_l6_v2()` at
-384-dim) and are selectable by short name via `EmbeddingConfig::preset(...)`.
+Embeddings power vector search across every semantically indexed node — Message, Chunk,
+Observation, Summary, Entity, Fact, and more. The default embedder is **BGE-small-en-v1.5** at 384
+dimensions. Other presets ship in `EmbeddingConfig` (e.g. `bge_large_en_v15()` at 1024-dim,
+`minilm_l6_v2()` at 384-dim) and are selectable by short name via `EmbeddingConfig::preset(...)`.
 
 !!! warning "Index dimension is fixed at open"
-    The vector indexes are created for the embedder's dimension. If you switch
-    to an embedder with a different dimension (e.g. BGE-large at 1024-dim),
-    open a fresh knowledge base — you cannot mix dimensions in one index.
+    The vector indexes are created for the embedder's dimension. If you switch to an embedder with
+    a different dimension (e.g. BGE-large at 1024-dim), open a fresh knowledge base — you cannot
+    mix dimensions in one index.
 
 ### NLP
 
-NER and observation extraction route through the `nlp/default` alias: a
-multi-task **kniv-deberta** cascade running through uni-xervo's `local/onnx`
-provider. The default artifact is INT8-quantized (`onnx/cascade-int8.onnx`)
-for CPU-feasible inference. SRL (semantic role labelling) is gated by
-`UnikoConfig.nlp_srl_enabled`; the remaining tasks (POS, NER, DEP, CLS) always
-run. If the runtime or alias is unavailable, extraction falls back to a
-rule-based path rather than failing.
+NER and observation extraction route through the `nlp/default` alias: a multi-task **kniv-deberta**
+cascade running through uni-xervo's `local/onnx` provider. The default artifact is INT8-quantized
+(`onnx/cascade-int8.onnx`) for CPU-feasible inference. SRL (semantic role labelling) is gated by
+`UnikoConfig.nlp_srl_enabled`; the remaining tasks (POS, NER, DEP, CLS) always run. Extraction
+adapts gracefully: if the runtime or alias is unavailable, a rule-based path keeps extraction
+working end-to-end instead of failing.
 
 ### Reranker
 
-The cross-encoder reranker (`rerank/default`) is enabled by default and
-re-scores the top recall candidates. It is the cheapest BERT-family option in
-the box (MS-MARCO MiniLM-L-6-v2, 22M params); disable it by constructing
-`RerankerConfig { enabled: false, ..Default::default() }`.
+The cross-encoder reranker (`rerank/default`) is enabled by default and re-scores the top recall
+candidates. It is the cheapest BERT-family option in the box (MS-MARCO MiniLM-L-6-v2, 22M params);
+disable it by constructing `RerankerConfig { enabled: false, ..Default::default() }`.
 
 ## System prerequisites
 
-uniko's runtime dependencies are pulled in as crates and built with your
-application — there is nothing to install separately for the default CPU
-build.
+uniko's runtime dependencies are pulled in as crates and built with your application — there is
+nothing to install separately for the default CPU build.
 
-- **ONNX Runtime** — the local inference path (embeddings, NLP, reranker)
-  uses `ort` (ONNX Runtime bindings) through uni-xervo. The default `ort`
-  configuration downloads/links a prebuilt runtime at build time.
-- **Model downloads** — the default embedding, NLP, and reranker models are
-  pulled from their model repositories on first use (and pre-warmed on
-  `open`). Expect a one-time download on a fresh machine, plus disk for the
-  cached weights. Use `KnowledgeBase::open_with_xervo_no_prefetch` for
+- **ONNX Runtime** — the local inference path (embeddings, NLP, reranker) uses `ort` (ONNX Runtime
+  bindings) through uni-xervo. The default `ort` configuration downloads/links a prebuilt runtime
+  at build time.
+- **Model downloads** — the default embedding, NLP, and reranker models are pulled from their model
+  repositories on first use (and pre-warmed on `open`). A fresh machine downloads the default
+  models once, then caches the weights. Use `KnowledgeBase::open_with_xervo_no_prefetch` for
   read-only tooling that never embeds or generates, to skip the warm-up cost.
-- **GPU toolchains** (optional) — only required when building with `gpu-cuda`
-  (CUDA toolkit) or `gpu-metal` (macOS / CoreML).
-
-!!! tip "Offline-friendly defaults"
-    With the default configuration — BGE-small embeddings, the INT8 NLP
-    cascade, the MiniLM reranker, and **no** `llm` feature — everything runs
-    locally on CPU with no external API calls. Summary generation stays
-    extractive and offline unless you opt into the `llm` feature.
+- **GPU toolchains** (optional) — only required when building with `gpu-cuda` (CUDA toolkit) or
+  `gpu-metal` (macOS / CoreML).
 
 ## Next steps
 
-<div class="feature-grid">
-<div class="feature-card">
-### [Architecture](../concepts/architecture.md)
-How the layered crates and the sealed uni-db boundary fit together.
-</div>
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Quickstart](quickstart.md)
 Open a `KnowledgeBase` and record your first memory.
+</div>
+<div class="feature-card" markdown>
+### [Architecture](../concepts/architecture.md)
+How the layered crates and the sealed uni-db boundary fit together.
 </div>
 </div>

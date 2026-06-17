@@ -6,11 +6,10 @@ separate document store, vector store, or relational table sitting beside it —
 "what happened in this session?", it answers by traversing edges, not by joining across
 systems.
 
-This page is the conceptual map: the node types, the edges that connect them, and the
-design rule that makes the whole thing hang together. It is deliberately *representative*,
-not exhaustive — the complete catalogue of every property and index lives in
-[Reference > Schema](../reference/schema.md). The names here are the real ones, registered
-by `uniko-store` when a [KnowledgeBase](../reference/api.md) is opened.
+This page walks the node types, the edges that connect them, and the design rule that holds
+the whole thing together. The names here are the real ones, registered by `uniko-store` when a
+[KnowledgeBase](../reference/api.md) opens; the complete property-and-index catalogue lives in
+[Reference > Schema](../reference/schema.md).
 
 ## The shape of the graph
 
@@ -96,12 +95,14 @@ true on March 15?" is answered by an interval-containment check rather than jugg
 `valid_from`/`valid_until` columns. See [Facts & Drift](../concepts/facts-and-drift.md) for
 how BTIC drives bitemporal recall.
 
-!!! warning "MENTIONS and DERIVED_FROM are multi-source by design"
-    Several edge types connect *many* source labels to a target. `MENTIONS` runs from
-    `Message`, `Chunk`, `Action`, `Artifact`, **and** `Episode` to `Entity`. `DERIVED_FROM`
-    runs from `Fact`, `Procedure`, and `Artifact` to `Episode`, `Action`, or another
-    `Artifact`. When you write a Cypher pattern, match on the endpoint node, not just the
-    edge type, or you may reach a node of a label you did not expect.
+!!! note "Multi-source edges are a feature: one relationship, many sources"
+    Several edge types deliberately connect *many* source labels to a target, so a single
+    relationship type works everywhere it makes sense. `MENTIONS` runs from `Message`,
+    `Chunk`, `Action`, `Artifact`, **and** `Episode` to `Entity` — one edge for "references a
+    named thing," wherever that reference appears. `DERIVED_FROM` runs from `Fact`,
+    `Procedure`, and `Artifact` to `Episode`, `Action`, or another `Artifact`. When you write
+    a Cypher pattern, match on the endpoint node, not just the edge type, so you land on
+    exactly the label you intend.
 
 ## A representative slice
 
@@ -207,20 +208,20 @@ it always reflects the latest state of the graph rather than a cached snapshot.
 
 ## Where to go next
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Schema Reference](../reference/schema.md)
 The complete catalogue: every node, every edge, every property and index.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Facts & Drift](../concepts/facts-and-drift.md)
 How `valid_at` and BTIC intervals drive bitemporal recall.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Architecture](../concepts/architecture.md)
 How the pipeline turns messages into the graph above.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Knowledge Base](../reference/api.md)
 The handle that opens the graph and registers this schema.
 </div>

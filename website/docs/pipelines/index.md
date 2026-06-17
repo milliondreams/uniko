@@ -1,16 +1,13 @@
 # Pipelines Overview
 
-uniko turns a stream of raw conversation into compiled, queryable knowledge.
-That transformation does not happen in one pass — it happens across a set of
-pipelines, each with a different cost profile and a different sense of urgency.
+uniko keeps your agent responsive while its knowledge compounds in the background. Writing a
+`Message` returns in milliseconds; the expensive intelligent work — deriving Facts, promoting
+Procedures, naming Topics — runs on its own cadence and never blocks the turn the agent is in the
+middle of. Every pipeline runs in-process: there is no separate service to deploy and no queue to
+operate.
 
-The design tension is simple. Writing a `Message` into memory has to be **fast**
-and **durable**: the agent is in the middle of a turn and cannot wait. But the
-expensive, intelligent work — deriving Facts from Observations, promoting
-Procedures from repeated Episodes, naming Topics — is **slow** and **batchy**,
-and it must never block the hot path or destabilise it when it fails.
-
-uniko resolves this by splitting the work into three movements:
+uniko splits that work into three movements, each with a different cost profile and a different
+sense of urgency:
 
 1. **Atomic ingest** — synchronous, single-transaction storage of a `Message`,
    its entities, and its structural edges. Returns in milliseconds.
@@ -85,12 +82,14 @@ worker reacting to a trigger.
 
 The ingest call returns after **P2** completes. **P3** and **P7a** are spawned as
 independent tasks — observation extraction and embedding finish in the
-background and notify the consolidation worker that new Observations exist.
+background and notify the consolidation worker that new Observations exist. That split is
+what keeps your agent responsive: the caller gets a fast, durable write-confirmation while
+the expensive extraction work compounds knowledge off the hot path.
 
 !!! tip "Compile once, query forever"
-    Consolidation "compiles" raw Messages and Observations into Facts and
-    Procedures. The recall cascade queries that *compiled* knowledge first, so
-    the LLM-extraction cost is paid once at write time, not on every read.
+    Consolidation compiles raw Messages and Observations into Facts and Procedures once. The
+    recall cascade queries that compiled knowledge first, so extraction is paid once at write
+    time and amortized across every read — never re-derived per query.
 
 ## Atomic ingest
 
@@ -129,8 +128,8 @@ whichever comes first. A `ForceConsolidate` task triggers a cycle immediately.
 
 A consolidation cycle (P4) derives `Fact`s from unprocessed `Observation`s,
 reinforces or invalidates existing Facts, detects drift, and records a
-`ConsolidationCycle` audit node. After a *successful* cycle, the worker may run
-the **cortex sweep**, gated by two independent throttles:
+`ConsolidationCycle` audit node. After a *successful* cycle, the worker runs
+the **cortex sweep** when both gates allow, governed by two independent throttles:
 
 - a per-agent cycle counter (`cortex_cycle_every_n_consolidations`, default 4), and
 - a per-sweep wall-clock minimum (`cortex_min_interval_secs`, default 600s).
@@ -139,11 +138,10 @@ When both gates allow, the sweep runs P5 procedure promotion (per agent), P6
 topic detection (global), F50 memory decay (prune age-decayed `Episode`s), and
 session maintenance (auto-close inactive `Session`s and summarise them).
 
-!!! warning "Cortex failures are logged and dropped"
-    Procedure promotion, topic detection, decay, and session maintenance all run
-    *after* consolidation has already succeeded. If any of them errors, the error
-    is logged and discarded — consolidation stays healthy regardless. Background
-    reasoning must never destabilise the write path.
+!!! tip "Background reasoning is isolated"
+    Procedure promotion, topic detection, decay, and session maintenance run *after*
+    consolidation succeeds. A failure in any of them is logged and isolated — it never breaks
+    consolidation or the write path. Background reasoning is enrichment, not a critical path.
 
 → Read more in **[Consolidation](consolidation.md)**.
 
@@ -169,15 +167,11 @@ that still answers the query. It runs a coverage-gated cascade:
     Raw content and graph traversal: `Chunk` and `Message` search plus
     entity-link traversal. Phase 3 **always completes** — there is no early exit.
 
-!!! note "Execution reality at cold start"
-    At cold start — no Facts, no Procedures, no Topics — every query naturally
-    cascades to Phase 3, because the compiled tiers are empty. The
-    `phase1_only_pct` signal begins near zero and rises only as consolidation
-    accumulates Facts. The cascade is wired end-to-end across the three phases,
-    but Phase 1 and Phase 2 only *contribute* once consolidation has produced the
-    compiled nodes they read. This is expected behaviour, not a gap: the system
-    progressively shifts from raw-content retrieval toward compiled-knowledge
-    retrieval as it learns.
+!!! tip "Recall sharpens as you ingest"
+    Until consolidation has produced Facts, Procedures, and Topics, queries route through
+    Phase 3 over raw content. As you ingest, the system shifts toward compiled-knowledge
+    retrieval: `phase1_only_pct` rises and recall gets cheaper and sharper the more the
+    knowledge base learns. This learned-index effect is structural and intentional.
 
 The coverage score blends facet coverage, mean result score, and tier diversity:
 
@@ -239,16 +233,16 @@ println!("llm circuit: {:?}", health.llm_circuit);
 
 ## Dive deeper
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Ingest](ingest.md)
 Atomic single-transaction storage — P1 store, P2 NER, spawned P3/P7a, step error policies, and the IngestWorker.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Consolidation](consolidation.md)
 Threshold-or-timer cycles that compile Observations into Facts, plus the gated cortex sweep: procedures, topics, decay, sessions.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Recall](recall.md)
 The coverage-gated three-phase cascade — Compact, Expand, Broaden — with drift override and the phase1_only scaling signal.
 </div>

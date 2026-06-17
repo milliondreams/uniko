@@ -148,11 +148,10 @@ flowchart LR
     C1["Cluster 1 — 1 vote"] -.outvoted.-> W
 ```
 
-!!! note "Graceful degradation"
-    If clustering is disabled, or the batch embedding call fails, each
-    normalized string becomes its own singleton cluster — reproducing exact
-    string-match mode/recency behaviour. Facts whose embedding can't be
-    computed are still stored, just without a vector.
+!!! tip "Embedding-optional"
+    If clustering is disabled or a batch embedding call is unavailable, consolidation falls
+    back to exact string-match mode/recency voting. Facts are always written, with or without
+    a vector — ingest never fails on embedding latency.
 
 ---
 
@@ -246,12 +245,12 @@ stateDiagram-v2
     node. A bitemporal query as of an earlier date still sees the old Fact as
     true. This is how uniko answers "what did we believe before the update?"
 
-### Lifecycle history
+### Why contradiction detection lives in consolidation
 
-Earlier in uniko's build, contradiction detection was a deferred concern: the
-extraction-side `contradiction.rs` returned an empty vector because low
-embedding similarity does not imply contradiction. The grounded comparison the
-team used:
+A real contradiction needs *same subject, same predicate slot, different object* —
+which is exactly why uniko detects it in consolidation, where the structured
+triple is available, rather than in raw embedding-similarity space. Embedding
+similarity alone can't tell the three cases apart:
 
 | Pair | Similarity | Relationship |
 |---|---|---|
@@ -259,10 +258,10 @@ team used:
 | "Caroline works at hospital" vs. "Caroline works night shifts" | Moderate | Compatible (not a contradiction) |
 | "Caroline works at hospital" vs. "Caroline works at law firm" | Moderate-high | Real contradiction (same predicate slot, different value) |
 
-The lesson — that a real contradiction needs *same subject, same predicate slot,
-different object* — is exactly why contradiction detection lives in
-consolidation, where the structured triple is available, rather than in
-embedding-similarity space.
+Low similarity doesn't imply contradiction, and moderate similarity can mean
+either compatibility or conflict. The triple resolves the ambiguity — so
+contradiction detection works on the consolidated `(subject, predicate, object)`
+structure, not on vector distance.
 
 ---
 
@@ -294,12 +293,12 @@ expansion, so it doesn't answer from a belief that's actively churning.
 
 ---
 
-## Decay: confidence fades with disuse
+## Decay: confidence tracks what's actually used
 
-Drift handles knowledge that *changed*. Decay handles knowledge that *stopped
-being used*. The formal **Rules** that drive reasoning carry a `confidence`
-score, and confidence decays exponentially with every consolidation cycle a Rule
-fails to match:
+Drift handles knowledge that *changed*. Decay handles knowledge that *stopped earning its
+keep*. The formal **Rules** that drive reasoning carry a `confidence` score that decays
+exponentially each consolidation cycle a Rule doesn't match, so rules your agent never uses
+fade out on their own:
 
 ```text
 confidence' = confidence * 0.95^missed_cycles
@@ -360,12 +359,12 @@ what happened in the last cycle?"
 
 ## Related
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Architecture](architecture.md)
 How consolidation fits the `KnowledgeBase` and the memory layers.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Data Model](data-model.md)
 Full node and edge definitions for Observation, Fact, Entity, and Rule.
 </div>

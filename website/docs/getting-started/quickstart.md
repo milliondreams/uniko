@@ -1,10 +1,14 @@
 # Quick Start
 
-This page takes you from an empty database to an answered question in one Rust
-program. The flow is the same one the benchmark harness exercises:
+In one Rust program you will take an empty database to an answered question: ingest a three-turn
+conversation, then ask *"What pet does Alice have?"* and get the answer back from compiled
+knowledge. The recall path never calls an LLM — the only model call here is the one you make to
+phrase the final answer. This is the same flow the benchmark harness runs.
 
-1. Open (or create) a [`KnowledgeBase`](../concepts/architecture.md) — the single
-   handle to the graph.
+The path is three moves:
+
+1. Open (or create) a [`KnowledgeBase`](../concepts/architecture.md) — the single handle to the
+   graph.
 2. Start a `PipelineSystem` and submit a few `Message`s — a tiny conversation.
 3. Run `answer_query` to recall the relevant context and synthesize an answer.
 
@@ -29,6 +33,13 @@ flowchart LR
     KB -->|ContextBundle| G[generator closure]
     G --> A[GeneratedAnswer]
 ```
+
+## What success looks like
+
+When you run this, the worker extracts entities and observations off the hot path while your code
+stays responsive. The query prints a one-line answer — *"Alice has a rescue greyhound named
+Biscuit"* — and the count of recalled items that grounded it. Every item traces back to the message
+that produced it.
 
 ## A complete example
 
@@ -139,8 +150,10 @@ async fn main() -> anyhow::Result<()> {
 let kb = Arc::new(KnowledgeBase::in_memory(UnikoConfig::default()).await?);
 ```
 
-`KnowledgeBase::in_memory` registers the full schema and warms the model runtime,
-then hands back a handle. For a durable store, swap in
+Opening the knowledge base warms the models so the first query is fast: `KnowledgeBase::in_memory`
+registers the full schema (idempotently) and warms the model runtime up front, so the first
+recall doesn't stall on cold-start model loading. It then hands back a handle. For a durable
+store, swap in
 `KnowledgeBase::open(path, config)` — same signature, same return type, backed by a
 file. The handle is `Clone` (it is an `Arc` internally), so you share one instance
 between the pipeline and your query code by cloning it. The outer `Arc` in the
@@ -160,10 +173,11 @@ let pipeline = PipelineSystem::new(PipelineConfig::default(), kb.clone(), vec![]
 pipeline.submit_ingest(IngestTask::Message(/* ... */))?;
 ```
 
-`PipelineSystem::new` spawns the ingest and consolidation workers and returns
-immediately — the workers begin their loops at once. `submit_ingest` is
-**non-blocking**: it pushes onto a bounded channel and returns `Err` if the channel
-is full (backpressure) or the system is shutting down. The unit you submit is an
+The pipeline keeps your agent responsive under load: `PipelineSystem::new` spawns
+the ingest and consolidation workers and returns immediately — the workers begin their loops
+at once. `submit_ingest` is **non-blocking**: it pushes onto a bounded channel and returns
+`Err` if the channel is full (backpressure) or the system is shutting down, so your request
+path never waits on extraction. The unit you submit is an
 `IngestTask` — here `IngestTask::Message(IngestMessage { .. })`.
 
 A few things to notice about `IngestMessage`:
@@ -233,18 +247,18 @@ finish cleanly.
 
 ## Where to go next
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Concepts](../concepts/architecture.md)
 The layered architecture, the node types (Message, Observation, Fact, Entity,
 Episode, ...), and how memory is organized.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Pipelines](../pipelines/index.md)
 Custom ingest step chains, artifact and PDF ingestion, consolidation, and the
 health/backpressure model.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Recall](../pipelines/recall.md)
 The phased recall cascade, `RecallConfig` tuning, and the `ContextBundle` your
 generator receives.

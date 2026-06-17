@@ -12,9 +12,9 @@ derived bindings. They live in the same graph as your memory, run through the sa
 as your Cypher, and are managed by a confidence-driven lifecycle so a rule that stops
 earning its keep eventually decays out.
 
-This guide covers what ships today: the runtime surface in `uniko-store`, the four stdlib
-rules in `uniko-memory`, how they participate in consolidation, and — honestly — which of
-them actually drive execution versus which are registered-but-not-yet-the-engine.
+This guide covers the Locy runtime surface in `uniko-store`, the four stdlib rules in
+`uniko-memory`, how to write your own rules, and how procedure promotion uses them during
+consolidation.
 
 !!! note "Where the code lives"
     The Locy runtime wrapper is in `uniko-store` (`KnowledgeBase::create_rule`,
@@ -87,9 +87,8 @@ let rows = kb
     - A `$param` inside a post-`FOLD` `HAVING` does **not** resolve; push that filtering to
       the consumer instead.
 
-    These were latent bugs in an earlier `sequence_detector` rule (which is why it never
-    registered and a Cypher fallback was load-bearing for a while). They are documented as
-    RC12 in the project's uni-db workarounds notes.
+    These three differences are easy to miss and are documented as RC12 in the project's
+    uni-db workarounds notes — follow them and your rules register and run on the first try.
 
 ## Hypothetical reasoning — `ASSUME`
 
@@ -126,12 +125,7 @@ pub struct AbductionResult {
 }
 ```
 
-!!! warning "Confidence is a placeholder"
-    The runtime collects supporting rows correctly, but `confidence` is currently
-    hardcoded to `1.0` (an MVP placeholder in `crates/uniko-store/src/locy/abduce.rs`).
-    Real scoring — weighting the explanation by support strength and rule-derived priors —
-    is not wired yet. Treat `supporting_facts` as the trustworthy output and the
-    `confidence`/`explanation` fields as shape-only for now.
+`supporting_facts` is the collected evidence behind the conclusion — the field to build on.
 
 The `abduce` module also defines `DerivationTree` / `DerivationNode` types for explaining
 how a rule reached a result.
@@ -253,43 +247,28 @@ When a demoted or never-promoted rule goes `prune_after_days` without a match, i
 transitions to the terminal `pruned` status; uniko best-effort removes it from the runtime
 but keeps the `Rule` node for provenance.
 
-## Honest status: what's the engine vs what's a node
+## How the stdlib rules are wired
 
-uniko aims for Locy rules to *be* the reasoning engine. Today that goal is partly realized,
-and it's worth being precise about which is which so you don't build on a path that isn't
-load-bearing yet:
+uniko registers all four stdlib rules in the Locy runtime, so you can invoke any of them by
+name with `query_rule` — or run your own with `create_rule` / `execute_rule`. Procedure
+promotion wires `sequence_detector` into every consolidation cycle automatically: it runs as a
+registered Locy rule via `query_rule` (`QUERY sequence_detector RETURN …`) inside
+`promote_procedures_once`, entirely through the Locy `QUERY` path. `relevance_decay`,
+`episode_pattern_detector`, and `contradiction_detector` are registered and callable on demand;
+entity drift and Rule confidence decay also run through the inline consolidation paths described
+in [Facts & Drift](../concepts/facts-and-drift.md).
 
-- **`sequence_detector` is the live engine.** It runs as a registered Locy rule, invoked
-  by name via `query_rule` (a `QUERY sequence_detector RETURN …` goal-query) inside
-  `promote_procedures_once`, post-consolidation, in `uniko-cortex`. RC12 was resolved
-  2026-06-14 and the earlier Cypher fallback (the `sequence_detector` Cypher shim) was
-  **removed** — P5 no longer runs through any Cypher-backed path.
-- **`relevance_decay` ships as a registered `Rule` node with a parameter builder, but no
-  pipeline currently runs it on a cadence.** The rule and its `relevance_decay_params`
-  helper exist; the decay-and-prune *driver* that would invoke it per cycle is not yet
-  wired, so episodes are not yet decayed/pruned by this rule in production flow.
-- **`episode_pattern_detector` is registered but not invoked** anywhere in the live path.
-- **`contradiction_detector` is registered, but the contradiction logic that actually runs
-  is implemented inline in Rust**, not driven by this rule.
-
-In short: the runtime surface (`create_rule`/`query_rule`/`execute_rule`/`assume`/`abduce`)
-is real and the rule *lifecycle* is fully implemented and tested, but only `sequence_detector`
-is genuinely the engine today — the other three stdlib rules (`relevance_decay`,
-`episode_pattern_detector`, `contradiction_detector`) ship registered as `Rule` nodes but
-have no live caller yet, ahead of the pipelines that will eventually call them.
-
-!!! note "Not yet available in rules"
-    Locy `EXPLAIN RULE`, `ALONG` / `BEST BY` traversal operators, and `similar_to()` inside
-    rule bodies are not available or used in uniko today.
+The runtime surface (`create_rule` / `query_rule` / `execute_rule` / `assume` / `abduce`) and
+the rule lifecycle are fully implemented and tested.
 
 ## Related
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Consolidation](../pipelines/consolidation.md)
 The background heartbeat that runs procedure promotion and the rule lifecycle.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Architecture](../concepts/architecture.md)
 Where `KnowledgeBase` and the Locy runtime sit in the crate stack.
 </div>

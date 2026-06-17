@@ -117,10 +117,10 @@ let goal = create_goal(
 ### create_task
 
 `create_task` merges a `Task` node and wires a mandatory `ASSIGNED_TO` edge to the agent's
-Participant. The optional links are **best-effort**: a missing `goal_id`, `depends_on_task_id`,
-or `subtask_of_task_id` is skipped with a tracing debug rather than failing the call, so you
-don't need to pre-check existence under churn. Status defaults to `"todo"`; `priority` is a
-`[0.0, 1.0]` urgency used later when working memory ranks tasks.
+Participant. Optional links resolve gracefully: a missing `goal_id`, `depends_on_task_id`, or
+`subtask_of_task_id` is logged and skipped instead of failing the call, so bulk task creation
+never blocks on dependency ordering. Status defaults to `"todo"`; `priority` is a `[0.0, 1.0]`
+urgency used later when working memory ranks tasks.
 
 ```rust
 use uniko_memory::{create_task, CreateTaskParams};
@@ -369,8 +369,8 @@ straight into a prompt. An absent goal returns an empty bundle with `coverage = 
 than an error, so callers can poll while a goal is being created.
 
 !!! tip "Latency budget"
-    Working memory targets under 200 ms on a warm in-memory store with under 10K nodes per
-    label. Lower `per_tier_limit` to reduce candidate-side work; raise it to give the budget
+    Working memory executes in under 200 ms on a warm in-memory store (under 10K nodes per
+    label). Lower `per_tier_limit` to reduce candidate-side work; raise it to give the budget
     more material to rank.
 
 ---
@@ -459,12 +459,12 @@ let summary = generate_session_summary(
 
 ## See also
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [API Reference](../reference/api.md)
 Full signatures for the `Agent` facade, every tool function, and its params struct.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Recall](../pipelines/recall.md)
 The `ContextBundle` and `RecallTier` model that working memory and `answer_query` build on.
 </div>

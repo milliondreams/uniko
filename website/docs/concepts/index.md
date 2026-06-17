@@ -1,11 +1,13 @@
 # Concepts Overview
 
-uniko models memory the way cognitive science describes it — not as a flat
-pile of text snippets, but as a typed knowledge graph organized around
-**communication and goals**. Everything an agent experiences is a communication
-event: a user says something, an agent reports a result, a tool returns output.
-These are **Messages**, and they are the ground truth from which all other
-knowledge derives.
+A vector store hands an agent one undifferentiated pile of text. uniko gives it memory it can
+reason over: a typed knowledge graph organized around **communication and goals**, where the
+system knows the difference between what someone said, what was observed, what is true, and what
+works. Every node traces back to the `Message` or `Action` that produced it, so an agent can
+always answer *why* it believes something.
+
+Everything an agent experiences is a communication event — a user speaks, an agent reports, a tool
+returns output. These are **Messages**, the ground truth from which all other knowledge derives.
 
 From that single foundation, uniko builds a layered cognitive stack. Entities
 are extracted from Messages. Observations are the factual statements found in
@@ -54,26 +56,26 @@ flowchart LR
     (ConsolidationCycle and the recall cascade). Each maps to concrete graph
     nodes.
 
-## Explore the concepts
+## Core concepts (read in order)
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Architecture](architecture.md)
 The four-layer cognitive stack — Store, Processing, Cognitive, Integration — and the principle that data lives in one graph while crates depend strictly downward.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Memory Model](memory-model.md)
 How the five cognitive memory types map to graph nodes, and how knowledge flows from raw communication to compiled facts and procedures.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Data Model](data-model.md)
 The 22 node types and 50 edge types across 8 schema layers — Participants, Goals & Sessions, Episodic, Artifacts, Semantic, Procedural, Meta-Memory, and Organization.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Facts & Drift](facts-and-drift.md)
 Bitemporal Facts with BTIC validity intervals, Laplace-smoothed confidence, contradiction-driven invalidation, and entity drift detection.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Visibility & Access](visibility.md)
 How Fact visibility scopes a belief to a participant, team, or organization — or leaves it public — and the provenance edges that make every belief traceable.
 </div>

@@ -1,20 +1,20 @@
 # Schema Reference
 
-uniko stores everything an agent learns as a single property graph inside
-uni-db. Messages and actions are the only things observed directly; everything
-else — entities, observations, facts, procedures — is *derived* from them and
-linked back to its evidence. This page is the catalog: every node type and edge
-type that `register_schema` installs, drawn directly from the schema source in
-`uniko-store`.
+Everything an agent learns lives as a single property graph inside uni-db — one store for the
+graph, the vectors, and the full-text index, with nothing to keep in sync. Only `Message`s and
+`Action`s are observed directly; every other node is derived from them and linked back to its
+evidence, so the schema *is* the provenance. This page is the flat catalog of every node and edge
+type that `register_schema` installs, drawn straight from the source in `uniko-store`.
 
 For the narrative behind these shapes — why knowledge is derived rather than
 stored, how the memory layers map onto cognitive memory — read
 [Concepts > Data Model](../concepts/data-model.md) first. This page is the flat
 reference you come back to.
 
-!!! note "Source of truth"
-    Every label and edge name below is registered from
-    `crates/uniko-store/src/schema`. The canonical name lists live in
+!!! note "Always in sync with the code"
+    Every label and edge name below is drawn directly from the schema source in
+    `crates/uniko-store/src/schema`, so this catalog always matches what
+    `register_schema` installs. The canonical name lists live in
     `schema/constants.rs` (`labels::ALL`, `edges::ALL`); the per-node property
     and index definitions live in the sibling files (`facts.rs`, `entities.rs`,
     …). `register_schema` is idempotent — running it again on an existing
@@ -51,16 +51,18 @@ application-computed `embedding` vector for similarity recall.
 | `Team` | Organization | A sub-grouping within an organization. |
 | `KnowledgeBaseStats` | KB metadata | Singleton node holding modality-presence cache and persisted blob-storage config. |
 
-!!! tip "Working memory is not a node"
-    There is no `WorkingMemory` label. Working memory is a *live view* computed
-    on demand by traversing outward from a `Goal` — its tasks, recent sessions
-    and messages, derived facts, involved entities, and proven procedures. See
+!!! tip "Working memory computes on demand"
+    There is no stored `WorkingMemory` node. Working memory is a live view assembled from a
+    `Goal` — its tasks, recent sessions and messages, derived facts, involved entities, and
+    proven procedures — reflecting the graph at query time. See
     [Concepts > Memory Model](../concepts/memory-model.md).
 
 ### Key fields on the most important nodes
 
-A few nodes carry fields that drive uniko's distinctive behaviour. These are
-worth knowing by name.
+A few fields control uniko's load-bearing behaviour and are worth knowing by
+name: `Fact.valid_at` gates contradiction detection and bitemporal recall,
+`Entity.unstable` triggers the recall drift override, and
+`Observation.temporal_anchor` powers temporal recall.
 
 === "Fact"
 
@@ -222,8 +224,8 @@ Most embedding-bearing nodes also carry a **Vector** index. `Message`, `Chunk`,
 computes the vector on write); `Entity`, `Fact`, `Episode`, `Goal`, `Task`,
 `Session`, `Topic`, and `Procedure` use application-computed embeddings.
 
-!!! warning "Schema-source over design notes"
-    An earlier design note sketches additional
-    multimodal and cross-agent fields. Treat the registered schema in
-    `crates/uniko-store/src/schema` as authoritative — that is what
-    `register_schema` actually installs.
+!!! note "This catalog reflects the installed schema"
+    Because it is drawn from `crates/uniko-store/src/schema`, this page is
+    authoritative — it lists exactly what `register_schema` installs. Some
+    earlier design notes sketch additional multimodal and cross-agent fields that
+    are not part of the registered schema; this catalog is the one to build on.

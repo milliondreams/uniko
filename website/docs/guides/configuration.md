@@ -1,14 +1,11 @@
 # Configuration
 
-uniko runs entirely in-process, so every model, threshold, and pipeline
-knob is a plain Rust value you set before the [`KnowledgeBase`](../concepts/architecture.md)
-opens. There is no config server and no external daemon — the whole
-runtime is described by one struct, `UnikoConfig`, which lives in
-`uniko-store`.
-
-The pattern is always the same: start from `UnikoConfig::default()`,
-override the fields you care about, then call `validate()` to catch
-constraint violations before they reach the database.
+Configuration is a Rust value, not a config server. Because uniko runs
+entirely in-process, every model, threshold, and pipeline cadence is a field
+on one struct — `UnikoConfig`, in `uniko-store` — that you set before the
+[`KnowledgeBase`](../concepts/architecture.md) opens. Start from
+`UnikoConfig::default()`, override what you care about, and call `validate()`
+to catch constraint violations before they reach the database.
 
 ```rust
 use uniko_store::config::{UnikoConfig, EmbeddingConfig};
@@ -196,9 +193,8 @@ more accurate, CPU-feasible). Both construct with `enabled: false`; the
 `Default` impl flips MiniLM on.
 
 !!! tip
-    MiniLM is roughly 12× faster than BGE-reranker-base, so default-on
-    rerank is cheap relative to the rest of recall. To turn it off
-    entirely:
+    MiniLM is 12× faster than BGE-reranker-base, so default-on rerank is
+    cheap relative to the rest of recall. To turn it off entirely:
 
     ```rust
     config.reranker = RerankerConfig { enabled: false, ..Default::default() };
@@ -355,7 +351,7 @@ offline build stays lean. Enable them per crate.
 | `uniko-extract`  | `code-parse`  | **on**  | tree-sitter AST chunking for Python, Rust, JavaScript, TypeScript. |
 | `uniko-extract`  | `onnx`        | off     | ONNX runtime (`ort` + `tokenizers` + `ndarray`) for the embedder / NLP cascade adapter. |
 | `uniko-memory`   | `onnx`        | off     | Pass-through that enables `uniko-extract/onnx`. |
-| `uniko-memory`   | `llm`         | off     | Enable the abstractive (LLM-rewritten) path for F59 Summaries. When absent, summary generation stays deterministic / extractive and offline. |
+| `uniko-memory`   | `llm`         | off     | Adds an LLM-rewritten abstractive path for F59 Summaries. By default, summaries are deterministic, extractive, and fully offline. |
 | `uniko-cortex`   | `llm`         | off     | Backs `uniko-memory/llm`. |
 
 !!! tip

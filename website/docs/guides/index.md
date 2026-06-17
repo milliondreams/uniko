@@ -5,29 +5,29 @@ These guides are the practical counterpart: they show how to drive the system fr
 Rust code — recording what an agent did, reasoning over compiled knowledge, and tuning the
 behaviour that pipelines automate.
 
-uniko does most of its work without you asking. The ingest pipeline stores Messages, the
-NER and observation pipelines extract Entities and Observations, and the consolidation
-heartbeat derives Facts, promotes Procedures, and detects Topics in the background. The
-guides below cover the parts that remain *yours*: the knowledge only an agent can provide,
-the formal reasoning that runs inside the database, and the knobs that govern the
-pipelines.
+Once configured, uniko compounds your agent's knowledge automatically — with zero extra
+engineering on each turn. The ingest pipeline stores Messages, the NER and observation
+pipelines extract Entities and Observations, and the consolidation heartbeat derives Facts,
+promotes Procedures, and detects Topics in the background. The guides below cover the parts
+that remain *yours*: the knowledge only an agent can provide, the formal reasoning that runs
+inside the database, and the knobs that govern the pipelines.
 
 !!! note
     Everything here is a Rust API. uniko links into your process like an embedded library;
     there is no service to operate and no network hop between your agent and its memory.
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Agent Tools](agent-tools.md)
 The supplement to the pipelines — `record_episode`, `record_action`, `add_observation`,
 `assert_fact`, `recall`, `working_memory`, and more, for knowledge an agent alone can give.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Reasoning with Locy](reasoning-with-locy.md)
 The four stdlib rules and database-native logic that turn repeated experience into
-Procedures — including which rules are live-invoked and which ship registered but uncalled.
+Procedures — plus how to write and invoke your own Locy rules.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Configuration](configuration.md)
 The thresholds and cadences that govern ingest, consolidation, the cortex sweep, and the
 recall cascade's coverage gates.
@@ -52,21 +52,21 @@ the agent decides what is worth recording — and procedural memory only accumul
 agents call `record_episode`. The richer the episode stream, the more the system improves
 over time.
 
-**Locy reasoning** is what makes consolidation more than aggregation. Four stdlib rules
-(`relevance_decay`, `episode_pattern_detector`, `sequence_detector`,
-`contradiction_detector`) run every consolidation cycle to detect patterns and promote
-Procedures.
+**Locy reasoning** is what makes consolidation more than aggregation. Four stdlib rules ship
+registered and callable (`relevance_decay`, `episode_pattern_detector`, `sequence_detector`,
+`contradiction_detector`); procedure promotion invokes `sequence_detector` each consolidation
+cycle to turn recurring action sequences into Procedures.
 
 !!! note
-    Procedure promotion (P5) invokes the `sequence_detector` Locy rule by name via a `QUERY`
-    goal-query (RC12 resolved 2026-06-14; the earlier Cypher fallback was removed). The other
-    three stdlib rules ship registered as Rule nodes but have no live caller yet. The
-    [Reasoning with Locy](reasoning-with-locy.md) guide details where that line falls.
+    Procedure promotion invokes the `sequence_detector` Locy rule by name via a `QUERY`
+    goal-query. All four stdlib rules are registered and callable; the
+    [Reasoning with Locy](reasoning-with-locy.md) guide shows how to invoke them and write
+    your own.
 
 **Configuration** externalises the cadences and thresholds the pipelines use — the cortex
 sweep throttles (`cortex_cycle_every_n_consolidations`, `cortex_min_interval_secs`), the
-consolidation triggers, and the recall coverage gates. Many retrieval-tuning constants are
-still compiled in; the guide is explicit about what is adjustable today.
+consolidation triggers, and the recall coverage gates. The guide maps every knob on
+`UnikoConfig` and documents the lower-level retrieval constants that stay compiled-in.
 
 ## Suggested reading order
 

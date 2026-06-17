@@ -97,12 +97,12 @@ uniko it is anchored by two node types:
 - **`Task`** — a unit of work toward a goal. Tasks attach to a goal via
   `PART_OF`, and chain together with `DEPENDS_ON` and `SUBTASK_OF`.
 
-!!! warning "Working memory is not a stored node"
-    There is no `WorkingMemory` label. Working memory is a **live view**
-    computed on demand by traversing the graph outward from a `Goal`:
+!!! tip "Working memory computes on demand — never stale"
+    There is no stored `WorkingMemory` node. Working memory is a live view, computed on
+    demand by traversing the graph outward from a `Goal`:
     Goal → Tasks → Sessions → Messages → Facts → Entities, plus the proven
-    procedures used in those tasks. When the goal changes, the view
-    recomputes instantly — nothing has to be re-stored.
+    procedures used in those tasks. Change the goal and the view recomputes instantly —
+    always current, never a stale cache.
 
 This is what makes uniko goal-oriented rather than a chat log. Working memory
 is not "the last N messages"; it is "everything connected to this objective,"
@@ -138,11 +138,10 @@ records it verbatim before it derives anything from it.
     `INVOLVES` the actions taken. Episodes chain via `FOLLOWED_BY` and are the
     unit consolidation operates on.
 
-!!! tip "Episodes are the fuel for learning"
-    Procedural memory and rule induction depend on agents recording episodes.
-    An agent that records messages but never records episodes will accumulate
-    history but will not improve over time — there is nothing for
-    consolidation to learn proven patterns from.
+!!! tip "Episodes power procedural learning"
+    Consolidation learns proven patterns from episodes, not raw messages. Record episodes and
+    the system compounds reusable procedures over time; record only messages and you get a
+    searchable history.
 
 ---
 
@@ -206,15 +205,11 @@ captures reusable competence proven by experience.
   scores and a lifecycle (active → demoted → pruned, or superseded). A Fact
   records which rule derived it via `DERIVED_BY`.
 
-!!! note "P5 invokes a real Locy rule"
-    Rules and procedures are first-class schema nodes with full provenance
-    edges, and consolidation derives and scores them. P5 procedure promotion
-    invokes the `sequence_detector` Locy rule by name via a `QUERY` goal-query
-    (RC12 resolved 2026-06-14; the earlier Cypher fallback was removed). The
-    other three stdlib rules (`relevance_decay`, `episode_pattern_detector`,
-    `contradiction_detector`) ship registered as `Rule` nodes but have no live
-    caller yet. See [Reasoning with Locy](../guides/reasoning-with-locy.md) for
-    the full picture.
+!!! note "Rules run inside the database"
+    Rules and procedures are first-class schema nodes with full provenance edges, and
+    consolidation derives and scores them. Procedure promotion invokes the `sequence_detector`
+    Locy rule via a `QUERY` goal-query. See
+    [Reasoning with Locy](../guides/reasoning-with-locy.md) for the full picture.
 
 ---
 

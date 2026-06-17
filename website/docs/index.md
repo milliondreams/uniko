@@ -1,101 +1,106 @@
+<div class="hero" markdown>
+
 # uniko
 
-## Cognitive memory for AI agents
+## The embedded memory layer for AI agents
 
-uniko is an embedded, Rust-native cognitive memory system. It links into your agent
-process like SQLite does — no Neo4j, no Qdrant, no PostgreSQL, no separate vector store to
-keep consistent. Messages go in; compiled knowledge comes out, with full provenance. And
-because knowledge is compiled at write-time by a local ONNX model cascade, there is **no LLM
-in the recall hot path**: queries hit pre-derived Entities, Observations, and Facts instead
-of re-deriving them on every call.
+uniko links into your agent's process like SQLite, costs **$0 to ingest**, and **reasons over
+what it stores**. Messages go in; compiled knowledge comes out — with full provenance and no
+LLM in the recall path. No Neo4j, no Qdrant, no Postgres to run.
 
-<div class="quick-links" markdown>
-<a href="getting-started/installation/" class="quick-link">Install</a>
-<a href="getting-started/quickstart/" class="quick-link">Quick Start</a>
-<a href="concepts/architecture/" class="quick-link">Concepts</a>
-<a href="benchmarks/" class="quick-link">Benchmarks</a>
-<a href="https://github.com/rustic-ai/uniko" class="quick-link">GitHub</a>
+<div class="proof-chips">
+<span class="chip"><b>$0</b> ingest cost</span>
+<span class="chip"><b>4.04s</b> mean Q&A · fastest measured</span>
+<span class="chip"><b>33–76×</b> faster ingest</span>
+<span class="chip">In-process, like SQLite</span>
+<span class="chip">Reasoning in the database</span>
+</div>
+
+<div class="cta-row" markdown>
+[Get started](getting-started/installation.md){ .cta-primary }
+[See the benchmarks](benchmarks/index.md){ .cta-secondary }
+</div>
+
 </div>
 
 ---
 
-## The agent memory gap
+## Agent memory has become an integration project
 
-AI agents are stateless. They can pull text snippets out of a vector store, but they cannot
-track who said what across sessions, notice when a fact changes, learn reusable procedures
-from repeated experience, or explain why they believe something.
+Your agent needs to remember who said what, notice when a fact changes, reuse what worked, and
+explain why it believes something. The standard answer is a stack: a vector store for recall, a
+graph database when flat text runs out, a rules layer for inference, and glue to keep them
+consistent.
 
-Existing memory systems each solve a piece. Mem0 gives you hybrid vector retrieval but no
-graph and no temporal reasoning. Graphiti (Zep) gives you a temporal knowledge graph but
-needs Neo4j and calls an LLM on every ingested turn. Letta leans on agent-managed memory
-blocks with no structured extraction. None of them give you the complete cognitive stack,
-and all of them require external infrastructure to operate.
-
-uniko takes a different shape: memory is a typed knowledge graph organized around
-communication. **Messages between Participants are the atomic unit, and everything else
-derives from them with full provenance** — *who said what → what was observed → what was
-learned → what works*.
+Every piece is a service to run, a consistency boundary to defend, and another LLM call on the
+write path — and you pay for that derivation again on every query. uniko removes all of it.
 
 ---
 
-## The core insight
+## Compile knowledge once. Query it forever.
 
-The trick is *when* the work happens. Raw messages are like source code; consolidation
-"compiles" them into reusable knowledge. The recall cascade then queries the compiled
-knowledge, not the raw messages — the **compile once, query forever** principle.
-
-Concretely, extraction runs a local ONNX model cascade (kniv-deberta, INT8-quantized,
-"xsmall" tier) — a single encoder pass producing POS, NER, SRL, DEP, and CLS labels. No LLM
-is called per message. That makes ingest cost predictable, offline-capable, and fast, while
-recall stays cheap because the expensive derivation already happened at write time.
+Raw messages are source code; uniko compiles them into reusable knowledge at write time. A local
+ONNX NLP cascade extracts entities and observations with **zero LLM API calls**, then one atomic
+transaction commits everything with full provenance. Recall queries the compiled knowledge — it
+never re-derives it, so **there is no LLM in the recall hot path**.
 
 ```mermaid
 flowchart LR
-  M[Messages] --> E[Entities]
+  M[Messages] -->|local ONNX cascade · $0| E[Entities]
   M --> O[Observations]
   E --> F[Facts]
   O --> F
   F --> P[Procedures]
-  P --> A[Reasoned answers]
-  O --> A
+  M --> T[Topics]
+  F --> A[Recall · no LLM in path]
+  P --> A
 ```
 
-The pipeline is interaction-first. Entities are extracted from Messages. Observations are
-statements found in Messages. Facts are consolidated from clusters of Observations.
-Procedures are promoted from repeated Episodes. The provenance chain is always intact, so an
-answer can be traced back to the Message that grounds it.
-
-!!! note "Where reasoning runs today"
-    uniko's design target is database-native rule execution via Locy. P5 invokes the
-    `sequence_detector` Locy rule by name via a QUERY goal-query (RC12 resolved 2026-06-14;
-    the earlier Cypher fallback was removed). The other three stdlib rules (`relevance_decay`,
-    `episode_pattern_detector`, `contradiction_detector`) ship registered as Rule nodes but
-    have no live caller yet. See [Reasoning with Locy](guides/reasoning-with-locy.md) for the
-    full picture. The cognitive structure — Episodes becoming Procedures — is real and
-    benchmarked.
+!!! note "One model, five kinds of memory"
+    Entities, Facts, Procedures, Topics, and Episodes all derive from Messages — the atomic
+    unit. The provenance chain stays intact, so any answer traces back to the message that
+    grounds it.
 
 ---
 
-## Headline benchmarks
+## What you get from one in-process engine
 
-Measured on the full LoCoMo benchmark (10 conversations, 1,986 questions) and against the
-KTH `dmas-memory` testbed. Numbers are quoted exactly from the source benchmark reports.
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
+### Zero infrastructure
+One embedded database — graph, vector, full-text, and logic in a single engine — links into your
+process like SQLite. Nothing to deploy, secure, back up, or keep in sync.
+</div>
+<div class="feature-card" markdown>
+### $0 ingest
+Extraction runs a local INT8 ONNX cascade on commodity hardware. Ingest costs zero LLM tokens per
+message and runs offline. Cost is predictable because it never touches a metered API.
+</div>
+<div class="feature-card" markdown>
+### Reasoning inside the database
+Locy logic rules execute in the database, not in an LLM at query time. Four stdlib rules ship
+registered and callable, and you can author your own with recursion, path accumulation, and
+semantic matching.
+</div>
+<div class="feature-card" markdown>
+### Provenance and time are the schema
+Facts carry bitemporal validity with contradiction detection and entity-drift handling. When a
+later message overturns an earlier one, the old fact is invalidated and the history is preserved,
+not overwritten.
+</div>
+</div>
 
-=== "Recall quality (LoCoMo)"
+---
 
-    | Metric | uniko |
-    |---|---|
-    | LLM-judge (gemini-3.1) | **81.2%** |
-    | Retrieval hit | 85.6% |
-    | F1 | 0.321 |
-    | Total LLM cost (1,986 q, incl. judging) | **$3.55** |
+## The numbers behind the claims
 
-    For comparison, published competitor judge scores: Mem0 91.6%, Zep/Graphiti 75–84%,
-    Letta 74.0%, LangMem 58.1%. uniko uses Mem0's verbatim judge prompt for comparability.
+Measured on the full LoCoMo10 benchmark (1,986 questions) and the KTH dmas-memory comparison.
+Each result maps to a line item you care about: cost, latency, and operations.
 
-=== "Ingest throughput / cost"
+=== "Ingest cost → $0"
 
-    Full 5,882-turn LoCoMo corpus:
+    Ingest the full 5,882-turn corpus in **7.5 minutes** with **no API cost** — ~76 ms/turn, zero
+    LLM calls.
 
     | System | Total $ | Tokens | Wall (min) |
     |---|---|---|---|
@@ -104,13 +109,13 @@ KTH `dmas-memory` testbed. Numbers are quoted exactly from the source benchmark 
     | mem0 | $4.82 | 51.7M | 250.95 |
     | graphiti | $5.49 | 34.6M | 568.97 |
 
-    uniko ingests the full corpus in 7.5 minutes at $0 API cost — **33–76× faster** than the
-    graph backends (Graphiti, Cognee) at the per-turn level, with zero LLM calls during
-    ingest.
+    Against the graph backends, uniko is **33–76× faster** at the per-turn level and avoids
+    $1.32–$5.49 of ingest cost per corpus.
 
-=== "Query latency"
+=== "Query latency → 4.04s"
 
-    Per-question wall-time over 1,540 non-adversarial questions:
+    Answer questions in **4.04s** mean wall time — the **fastest of all six systems measured** —
+    using 2,468 total tokens per query.
 
     | System | Avg wall | Total tokens/q |
     |---|---|---|
@@ -119,20 +124,34 @@ KTH `dmas-memory` testbed. Numbers are quoted exactly from the source benchmark 
     | cognee | 6.99s | 4,780 |
     | full_context | 9.51s | 45,708 |
 
-    uniko has the fastest Q&A wall time of all six systems measured, and uses roughly half
-    the LLM tokens per query of either graph backend.
+    uniko returns answers faster than every system in the set and uses half the per-query tokens
+    of either graph backend.
 
-!!! tip "What this means"
-    uniko's decisive ground is **ingest throughput, ingest cost, end-to-end query latency,
-    and per-query token efficiency vs graph systems** — all while running fully in-process
-    on consumer hardware (a 22-core CPU + an 8 GB consumer GPU runs the entire suite).
+=== "Recall quality → 81.2%"
+
+    **81.2%** LLM-judge accuracy on all 1,986 questions, 85.6% retrieval hit, F1 0.321, at **$3.55**
+    total LLM cost — scored with Mem0's verbatim judge prompt for comparability.
+
+    | Metric | uniko |
+    |---|---|
+    | LLM-judge (gemini-3.1) | **81.2%** |
+    | Retrieval hit | **85.6%** |
+    | F1 | **0.321** |
+    | Total LLM cost (1,986 q, incl. judge) | **$3.55** |
+
+    Published competitor judge scores: Mem0 91.6%, Graphiti 75–84%, Letta 74.0%, LangMem 58.1%.
+
+!!! tip "What this means for you"
+    Ingest a full corpus for $0, answer in 4 seconds, and run the entire suite in-process on a
+    22-core CPU and an 8 GB consumer GPU. uniko wins on ingest throughput, ingest cost, query
+    latency, and per-query token efficiency.
 
 ---
 
-## See it in action
+## Three calls: open, ingest, recall
 
-A `KnowledgeBase` is the single in-process handle over uni-db. You open one, ingest
-`IngestMessage`s atomically, then `recall` a `ContextBundle` for a query.
+A `KnowledgeBase` is one in-process handle. Open it, ingest messages atomically, recall a context
+bundle. No services, no network, no separate vector index to reconcile.
 
 ```rust
 use uniko_store::KnowledgeBase;
@@ -175,27 +194,34 @@ for item in &bundle.items {
 ```
 
 !!! note "Recall is a cascade, not a single lookup"
-    `recall` runs a three-phase cascade: Phase 1 over compiled Facts / Topics / Procedures,
-    Phase 2 hybrid vector + BM25 over Episodes / Observations / Messages fused with
-    Reciprocal-Rank Fusion, and Phase 3 a full Chunk / Artifact fallback — gated by two
-    coverage thresholds: the Phase-1 exit gate (default `0.75`) and the Phase-2→3 gate
-    (default `0.65`). See [Recall](pipelines/recall.md) for details. Results assemble into a
-    `ContextBundle` under a token budget, filtered by visibility policy.
+    `recall` runs a coverage-gated cascade: compiled Facts / Procedures / Topics first, then
+    hybrid vector + BM25 over Episodes / Observations / Messages, then a raw Chunk / Artifact
+    fallback — assembled under a token budget and filtered by visibility policy. No LLM runs in
+    this path. See [Recall](pipelines/recall.md).
+
+---
+
+## Built for teams shipping agents in their own process
+
+uniko is a Rust library for founders and engineering leads who want cognitive memory without
+standing up infrastructure. It fits when operational footprint, ingest cost, and offline
+capability matter; when conversation and provenance are central to your product; and when you
+want graph-native reasoning compiled at ingest instead of paid for on every query.
 
 ---
 
 ## Next steps
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Getting Started](getting-started/installation.md)
 Add uniko to your Rust project and ingest your first messages.
 </div>
-<div class="feature-card">
-### [Concepts](concepts/architecture.md)
-The cognitive model, the typed graph schema, and the recall cascade.
+<div class="feature-card" markdown>
+### [Why uniko](why-uniko.md)
+The problem with bolt-on memory, and the category uniko defines.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Benchmarks](benchmarks/index.md)
 Full LoCoMo results and the head-to-head cost / latency comparison.
 </div>

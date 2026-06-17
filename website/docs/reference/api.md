@@ -1,8 +1,10 @@
 # API Reference
 
-uniko is a Rust library. There is no separate service to call — you link the crates, open a
-[`KnowledgeBase`](#knowledgebase-lifecycle), drive an ingest pipeline, and read memory back
-through recall. This page catalogs the public surface a downstream consumer actually touches.
+uniko is a Rust library, so its API is the set of crates you link and the functions you call —
+there is no service to wire up. This page catalogs the public surface a downstream consumer
+actually touches: opening a [`KnowledgeBase`](#knowledgebase-lifecycle), driving an ingest pipeline
+through `PipelineSystem`, and reading memory back through `recall` and `answer_query`. Every
+signature is reproduced from the source.
 
 Two crates matter for callers:
 
@@ -54,9 +56,9 @@ uniko schema on creation, and (by default) eagerly warms the embedding / model r
 | `open_with_runtime` | `async fn open_with_runtime(...)` | Open against a shared `ModelRuntime` (multi-KB workflows sharing one ONNX session). |
 
 !!! note
-    `ModelAliasSpec` (the `extra_catalog` element type used by the xervo constructors above)
-    currently comes from `uni_db` and is **not** re-exported through the sealed `uniko-store`
-    surface — it is an exception to the "never reach into uni-db directly" rule.
+    `ModelAliasSpec` (the `extra_catalog` element type for the xervo constructors above) comes
+    from `uni_db` directly — the one type you import past the sealed `uniko-store` surface, for
+    registering extra model aliases.
 
 `generate` runs a completion through the model runtime registered on the KB:
 
@@ -139,8 +141,10 @@ for item in &bundle.items {
 
 !!! warning
     `RecallConfig::viewer` defaults to `ViewerScope::Unrestricted` — recall does **not** filter
-    Fact/Observation visibility unless you set `viewer` to a concrete participant. When you
-    serve a specific user, set it (or post-filter with [`filter_bundle`](#access-control-policy)).
+    Fact/Observation visibility unless you set `viewer` to a concrete participant. Always set a
+    viewer when answering on behalf of a specific user; treat post-filtering with
+    [`filter_bundle`](#access-control-policy) as a fallback for direct lookups, not a substitute
+    for scoping recall itself.
 
 ---
 

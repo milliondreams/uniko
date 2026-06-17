@@ -1,16 +1,18 @@
 # Visibility & Access
 
-A single KnowledgeBase often holds memory belonging to many participants —
-some shared with everyone, some private to one person, some scoped to a team
-or organization. uniko attaches an optional **visibility scope** to the memory
-types that carry sensitive claims, and filters recall results against the
-identity of whoever is asking. Nothing leaves a recall query that the caller
-is not entitled to see.
+Memory you cannot scope is memory you cannot share. A single `KnowledgeBase` often holds claims
+belonging to many participants — some public, some private to one person, some scoped to a team or
+organization. uniko attaches a **visibility scope** to the memory types that carry sensitive
+claims and filters every recall against the identity of whoever is asking, so nothing leaves a
+query that the caller is not entitled to see.
 
-## The problem
+## Why visibility matters
 
-Recall fuses results across the whole graph. A naïve cascade would happily
-return a `Fact` that was only ever meant for one participant. We need a way to:
+Recall fuses results across the whole graph. In a multi-tenant system that is a
+privacy hazard: a naïve cascade would happily return a `Fact` that was only ever
+meant for one participant — leaking Alice's private claim into Bob's results.
+uniko gates every recall query against the asker's identity, so memory can be
+shared safely in one KnowledgeBase. The mechanism has three parts:
 
 1. **Tag** a claim with who may see it, at write time.
 2. **Resolve** the asking participant's group memberships, at read time.
@@ -33,10 +35,9 @@ A `null` or empty value means *public*. Four scope forms are recognised:
 | `"team:{team_id}"`  | Viewers who are members of `team_id`.                        |
 | `"org:{org_id}"`    | Viewers who are members of `org_id` (direct or via a team).  |
 
-!!! warning "Unknown scopes fail closed"
-    A visibility string that matches none of the known prefixes (for example
-    `"secret:42"` or a bare token) admits **no one**. A malformed tag can never
-    accidentally widen access.
+!!! tip "Secure by default: unrecognized scopes deny"
+    Any visibility string that doesn't match a known prefix (`private:`, `team:`, `org:`)
+    admits **no one**. A typo locks a claim down — it can never accidentally widen access.
 
 The single-string check is exposed as `visibility_admits`, re-exported from
 `uniko_api::tools` (originally `uniko_memory::policy`):
@@ -144,10 +145,10 @@ flowchart LR
     K --> R[Filtered bundle to caller]
 ```
 
-!!! note "Only Fact and Observation are scoped"
-    Non-policy node types — Messages, Chunks, Entities, Topics, Summaries,
-    Goals, Tasks, Episodes, and so on — carry no visibility scope and pass
-    through `filter_bundle` unchanged.
+!!! note "Visibility applies to claims"
+    Visibility scopes the two node types that carry person-specific claims — `Fact` and
+    `Observation`. Structural nodes (Messages, Chunks, Entities, Topics, Summaries, Goals,
+    Tasks, Episodes) carry no scope and pass through `filter_bundle` unchanged.
 
 !!! tip "Enforce visibility outside recall"
     `visibility_admits` is public precisely so you can gate direct lookups —

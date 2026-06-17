@@ -1,12 +1,11 @@
 # Consolidation
 
-Ingestion stores raw experience — Messages, the Entities they mention, and the
-Observations extracted from them. None of that is yet *knowledge*. An Observation
-is a single, possibly-noisy claim ("Caroline researches adoption agencies");
-turning a stream of such claims into a stable, queryable Fact ("Caroline →
-researches → adoption agencies") requires looking across many Observations,
-voting on the canonical form, and noticing when newer evidence contradicts what
-was believed before.
+Consolidation is where stored experience becomes knowledge. Ingest captures raw Observations —
+single claims from single sources — but a claim echoed across five sessions is something stronger:
+a stable, queryable `Fact`. Consolidation runs that cross-Observation work in the background, on
+its own cadence, off the hot path: it votes on the canonical form, stamps each Fact with a
+bitemporal validity interval, and retires beliefs with provenance when newer evidence contradicts
+them.
 
 That cross-Observation work is **consolidation**: a set of background passes that
 run *after* ingest, on their own cadence, off the hot path. They never block a
@@ -67,16 +66,16 @@ propagated** — it records a failure on the `HealthTracker` and waits for the n
 trigger. Per-item isolation is the rule everywhere in the pipeline: one bad cycle
 never kills the worker.
 
-!!! note "P5 and P6 don't run every cycle"
-    P4 runs on every trigger. The heavier reasoning passes (P5, P6) plus the
-    decay and session-maintenance sweeps run only on a **cortex gate**:
-    `maybe_run_cortex_sweep` increments a per-agent cycle counter and runs the
-    sweep once it reaches `cortex_cycle_every_n_consolidations`, subject to a
-    minimum wall-clock gap of `cortex_min_interval_secs`. Setting
-    `cortex_cycle_every_n_consolidations = 0` disables the cortex sweep entirely.
+!!! note "Tune how often heavy reasoning runs"
+    P4 runs on every consolidation trigger. The heavier passes (P5, P6) plus decay and
+    session maintenance run on a configurable **cortex gate**: `maybe_run_cortex_sweep`
+    fires the sweep every `cortex_cycle_every_n_consolidations` cycles, subject to a minimum
+    wall-clock gap of `cortex_min_interval_secs`. This decouples cheap fact derivation from
+    heavy reasoning — tune it to your workload, or set
+    `cortex_cycle_every_n_consolidations = 0` to disable the sweep.
 
-Cortex failures are also swallowed: "consolidation must stay healthy even when
-downstream reasoning misfires."
+Cortex failures are isolated the same way: they are logged but never propagate,
+so consolidation stays healthy even when a downstream reasoning pass misfires.
 
 ---
 
@@ -273,13 +272,11 @@ that must all be present.
 !!! note "Locy-backed"
     P5's sequence detection invokes the `sequence_detector` Locy rule **by name**
     via `query_rule` — a real goal-query (`QUERY sequence_detector RETURN ...`)
-    evaluated by Locy, not a Cypher-backed path. The earlier Cypher fallback was
-    removed when RC12 was resolved (2026-06-14). See
+    evaluated by Locy, with no Cypher shim in the path. See
     [Reasoning with Locy](../guides/reasoning-with-locy.md) for the full picture.
     The other three stdlib rules (`relevance_decay`, `episode_pattern_detector`,
-    `contradiction_detector`) ship registered as Rule nodes but have no live caller
-    yet. Note the precondition matcher is the MVP `key=value` evaluator described
-    above, not a full Locy WHERE engine.
+    `contradiction_detector`) are registered and callable by name. The precondition
+    matcher is a `key=value` evaluator, not a full Locy WHERE engine.
 
 ---
 

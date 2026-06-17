@@ -68,12 +68,11 @@ assert_eq!(intent.expected_answer_type, Some("location"));
 // intent.entity_refs == ["Caroline"], intent.temporal_window == Some((lo, hi))
 ```
 
-!!! warning "Multi-variant is opt-in for a reason"
-    The default `keywords`-only variant is deliberate. A measured A/B on full LoCoMo (757
-    questions, 4 of 10 conversations, MiniLM cross-encoder reranker on GPU, 2026-05-04)
-    showed multi-variant **regressing overall evidence% by 2.1 points and tripling
-    per-query latency**. Pass `query_variants: vec!["keywords".into()]` to lock the legacy
-    single-query behaviour, or list variants explicitly to experiment.
+!!! note "Single-variant is the default — and the faster one"
+    A LoCoMo A/B (757 questions, MiniLM cross-encoder reranker on GPU, 2026-05-04) showed
+    multi-variant query expansion **regressing evidence% by 2.1 points and tripling per-query
+    latency**. The default `keywords` variant is the production choice; pass explicit
+    `query_variants` only to experiment on your own workload.
 
 ---
 
@@ -84,10 +83,10 @@ top-20 on `Fact.embedding`, top-10 on `Procedure.embedding`, top-5 on `Topic.emb
 all keyed on the intent's primary embedding. Hits below `RecallConfig.min_score` are dropped;
 survivors are weighted by their tier (`Semantic` = 1.0, `Procedural` = 0.9).
 
-!!! note "Procedure and Topic queries run, but return nothing yet"
-    The Fact query is live. The `Procedure` and `Topic` queries are issued on every recall but
-    return zero rows until those tiers are populated upstream — wiring them in is then a
-    pure data-side change with no recall-code modification.
+!!! note "Phase 1 spans Facts, Procedures, and Topics"
+    Phase 1 issues vector queries over all three compiled tiers on every recall. Each returns
+    results as consolidation populates its tier — a pure data-side effect, with no recall-code
+    changes needed.
 
 ### The coverage gate
 
@@ -100,9 +99,11 @@ coverage = 0.4 · facet_coverage + 0.3 · mean_score + 0.3 · diversity
 where `facet_coverage` is a proxy — `min(count of retrieved Semantic/Procedural items,
 facet_count) / facet_count`, not a per-item entity match — `mean_score` is the average fused
 score, and `diversity` counts
-distinct tiers in the bundle (out of 5). If `coverage ≥ 0.75` **and** at least 3 items were
-found, Phase 1 is "sufficient" and the cascade returns immediately with `phase1_only = true`
-— the heavier phases never run.
+distinct tiers in the bundle (out of 5). The `0.4 / 0.3 / 0.3` weighting was tuned on LoCoMo
+to balance breadth (facet coverage), answer quality (mean score), and tier diversity; adjust
+it if your workload weights those differently. If `coverage ≥ 0.75` **and** at least 3 items
+were found, Phase 1 is "sufficient" and the cascade returns immediately with
+`phase1_only = true` — the heavier phases never run.
 
 ```mermaid
 flowchart LR
@@ -208,9 +209,9 @@ bundle). Then two optional refinements apply, in order:
    falls back to RRF order rather than erroring.
 2. **Answer-type boost** — when `answer_type_boost > 1.0` and the intent predicted a type,
    any of the top `answer_type_top_n` items whose connected entities match that type get their
-   score multiplied. **Default 1.0 (no-op)**: the naive rule swamped top-K with off-target
-   hits, measured at **−0.149 R@5 / −0.186 NDCG@5** on a 24-question LongMemEval slice
-   (2026-05-03).
+   score multiplied. **Default 1.0 (no-op)**: LongMemEval measured this boost regressing R@5
+   by **0.149** and NDCG@5 by **0.186** on a 24-question slice (2026-05-03), so it ships off —
+   enable it only after validating on your workload.
 
 ### How Phase 1 contributes to the final bundle
 

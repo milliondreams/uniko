@@ -1,8 +1,8 @@
 # Architecture
 
-uniko is a cognitive memory system built as a stack of Rust crates over uni-db, an embedded multi-model graph database. The design problem is the same one every agent memory system faces: raw conversation has to become *structured, searchable, reasoned-over* knowledge — without an LLM in the hot path and without a single monolithic blob of code that knows everything at once.
+uniko keeps LLMs out of the write path and never collapses into one monolithic blob of code: ingest is fast and atomic, and reasoning happens later in background workers. It is a cognitive memory system built as a stack of Rust crates over uni-db, an embedded multi-model graph database, that turns raw conversation into *structured, searchable, reasoned-over* knowledge.
 
-uniko solves this by separating two concerns that usually get tangled:
+Two principles, kept deliberately separate, make that possible:
 
 1. **Cognitive altitude** — how much *meaning* a layer understands. The store knows nodes and edges; it does not know what an Observation is. Higher crates add interpretation.
 2. **Latency budget** — what runs *synchronously* on the write path versus what runs *later* in background workers.
@@ -42,7 +42,7 @@ graph TD
 ```
 
 !!! note "Layer numbers are cognitive altitude, not build order"
-    The crate doc comments label `uniko-cortex` as "Layer 5" and `uniko-memory` as "Layer 4", yet `uniko-memory` *depends on* `uniko-cortex`. That is deliberate. Cortex's procedure promotion and topic detection (P5/P6) are **subscribers** to consolidation (P4, the heartbeat), which lives in memory. The consolidation worker drives cortex sweeps after successful cycles, so memory depends on cortex — not the other way around. In the actual build graph, cortex is a *sibling* of extract: both depend only on `uniko-store`.
+    Layer numbers rank *meaning*, not dependency direction. The crate doc comments label `uniko-cortex` as "Layer 5" and `uniko-memory` as "Layer 4", yet `uniko-memory` *depends on* `uniko-cortex` by design: cortex's procedure promotion and topic detection (P5/P6) are **subscribers** to consolidation (P4, the heartbeat), which lives in memory. The consolidation worker drives cortex sweeps after successful cycles, so memory depends on cortex — not the other way around. In the actual build graph, cortex is a *sibling* of extract: both depend only on `uniko-store`.
 
 ### uniko-store — graph storage, search, Locy runtime
 
@@ -50,8 +50,8 @@ The lowest layer. It wraps uni-db to provide typed graph storage, search (vector
 
 The central type is [`KnowledgeBase`](../reference/api.md), the typed handle every higher crate uses. Its modules cover storage (`operations` for writes, `repository` for decoded reads), `search`, `schema`, `locy`, `model` (model-runtime access), `blob_store`, `locks`, and `id` generation.
 
-!!! warning "uni-db is sealed behind this layer"
-    A boundary (issue #2 in the codebase) makes uni-db an *implementation detail*. The product crates — `uniko-{memory,extract,cortex,pipes}` — reach the graph **only** through `uniko-store`'s typed API. A CI grep gate forbids `use uni_db` in their `src/`. The few uni-db value types higher crates legitimately need (`Value`, `Transaction`, `temporal::Btic`, `xervo::{GenerationOptions, Message}`) are re-exported from `uniko-store` so callers write `use uniko_store::Value;`, never `use uni_db::Value;`.
+!!! tip "Clean API boundary"
+    uni-db is an implementation detail. The product crates — `uniko-{memory,extract,cortex,pipes}` — reach the graph through `uniko-store`'s typed API, and a CI grep gate enforces it by forbidding `use uni_db` in their `src/`. The few uni-db value types higher crates need (`Value`, `Transaction`, `temporal::Btic`, `xervo::{GenerationOptions, Message}`) are re-exported from `uniko-store`, so callers write `use uniko_store::Value;`. The payoff: the rest of the system is insulated from database internals.
 
 A second re-export, `ModelRuntime` (from `uni-xervo`), lets multi-KnowledgeBase workflows share one ONNX session via `KnowledgeBase::build_shared_runtime` and `open_with_runtime`.
 
@@ -152,17 +152,17 @@ Once a message lands, slower and accumulation-dependent work happens in backgrou
 
 This split is why uniko can keep ingest cheap while still building compiled knowledge: the agent never blocks on fact derivation, procedure mining, or topic detection.
 
-!!! note "LLM degradation"
-    The LLM is optional at every layer. Both the processing and cognitive layers degrade gracefully — local NER, rule-based observation extraction, and a no-op NL-to-Cypher fallback all keep the system functional offline, at reduced extraction quality.
+!!! tip "Offline-capable by default"
+    The LLM is optional at every layer. Local NER, rule-based observation extraction, and the NL-to-Cypher fallback keep the full system running offline — this is the default path that produces uniko's benchmark numbers. LLM enhancements (triple refinement, topic naming) are optional and asynchronous, never required for ingest.
 
 ## Where to go next
 
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Pipelines](../pipelines/index.md)
 The `Step` trait, circuit breaker, DLQ, and how the ingest and consolidation workers chain steps.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [KnowledgeBase](../reference/api.md)
 The typed handle that seals uni-db behind `uniko-store`.
 </div>

@@ -1,48 +1,50 @@
 # Getting Started
 
-uniko is an embedded, Rust-native cognitive memory system for AI agents. It links into
-your host process like SQLite does — there is no service to run, no network hop, and no
-separate vector store to keep consistent. You feed it `Message`s and it compiles them into
-a typed knowledge graph (`Entity`, `Observation`, `Fact`, `Procedure`, `Topic`) with full
+By the end of this section you will have a working memory layer running inside your own Rust
+process: a `KnowledgeBase` open on disk, a conversation ingested at **$0 in LLM cost**, and a
+question answered from compiled knowledge — with no LLM in the recall path. It takes about fifteen
+minutes, most of which is a one-time model download.
+
+uniko links into your process like SQLite. There is no service to deploy, no vector store to keep
+in sync, no network hop between your agent and its memory. You feed it `Message`s; it compiles them
+into a typed knowledge graph (`Entity`, `Observation`, `Fact`, `Procedure`, `Topic`) with full
 provenance, then answers queries against that compiled knowledge.
 
-This section gets a `KnowledgeBase` open and ingesting in your own Rust project.
-
-<div class="feature-grid">
-<div class="feature-card">
+<div class="feature-grid" markdown>
+<div class="feature-card" markdown>
 ### [Installation](installation.md)
 Add uniko to your Cargo workspace and pull in the uni-db engine it builds on.
 </div>
-<div class="feature-card">
+<div class="feature-card" markdown>
 ### [Quick Start](quickstart.md)
 Open a `KnowledgeBase`, ingest a `Message`, and run your first recall — end to end in Rust.
 </div>
 </div>
 
 !!! note "uniko is a Rust library"
-    You use uniko by depending on its crates and calling its async APIs from Rust. Ingest
-    runs entirely locally — entity and observation extraction goes through an ONNX model
-    cascade, with **zero LLM tokens per message** by default.
+    You use uniko by depending on its crates and calling its async APIs from Rust. Ingest runs
+    entirely locally — entity and observation extraction goes through an ONNX model cascade, with
+    **zero LLM tokens per message** by default.
 
-## Recommended path
+## How to get started (5–15 minutes)
 
-1. **[Install](installation.md)** — add the `uniko-api` facade (and its uni-db path
-   dependency) to your workspace. uniko targets the Rust 2024 edition on the stable
-   toolchain.
-2. **[Quick Start](quickstart.md)** — open a `KnowledgeBase`, ingest a few `Message`s, and
-   issue a recall query to see the compile-once / query-forever flow in action.
-3. **Learn the model** — read the [Concepts](../concepts/architecture.md) to understand how
-   `Message`s become `Observation`s, `Fact`s, and `Procedure`s, and how the recall cascade
-   assembles a `ContextBundle`.
+1. **[Install](installation.md)** — add two crates. Nothing to deploy. uniko targets the Rust 2024
+   edition on the stable toolchain.
+2. **[Quick Start](quickstart.md)** — ingest a few `Message`s and answer a question end to end,
+   seeing the compile-once / query-forever flow in action.
+3. **[Learn the model](../concepts/architecture.md)** — understand how `Message`s become
+   `Observation`s, `Fact`s, and `Procedure`s, and how the recall cascade assembles a
+   `ContextBundle`.
 
-!!! tip "Start small, then scale"
-    A single `KnowledgeBase` is enough to follow the Quick Start. When you later run many
-    KnowledgeBases in one process, they can share one ONNX `ModelRuntime` via
-    `KnowledgeBase::build_shared_runtime` and `open_with_runtime` to keep VRAM use low.
+!!! tip "One runtime, many knowledge bases"
+    A single `KnowledgeBase` is enough to follow the Quick Start. When you scale to many
+    KnowledgeBases in one process, they share a single ONNX `ModelRuntime` via
+    `KnowledgeBase::build_shared_runtime` and `open_with_runtime` — model weights stay resident
+    exactly once, so VRAM use stays flat as you add tenants.
 
 ## Where to go next
 
-- **[Concepts: Architecture](../concepts/architecture.md)** — the layered crate stack and
-  the P1–P7 pipelines that turn messages into knowledge.
-- **[Concepts: Memory Model](../concepts/memory-model.md)** — the five memory types
-  (working, episodic, semantic, procedural, meta) and the graph nodes behind them.
+- **[Concepts: Architecture](../concepts/architecture.md)** — the layered crate stack and the
+  P1–P7 pipelines that turn messages into knowledge.
+- **[Concepts: Memory Model](../concepts/memory-model.md)** — the five memory types (working,
+  episodic, semantic, procedural, meta) and the graph nodes behind them.
