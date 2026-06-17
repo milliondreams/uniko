@@ -302,8 +302,8 @@ async fn record_action_extracts_entities_via_kniv() {
     assert!(
         entities
             .iter()
-            .any(|(n, t)| n.to_lowercase().contains("caroline") && t == "PERSON"),
-        "expected a PERSON entity for 'Caroline'; got {entities:?}"
+            .any(|(n, t)| n.to_lowercase().contains("caroline") && t == "person"),
+        "expected a person entity for 'Caroline'; got {entities:?}"
     );
 }
 
