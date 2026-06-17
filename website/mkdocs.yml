@@ -1,0 +1,68 @@
+site_name: uniko Documentation
+site_description: An embedded, Rust-native cognitive memory system for AI agents — structured memory, zero-LLM ingest, formal reasoning, and explainable recall in one in-process engine
+site_url: https://rustic-ai.github.io/uniko/
+repo_url: https://github.com/rustic-ai/uniko
+repo_name: rustic-ai/uniko
+
+copyright: Copyright &copy; 2024-2026 Dragonscale Industries Inc. - Part of The Rustic Initiative
+
+nav:
+  - Home: index.md
+  - Why uniko: why-uniko.md
+  - Getting Started:
+      - Overview: getting-started/index.md
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - Concepts:
+      - Overview: concepts/index.md
+      - Architecture: concepts/architecture.md
+      - Memory Model: concepts/memory-model.md
+      - Data Model: concepts/data-model.md
+      - Facts & Drift: concepts/facts-and-drift.md
+      - Visibility & Access: concepts/visibility.md
+  - Pipelines:
+      - Overview: pipelines/index.md
+      - Ingest: pipelines/ingest.md
+      - Consolidation: pipelines/consolidation.md
+      - Recall: pipelines/recall.md
+  - Guides:
+      - Overview: guides/index.md
+      - Agent Tools: guides/agent-tools.md
+      - Reasoning with Locy: guides/reasoning-with-locy.md
+      - Configuration: guides/configuration.md
+  - Reference:
+      - API: reference/api.md
+      - Schema: reference/schema.md
+  - Benchmarks: benchmarks/index.md
+
+theme:
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    primary: custom
+  features:
+    - content.tabs.link
+
+extra_css:
+  - assets/stylesheets/theme.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true

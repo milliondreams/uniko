@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "uniko-docs"
+version = "0.1.0"
+description = "Documentation site for uniko — a cognitive memory system for AI agents"
+authors = ["Dragonscale Industries Inc. <dev@dragonscale.ai>"]
+readme = "README.md"
+package-mode = false
+homepage = "https://www.rustic.ai"
+repository = "https://github.com/rustic-ai/uniko"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+zensical = ">=0.0.31"
+pymdown-extensions = "^10.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
