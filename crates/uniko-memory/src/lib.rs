@@ -30,6 +30,7 @@ pub mod action;
 pub mod agent;
 pub mod consolidation;
 pub mod episode;
+pub mod facade;
 pub mod fact;
 pub mod goal;
 pub mod llm_triples;
@@ -52,9 +53,36 @@ pub use agent::Agent;
 #[doc(inline)]
 pub use episode::{RecordEpisodeParams, record_episode};
 #[doc(inline)]
+pub use facade::{Document, LlmSpec, PdfSource, RecallScope, Session, Turn, Uniko, UnikoBuilder};
+#[doc(inline)]
 pub use fact::{AssertFactParams, InvalidateFactParams, assert_fact, invalidate_fact};
 #[doc(inline)]
 pub use goal::{CreateGoalParams, create_goal};
+#[doc(inline)]
+pub use policy::Viewer;
+#[doc(inline)]
+pub use recall::{ContextBundle, RecallConfig, RecallItem, RecallTier, ViewerScope};
+// Method return / field types surfaced so the facade exposes no
+// un-nameable types: `Agent::assert_fact` -> FactUpsert, the `Session`
+// ingest verbs -> *IngestResult.
+#[doc(no_inline)]
+pub use uniko_extract::ingest::{ArtifactIngestResult, AtomicIngestResult, PdfIngestResult};
+#[doc(no_inline)]
+pub use uniko_store::operations::facts::FactUpsert;
+// The canonical error type and node-id alias that pervade every facade
+// method signature, surfaced so callers handle errors / name ids without
+// reaching into `uniko_store`.
+#[doc(no_inline)]
+pub use uniko_store::{NodeId, UnikoError};
+// Logic / query surface: `Agent::query` / `run_rule` / `abduce` return
+// these; `Value` is the graph value type for query params and rows.
+#[doc(no_inline)]
+pub use uniko_store::Value;
+#[doc(no_inline)]
+pub use uniko_store::locy::{
+    AbductionResult, AssumeBuilder, DerivationNode, DerivationTree, Record,
+};
+// Config presets surfaced so end users touch only the facade crate.
 #[doc(inline)]
 pub use observation::{AddObservationParams, add_observation};
 #[doc(inline)]
@@ -68,6 +96,8 @@ pub use query::{
 pub use summary::generate_session_summary;
 #[doc(inline)]
 pub use task::{CreateTaskParams, create_task};
+#[doc(no_inline)]
+pub use uniko_store::config::{EmbeddingConfig, UnikoConfig};
 #[doc(inline)]
 pub use working_memory::{WorkingMemoryParams, working_memory};
 

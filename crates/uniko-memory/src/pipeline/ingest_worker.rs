@@ -1,6 +1,7 @@
 //! Ingest pipeline worker with biased select, semaphore concurrency,
 //! and per-item step chain execution.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Semaphore, mpsc};
@@ -25,6 +26,12 @@ pub(crate) struct IngestWorker {
     dlq: Arc<DeadLetterQueue>,
     health: Arc<Mutex<HealthTracker>>,
     dlq_max_retries: u32,
+    /// Count of submitted-but-not-yet-finished ingest items.
+    ///
+    /// Incremented at submit time and decremented when a spawned item
+    /// finishes; [`PipelineSystem::quiesce`](super::PipelineSystem::quiesce)
+    /// awaits this reaching zero.
+    inflight: Arc<AtomicUsize>,
 }
 
 impl IngestWorker {
@@ -42,6 +49,7 @@ impl IngestWorker {
         dlq: Arc<DeadLetterQueue>,
         health: Arc<Mutex<HealthTracker>>,
         dlq_max_retries: u32,
+        inflight: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             rx,
@@ -53,6 +61,7 @@ impl IngestWorker {
             dlq,
             health,
             dlq_max_retries,
+            inflight,
         }
     }
 
@@ -92,8 +101,13 @@ impl IngestWorker {
         let dlq = self.dlq.clone();
         let health = self.health.clone();
         let dlq_max = self.dlq_max_retries;
+        let inflight = self.inflight.clone();
 
         tokio::spawn(async move {
+            // Decrement the in-flight counter on every exit path (including
+            // the early shutdown return below), so `quiesce` is exact.
+            let _inflight_guard = InflightGuard(inflight);
+
             // Acquire semaphore permit (bounds concurrency).  An `Err`
             // here means the semaphore was closed during shutdown —
             // nothing to do, drop the task.
@@ -123,6 +137,11 @@ impl IngestWorker {
                 breaker,
             );
 
+            // Hand `IngestStep` the typed payload it deserializes. Without
+            // these keys the step has nothing to ingest. PDFs are routed
+            // through `ingest_pdf` directly, so they carry no payload.
+            populate_ingest_metadata(&task, &mut ctx);
+
             metrics::emit_ingest_item();
             let result = run_step_chain(&steps, &mut ctx, &dlq, dlq_max).await;
             let elapsed_ms = start.elapsed().as_millis() as f64;
@@ -139,6 +158,42 @@ impl IngestWorker {
             }
             metrics::emit_ingest_duration(elapsed_ms);
         });
+    }
+}
+
+/// Decrements the in-flight counter when a spawned ingest item finishes.
+///
+/// Held as the first binding in the spawned task so every exit path —
+/// including the early return when the semaphore is closed during
+/// shutdown — releases the count, keeping `quiesce` exact.
+struct InflightGuard(Arc<AtomicUsize>);
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Serialize the task payload into the metadata keys [`IngestStep`] reads.
+///
+/// [`IngestStep`](uniko_extract::ingest::IngestStep) dispatches on
+/// `ingest_type` and deserializes `ingest_payload`; without them the step
+/// has nothing to ingest. PDF tasks are routed through `ingest_pdf`
+/// directly and carry no payload.
+fn populate_ingest_metadata(task: &IngestTask, ctx: &mut PipelineContext) {
+    let (ingest_type, payload) = match task {
+        IngestTask::Message(m) => ("message", serde_json::to_value(m)),
+        IngestTask::Artifact(a) => ("artifact", serde_json::to_value(a)),
+        IngestTask::Pdf(_) => ("pdf", Ok(serde_json::Value::Null)),
+    };
+    ctx.metadata.insert(
+        "ingest_type".to_string(),
+        serde_json::Value::String(ingest_type.to_string()),
+    );
+    if let Ok(payload) = payload
+        && !payload.is_null()
+    {
+        ctx.metadata.insert("ingest_payload".to_string(), payload);
     }
 }
 

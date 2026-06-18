@@ -7,6 +7,7 @@
 pub(crate) mod consolidation_worker;
 pub(crate) mod ingest_worker;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -55,6 +56,8 @@ pub struct PipelineSystem {
     workers: Mutex<Vec<JoinHandle<()>>>,
     ingest_health: Arc<Mutex<HealthTracker>>,
     consolidation_health: Arc<Mutex<HealthTracker>>,
+    /// Submitted-but-unfinished ingest items, awaited by [`Self::quiesce`].
+    ingest_inflight: Arc<AtomicUsize>,
     started_at: Instant,
     config: PipelineConfig,
 }
@@ -84,6 +87,7 @@ impl PipelineSystem {
 
         let ingest_health = Arc::new(Mutex::new(HealthTracker::new()));
         let consolidation_health = Arc::new(Mutex::new(HealthTracker::new()));
+        let ingest_inflight = Arc::new(AtomicUsize::new(0));
 
         // Spawn ingest worker.
         let ingest_worker = IngestWorker::new(
@@ -96,6 +100,7 @@ impl PipelineSystem {
             dlq.clone(),
             ingest_health.clone(),
             config.dead_letter_max_retries,
+            ingest_inflight.clone(),
         );
         let ingest_handle = tokio::spawn(ingest_worker.run());
 
@@ -117,6 +122,7 @@ impl PipelineSystem {
             workers: Mutex::new(vec![ingest_handle, consolidation_handle]),
             ingest_health,
             consolidation_health,
+            ingest_inflight,
             started_at: Instant::now(),
             config,
         }
@@ -133,7 +139,23 @@ impl PipelineSystem {
     pub fn submit_ingest(&self, task: IngestTask) -> Result<(), uniko_store::UnikoError> {
         self.ingest_tx
             .try_send(task)
-            .map_err(|e| uniko_store::UnikoError::Pipeline(format!("ingest channel: {e}")))
+            .map_err(|e| uniko_store::UnikoError::Pipeline(format!("ingest channel: {e}")))?;
+        // Count the item only once accepted; the worker decrements when it
+        // finishes (see `IngestWorker`'s drop guard).
+        self.ingest_inflight.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Await until every submitted ingest item has finished processing.
+    ///
+    /// A true barrier: returns only when no submitted-but-unfinished ingest
+    /// item remains, so a caller can `submit_ingest(...)` then `quiesce()`
+    /// before a recall that must observe those writes. Polls on a short
+    /// interval; intended for steady-state draining, not shutdown.
+    pub async fn quiesce(&self) {
+        while self.ingest_inflight.load(Ordering::SeqCst) != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 
     /// Submit a consolidation task.

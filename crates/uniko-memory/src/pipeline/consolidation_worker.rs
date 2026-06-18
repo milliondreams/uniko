@@ -49,6 +49,10 @@ pub(crate) struct ConsolidationWorker {
     /// summarisation) ran globally — sessions are agent-agnostic, so
     /// this is throttled once across all agents like the topic sweep.
     last_session_sweep_at: Option<Instant>,
+    /// Last time the Rule confidence-decay sweep ran globally — the
+    /// `:Rule` lifecycle is agent-agnostic (it scans every non-stdlib
+    /// rule), so it is throttled once across all agents.
+    last_rule_decay_at: Option<Instant>,
 }
 
 impl ConsolidationWorker {
@@ -74,6 +78,7 @@ impl ConsolidationWorker {
             agent_last_procedure_at: HashMap::new(),
             last_topic_sweep_at: None,
             last_session_sweep_at: None,
+            last_rule_decay_at: None,
         }
     }
 
@@ -228,7 +233,43 @@ impl ConsolidationWorker {
         self.run_procedure_sweep(agent_id, now).await;
         self.run_topic_sweep(agent_id, now).await;
         self.run_decay_sweep(agent_id).await;
+        self.run_rule_decay_sweep(now).await;
         self.run_session_maintenance_sweep(agent_id, now).await;
+    }
+
+    /// Apply one Rule confidence-decay pass (decay / demote / promote /
+    /// prune) across every non-stdlib `:Rule`.
+    ///
+    /// Global like the topic and session sweeps, so it is throttled once
+    /// across all agents by `cortex_min_interval`. Failures are logged and
+    /// dropped — rule maintenance must never destabilize consolidation.
+    async fn run_rule_decay_sweep(&mut self, now: Instant) {
+        if let Some(last) = self.last_rule_decay_at
+            && now.duration_since(last) < self.cortex_min_interval
+        {
+            return;
+        }
+        self.last_rule_decay_at = Some(now);
+
+        match crate::rules::apply_decay_cycle(
+            &self.kb,
+            crate::rules::RuleLifecycleConfig::default(),
+        )
+        .await
+        {
+            Ok(report) => {
+                if report.demoted + report.promoted + report.pruned > 0 {
+                    tracing::info!(
+                        decayed = report.decayed,
+                        demoted = report.demoted,
+                        promoted = report.promoted,
+                        pruned = report.pruned,
+                        "rule decay sweep applied lifecycle transitions",
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "rule decay sweep failed — continuing"),
+        }
     }
 
     /// Auto-close inactive Sessions (F14) and summarise each one (F59).
