@@ -31,6 +31,12 @@ pub enum PdfExtractError {
     /// The PDF parsed but contained no extractable text on any page.
     #[error("pdf contained no extractable text")]
     Empty,
+    /// The tiered (Native+OCR) extractor failed — e.g. the OCR model alias
+    /// did not resolve, rasterization failed, or `uni-xervo-pdf` returned an
+    /// error. Carries the underlying message. Only produced on the
+    /// `pdf-ocr` path.
+    #[error("tiered pdf extraction failed: {0}")]
+    Tiered(String),
 }
 
 /// Pure-Rust PDF text extractor.

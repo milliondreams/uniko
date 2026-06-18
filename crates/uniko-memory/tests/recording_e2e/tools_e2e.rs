@@ -15,7 +15,7 @@ use chrono::{Duration, Utc};
 use uni_db::Value;
 
 use uniko_memory::{
-    AddObservationParams, Agent, AssertFactParams, CreateGoalParams, CreateTaskParams,
+    AddObservationParams, AssertFactParams, CreateGoalParams, CreateTaskParams,
     InvalidateFactParams, RecordEpisodeParams, add_observation, assert_fact, create_goal,
     create_task, generate_session_summary, invalidate_fact, record_episode,
 };
@@ -424,41 +424,5 @@ async fn generate_session_summary_creates_node_and_edge() {
     );
 }
 
-// ── Agent facade ────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn agent_facade_delegates_create_goal() {
-    let kb = kb().await;
-    seed_participant(&kb, "agent-x").await;
-
-    let agent = Agent::new(kb.clone(), "agent-x");
-    assert_eq!(agent.agent_id(), "agent-x");
-
-    let res = agent
-        .create_goal(CreateGoalParams {
-            goal_id: Some("goal-facade".into()),
-            title: "Facade goal".into(),
-            ..Default::default()
-        })
-        .await;
-    if skip_embedding(&res) {
-        return;
-    }
-    let goal = res.expect("agent.create_goal");
-
-    let session = kb.db().session();
-    let rows = session
-        .query_with("MATCH (g:Goal) WHERE id(g) = $gid RETURN g.goal_id AS gid")
-        .param("gid", goal)
-        .fetch_all()
-        .await
-        .expect("query");
-    assert_eq!(
-        rows.rows()
-            .first()
-            .expect("goal")
-            .get::<String>("gid")
-            .expect("gid"),
-        "goal-facade"
-    );
-}
+// The Agent-facade delegation test was removed when the cognition methods
+// left the facade; the free function `create_goal` is covered above.

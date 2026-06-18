@@ -142,8 +142,8 @@ pub async fn run_query(
         .iter()
         .map(|it| RecalledItem {
             node_id: it.node_id,
-            node_type: it.node_type.clone(),
-            tier: format!("{:?}", it.tier),
+            node_type: format!("{:?}", it.kind),
+            tier: format!("{:?}", it.kind.tier()),
             score: it.score,
             content: it.content.clone(),
         })

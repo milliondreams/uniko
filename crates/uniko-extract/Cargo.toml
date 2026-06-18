@@ -16,6 +16,8 @@ categories.workspace = true
 uniko-pipes = { workspace = true }
 uniko-store = { workspace = true }
 uni-db = { workspace = true }
+mime_guess = { workspace = true }
+infer = { workspace = true }
 # Direct dep so the NLP adapter can name xervo's `NlpModel` / `NlpRequest`
 # / `NlpResult` (uni-db does not re-export them).
 uni-xervo = { workspace = true }
@@ -44,6 +46,9 @@ tree-sitter-typescript = { workspace = true, optional = true }
 ort = { workspace = true, optional = true }
 ndarray = { workspace = true, optional = true }
 tokenizers = { workspace = true, optional = true }
+# Tiered PDF extraction (native + OCR). Optional: pulls the pure-Rust
+# rasterizer (hayro) + OCR pipeline, so it is opt-in behind `pdf-ocr`.
+uni-xervo-pdf = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-util = { workspace = true }
@@ -51,6 +56,9 @@ tokio-util = { workspace = true }
 [features]
 default = ["code-parse"]
 onnx = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+# Tiered Native+OCR PDF extraction via `uni-xervo-pdf` (pulls hayro rasterizer
+# + OCR model wiring). Opt-in; the default PDF path stays pure-Rust text-only.
+pdf-ocr = ["dep:uni-xervo-pdf"]
 code-parse = [
     "dep:tree-sitter",
     "dep:tree-sitter-python",

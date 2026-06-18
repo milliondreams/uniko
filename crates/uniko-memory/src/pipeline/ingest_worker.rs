@@ -126,6 +126,9 @@ impl IngestWorker {
                 // chain because `content` is binary (not UTF-8 String)
                 // and chunker selection is handled internally.
                 IngestTask::Pdf(p) => (String::new(), format!("pdf:{}", p.artifact_id)),
+                // Source ingest is MIME-routed inside the step from the
+                // payload; the worker only needs a label here.
+                IngestTask::Source(_) => (String::new(), "source".to_string()),
             };
 
             let mut ctx = PipelineContext::new(
@@ -178,13 +181,14 @@ impl Drop for InflightGuard {
 ///
 /// [`IngestStep`](uniko_extract::ingest::IngestStep) dispatches on
 /// `ingest_type` and deserializes `ingest_payload`; without them the step
-/// has nothing to ingest. PDF tasks are routed through `ingest_pdf`
-/// directly and carry no payload.
+/// has nothing to ingest. Every variant (message / artifact / pdf / source)
+/// serializes its payload here for the step to route on.
 fn populate_ingest_metadata(task: &IngestTask, ctx: &mut PipelineContext) {
     let (ingest_type, payload) = match task {
         IngestTask::Message(m) => ("message", serde_json::to_value(m)),
         IngestTask::Artifact(a) => ("artifact", serde_json::to_value(a)),
-        IngestTask::Pdf(_) => ("pdf", Ok(serde_json::Value::Null)),
+        IngestTask::Pdf(p) => ("pdf", serde_json::to_value(p)),
+        IngestTask::Source(s) => ("source", serde_json::to_value(s)),
     };
     ctx.metadata.insert(
         "ingest_type".to_string(),

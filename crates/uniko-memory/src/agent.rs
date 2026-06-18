@@ -13,51 +13,39 @@ use std::fmt;
 use std::sync::Arc;
 
 use tokio::sync::OnceCell;
+use uniko_extract::ingest::ModalityRegistry;
 use uniko_store::locy::{AbductionResult, AssumeBuilder, Record};
-use uniko_store::operations::facts::FactUpsert;
 use uniko_store::xervo::{GenerationOptions, Message};
-use uniko_store::{KnowledgeBase, NodeId, UnikoError, Value};
+use uniko_store::{DeletionReport, KnowledgeBase, NodeId, UnikoError, Value};
 
-use crate::action::{RecordActionParams, RecordActionResult, record_action};
-use crate::episode::{RecordEpisodeParams, record_episode};
 use crate::facade::{RecallScope, Session};
-use crate::fact::{AssertFactParams, InvalidateFactParams, assert_fact, invalidate_fact};
-use crate::goal::{CreateGoalParams, create_goal};
 use crate::nl_to_cypher::is_safe_read_only;
-use crate::observation::{AddObservationParams, add_observation};
 use crate::pipeline::PipelineSystem;
 use crate::policy::Viewer;
-use crate::query::{GeneratedAnswer, QueryOutcome, QueryRecordOptions, answer_query};
-use crate::recall::{ContextBundle, RecallConfig, ViewerScope, recall};
+use crate::query::{Answer, GeneratedAnswer, QueryRecordOptions, answer_query};
+use crate::recall::{ContextBundle, RecallConfig, Scope, ViewerScope, recall};
 use crate::rules::{AddRuleParams, add_rule};
-use crate::task::{CreateTaskParams, create_task};
-use crate::working_memory::{WorkingMemoryParams, working_memory};
 
 /// System prompt used by [`Agent::answer`] when generating a reply.
 const ANSWER_SYSTEM_PROMPT: &str = "You are a helpful assistant. Answer the question using only the \
     provided context. If the context does not contain the answer, say so. Answer concisely.";
 
-/// An agent-scoped handle over the cognitive-memory tools.
+/// An agent-scoped handle over the cognitive-memory surface.
 ///
-/// Holds a cloneable [`KnowledgeBase`] (cheap — it is `Arc`-backed) and
-/// the agent's `participant_id`, so each method delegates to the
-/// corresponding free function without the caller re-passing them.
+/// Obtained from [`Uniko::agent`](crate::Uniko::agent). Binds an agent
+/// identity to the store so `recall` / `answer` / `query` / `session` /
+/// delete verbs run without re-passing it.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// # async fn demo(kb: uniko_store::KnowledgeBase) -> Result<(), uniko_store::UnikoError> {
-/// use uniko_memory::Agent;
-/// use uniko_memory::CreateGoalParams;
+/// # async fn demo() -> Result<(), uniko_store::UnikoError> {
+/// use uniko_memory::Uniko;
 ///
-/// let agent = Agent::new(kb, "assistant-1");
-/// let goal = agent
-///     .create_goal(CreateGoalParams {
-///         title: "Ship the release".into(),
-///         ..Default::default()
-///     })
-///     .await?;
-/// # let _ = goal;
+/// let memory = Uniko::in_memory().await?;
+/// let agent = memory.agent("assistant-1");
+/// let context = agent.recall("hobbies").await?;
+/// # let _ = context;
 /// # Ok(())
 /// # }
 /// ```
@@ -71,6 +59,8 @@ pub struct Agent {
     streaming: Option<Arc<PipelineSystem>>,
     /// Read visibility scope resolved at recall time.
     scope: RecallScope,
+    /// Modality extractors for [`Session::ingest`], shared from `Uniko`.
+    extractors: Arc<ModalityRegistry>,
     /// Memoized [`Viewer`] for [`RecallScope::AsAgent`], resolved once.
     viewer_cache: Arc<OnceCell<Viewer>>,
 }
@@ -86,22 +76,15 @@ impl fmt::Debug for Agent {
 }
 
 impl Agent {
-    /// Create a facade bound to `kb` and `agent_id`.
-    ///
-    /// Reads default to [`RecallScope::Unrestricted`] and no LLM is
-    /// configured; for the full facade use [`Uniko::agent`](crate::Uniko::agent).
-    pub fn new(kb: KnowledgeBase, agent_id: impl Into<String>) -> Self {
-        Self::with_context(kb, agent_id, None, None, RecallScope::Unrestricted)
-    }
-
     /// Create a facade carrying the owning instance's LLM, streaming
-    /// pipeline, and visibility scope.
+    /// pipeline, visibility scope, and modality extractors.
     pub(crate) fn with_context(
         kb: KnowledgeBase,
         agent_id: impl Into<String>,
         llm_alias: Option<String>,
         streaming: Option<Arc<PipelineSystem>>,
         scope: RecallScope,
+        extractors: Arc<ModalityRegistry>,
     ) -> Self {
         Self {
             kb,
@@ -109,12 +92,15 @@ impl Agent {
             llm_alias,
             streaming,
             scope,
+            extractors,
             viewer_cache: Arc::new(OnceCell::new()),
         }
     }
 
-    /// The underlying knowledge base.
-    pub fn kb(&self) -> &KnowledgeBase {
+    /// The underlying knowledge base. Test-only seam for graph-assertion
+    /// fixtures; the facade never exposes `KnowledgeBase` publicly.
+    #[cfg(test)]
+    pub(crate) fn kb(&self) -> &KnowledgeBase {
         &self.kb
     }
 
@@ -123,73 +109,27 @@ impl Agent {
         &self.agent_id
     }
 
-    /// Create a Goal owned by this agent (see [`create_goal`]).
+    /// Addressed retrieval — dereference recall sources by id.
     ///
-    /// # Errors
-    ///
-    /// Propagates [`create_goal`]'s errors.
-    pub async fn create_goal(&self, params: CreateGoalParams) -> Result<NodeId, UnikoError> {
-        create_goal(&self.kb, &self.agent_id, params).await
+    /// Recall returns [`RecallSource`](crate::recall::RecallSource)
+    /// references (`message_id` / `artifact_id`); the returned [`Data`]
+    /// handle turns them into content via
+    /// [`message`](crate::facade::Data::message) /
+    /// [`artifact`](crate::facade::Data::artifact) /
+    /// [`artifact_bytes`](crate::facade::Data::artifact_bytes).
+    #[must_use]
+    pub fn data(&self) -> crate::facade::Data<'_> {
+        crate::facade::Data::new(&self.kb)
     }
 
-    /// Create a Task assigned to this agent (see [`create_task`]).
+    /// The agent's goal/task lifecycle surface.
     ///
-    /// # Errors
-    ///
-    /// Propagates [`create_task`]'s errors.
-    pub async fn create_task(&self, params: CreateTaskParams) -> Result<NodeId, UnikoError> {
-        create_task(&self.kb, &self.agent_id, params).await
-    }
-
-    /// Assert a Fact (see [`assert_fact`]).
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`assert_fact`]'s errors.
-    pub async fn assert_fact(&self, params: AssertFactParams) -> Result<FactUpsert, UnikoError> {
-        assert_fact(&self.kb, params).await
-    }
-
-    /// Invalidate a Fact (see [`invalidate_fact`]).
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`invalidate_fact`]'s errors.
-    pub async fn invalidate_fact(&self, params: InvalidateFactParams) -> Result<(), UnikoError> {
-        invalidate_fact(&self.kb, params).await
-    }
-
-    /// Add an Observation anchored to a Message (see [`add_observation`]).
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`add_observation`]'s errors.
-    pub async fn add_observation(
-        &self,
-        params: AddObservationParams,
-    ) -> Result<NodeId, UnikoError> {
-        add_observation(&self.kb, &self.agent_id, params).await
-    }
-
-    /// Record an Episode for this agent (see [`record_episode`]).
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`record_episode`]'s errors.
-    pub async fn record_episode(&self, params: RecordEpisodeParams) -> Result<NodeId, UnikoError> {
-        record_episode(&self.kb, &self.agent_id, params).await
-    }
-
-    /// Record an Action for this agent (see [`record_action`]).
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`record_action`]'s errors.
-    pub async fn record_action(
-        &self,
-        params: RecordActionParams,
-    ) -> Result<RecordActionResult, UnikoError> {
-        record_action(&self.kb, &self.agent_id, params).await
+    /// Create, transition (`start`/`complete`/`abandon`), read sliced by
+    /// phase (`active`/`planned`/`completed`), and expand a goal's working
+    /// context — see [`Goals`](crate::facade::Goals).
+    #[must_use]
+    pub fn goals(&self) -> crate::facade::Goals<'_> {
+        crate::facade::Goals::new(&self.kb, &self.agent_id)
     }
 
     /// Run a read-only Cypher query and return the result rows.
@@ -207,7 +147,51 @@ impl Agent {
                 "query() accepts read-only Cypher only".to_string(),
             ));
         }
-        self.kb.execute_rule(cypher, &HashMap::new()).await
+        // Use the graph query engine, not the Locy logic runtime: Locy
+        // serves derived facts/rules, not raw node `MATCH`es.
+        self.kb.query_cypher(cypher, &HashMap::new()).await
+    }
+
+    /// Run read-only Cypher with `scope`'s dimensional allow-set bound as
+    /// `$allow`.
+    ///
+    /// Resolves the session/participant/time scope into an allow-set of node
+    /// ids and binds it as the `$allow` list parameter, so the caller's
+    /// Cypher can restrict candidates with `WHERE id(n) IN $allow`. `$allow`
+    /// is bound only when `scope` constrains at least one dimension (an empty
+    /// scope behaves like [`query`](Agent::query)).
+    ///
+    /// Unlike [`recall_in`](Agent::recall_in), this returns **raw**
+    /// [`Record`]s and applies **no visibility filtering** — use `recall_in`
+    /// when results must be policy-scoped to a viewer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] when the query is not read-only, or
+    /// [`UnikoError::Locy`] on an evaluation error.
+    pub async fn query_in(&self, cypher: &str, scope: &Scope) -> Result<Vec<Record>, UnikoError> {
+        if !is_safe_read_only(cypher) {
+            return Err(UnikoError::Storage(
+                "query_in() accepts read-only Cypher only".to_string(),
+            ));
+        }
+        let filter = uniko_store::repository::recall::ScopeFilter {
+            sessions: scope.dims.sessions.clone(),
+            participants: scope.dims.participants.clone(),
+            since: scope.dims.since,
+            until: scope.dims.until,
+        };
+        let mut params: HashMap<String, Value> = HashMap::new();
+        if filter.is_active() {
+            let allow = self.kb.resolve_scope_allow_set(&filter).await?;
+            params.insert(
+                "allow".to_string(),
+                Value::List(allow.into_iter().map(Value::Int).collect()),
+            );
+        }
+        // Use the graph query engine (not the Locy runtime `query` uses), so
+        // `id(n) IN $allow` and other graph predicates resolve.
+        self.kb.query_cypher(cypher, &params).await
     }
 
     /// Define a Locy derivation rule from `source`, tracked with a
@@ -280,16 +264,33 @@ impl Agent {
         self.kb.abduce(program, &params).await
     }
 
-    /// Assemble working-memory context (see [`working_memory`]).
+    /// Hard-delete an entire conversation and everything it owns.
+    ///
+    /// Removes the Session, its Messages and their Chunks/Observations, and
+    /// any Artifact attached solely to it. Facts losing their last support
+    /// are soft-invalidated. Idempotent on an unknown id.
     ///
     /// # Errors
     ///
-    /// Propagates [`working_memory`]'s errors.
-    pub async fn working_memory(
+    /// Returns [`UnikoError`] on a traversal or write failure.
+    pub async fn delete_session(&self, session_id: &str) -> Result<DeletionReport, UnikoError> {
+        self.kb.delete_session_cascade(session_id).await
+    }
+
+    /// GDPR erasure: remove a participant and the data they authored.
+    ///
+    /// Deletes Messages they sent (each with its turn cascade) and
+    /// Observations about them, and force-invalidates Facts grounded in
+    /// that evidence. Idempotent on an unknown id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError`] on a traversal or write failure.
+    pub async fn forget_participant(
         &self,
-        params: WorkingMemoryParams,
-    ) -> Result<ContextBundle, UnikoError> {
-        working_memory(&self.kb, params).await
+        participant_id: &str,
+    ) -> Result<DeletionReport, UnikoError> {
+        self.kb.forget_participant(participant_id).await
     }
 
     /// Open a [`Session`] for feeding conversation turns.
@@ -299,6 +300,7 @@ impl Agent {
             session_id,
             self.streaming.clone(),
             self.llm_alias.clone(),
+            self.extractors.clone(),
         )
     }
 
@@ -313,22 +315,25 @@ impl Agent {
     /// Propagates [`recall`]'s errors and any membership-resolution
     /// failure when scoping to the agent.
     pub async fn recall(&self, query: &str) -> Result<ContextBundle, UnikoError> {
-        let mut config = RecallConfig::from_uniko_config(self.kb.config());
-        config.viewer = self.resolve_viewer_scope().await?;
-        recall(&self.kb, query, &config).await
+        self.recall_in(query, Scope::default()).await
     }
 
-    /// Run the recall cascade with a caller-supplied configuration.
+    /// Run the recall cascade scoped to `scope`, for this call only.
+    ///
+    /// `scope` carries both visibility ([`ViewerScope`]) and dimensional
+    /// hard-filters (session / participant / time), mirroring mem0's
+    /// per-call `filters`. A [`ViewerScope::Unrestricted`] visibility — the
+    /// [`Scope`] default — means "use this agent's instance-default
+    /// visibility"; pass [`Scope::as_viewer`](crate::Scope::as_viewer) to
+    /// override it explicitly.
     ///
     /// # Errors
     ///
-    /// Propagates [`recall`]'s errors.
-    pub async fn recall_with(
-        &self,
-        query: &str,
-        config: &RecallConfig,
-    ) -> Result<ContextBundle, UnikoError> {
-        recall(&self.kb, query, config).await
+    /// Propagates [`recall`]'s errors and any membership-resolution failure
+    /// when falling back to the agent's scope.
+    pub async fn recall_in(&self, query: &str, scope: Scope) -> Result<ContextBundle, UnikoError> {
+        let config = self.config_for_scope(scope).await?;
+        recall(&self.kb, query, &config).await
     }
 
     /// Recall context for `question` and generate an answer with the
@@ -339,15 +344,27 @@ impl Agent {
     /// Returns [`UnikoError::Config`] when no LLM was configured (build
     /// with [`Uniko::builder`](crate::Uniko::builder)`.llm(...)`).
     /// Propagates recall and generation failures.
-    pub async fn answer(&self, question: &str) -> Result<QueryOutcome, UnikoError> {
+    pub async fn answer(&self, question: &str) -> Result<Answer, UnikoError> {
+        self.answer_in(question, Scope::default()).await
+    }
+
+    /// Recall scoped to `scope`, then generate an answer with the
+    /// configured LLM, recording a query Episode.
+    ///
+    /// The scoping semantics match [`recall_in`](Agent::recall_in).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Config`] when no LLM was configured. Propagates
+    /// recall and generation failures.
+    pub async fn answer_in(&self, question: &str, scope: Scope) -> Result<Answer, UnikoError> {
         let alias = self.llm_alias.as_deref().ok_or_else(|| {
             UnikoError::Config(
                 "answer() requires an LLM; build with Uniko::builder().llm(...)".to_string(),
             )
         })?;
 
-        let mut config = RecallConfig::from_uniko_config(self.kb.config());
-        config.viewer = self.resolve_viewer_scope().await?;
+        let config = self.config_for_scope(scope).await?;
 
         let kb = &self.kb;
         // Build the prompt synchronously in the closure body so the
@@ -381,6 +398,22 @@ impl Agent {
             ..Default::default()
         });
         answer_query(kb, question, &config, generator, record).await
+    }
+
+    /// Build a [`RecallConfig`] from the validated stack with `scope`
+    /// applied.
+    ///
+    /// A [`ViewerScope::Unrestricted`] visibility in `scope` falls back to
+    /// this agent's instance-default visibility (so an empty [`Scope`]
+    /// reproduces the unscoped [`recall`] path).
+    async fn config_for_scope(&self, scope: Scope) -> Result<RecallConfig, UnikoError> {
+        let mut config = RecallConfig::from_uniko_config(self.kb.config());
+        config.viewer = match scope.viewer {
+            ViewerScope::Unrestricted => self.resolve_viewer_scope().await?,
+            viewer => viewer,
+        };
+        config.dimensions = scope.dims;
+        Ok(config)
     }
 
     /// Resolve this agent's [`RecallScope`] into a [`ViewerScope`].

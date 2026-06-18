@@ -1,12 +1,8 @@
-//! Agent-facing tools.
+//! The lean developer API surface.
 //!
-//! These re-exports surface the subjective-state agent tools defined
-//! in `uniko-memory` and downstream crates.  Pipelines handle what can
-//! be inferred from messages; tools handle what only the agent can
-//! decide to record.
-//!
-//! Engine internals are intentionally **not** re-exported here. These
-//! must not compile:
+//! End users touch the [`Uniko`] facade and its intent types only. Engine
+//! internals are intentionally **not** re-exported here — these must not
+//! compile:
 //!
 //! ```compile_fail
 //! let _: uniko_api::tools::KnowledgeBase;
@@ -18,20 +14,31 @@
 //! let _: uniko_api::tools::IngestMessage;
 //! ```
 //!
-//! Nor the `&KnowledgeBase`-taking free functions — these are `Agent` /
-//! `Session` methods instead:
+//! Removed/redundant surface stays gone — the older typed ingest types are
+//! subsumed by [`IngestSource`], and the cognition cluster lives at the
+//! `uniko_memory` crate root, not the facade:
 //!
 //! ```compile_fail
-//! let _ = uniko_api::tools::add_rule;
+//! let _: uniko_api::tools::Document;
 //! ```
 //! ```compile_fail
-//! let _ = uniko_api::tools::generate_session_summary;
+//! let _: uniko_api::tools::PdfSource;
 //! ```
 //! ```compile_fail
 //! let _ = uniko_api::tools::create_goal;
 //! ```
 //! ```compile_fail
 //! let _ = uniko_api::tools::working_memory;
+//! ```
+//!
+//! The answer type is [`Answer`] (with `citations()`); the older
+//! `QueryOutcome` / `GeneratedAnswer` names are not part of the surface:
+//!
+//! ```compile_fail
+//! let _: uniko_api::tools::QueryOutcome;
+//! ```
+//! ```compile_fail
+//! let _: uniko_api::tools::GeneratedAnswer;
 //! ```
 
 // Engine internals (`KnowledgeBase`, `PipelineSystem`, `IngestMessage`,
@@ -40,13 +47,15 @@
 // as `Agent` / `Session` methods rather than as free functions taking a
 // `&KnowledgeBase`, so the public surface never exposes the store handle.
 pub use uniko_memory::{
-    AbductionResult, AddObservationParams, Agent, ArtifactIngestResult, AssertFactParams,
-    AssumeBuilder, AtomicIngestResult, ContextBundle, CreateGoalParams, CreateTaskParams,
-    DerivationNode, DerivationTree, Document, EmbeddingConfig, FactUpsert, GeneratedAnswer,
-    InvalidateFactParams, LlmSpec, NodeId, PdfIngestResult, PdfSource, QueryOutcome, RecallConfig,
-    RecallItem, RecallScope, RecallTier, Record, RecordActionParams, RecordActionResult,
-    RecordEpisodeParams, Session, Turn, Uniko, UnikoBuilder, UnikoConfig, UnikoError, Value,
-    ViewerScope, WorkingMemoryParams,
-    nl_to_cypher::{is_safe_read_only, translate as translate_nl_to_cypher},
+    AbductionResult, Agent, Answer, ArtifactIngestResult, ArtifactView, AssumeBuilder,
+    AtomicIngestResult, ContentType, ContextBundle, CreateGoalParams, CreateTaskParams,
+    DeletionReport, DerivationNode, DerivationTree, Dimensions, EmbeddingConfig, GoalContext,
+    GoalPhase, GoalView, IngestContext, IngestData, IngestOutcome, IngestSource, LlmSpec,
+    MessageView, Mime, Modality, ModalityExtractor, ModalityRegistry, NodeId, ObserveResult,
+    PdfIngestResult, RecallItem, RecallKind, RecallScope, RecallSource, RecallTier, Record, Scope,
+    Session, TaskPhase, TaskView, Turn, Uniko, UnikoBuilder, UnikoConfig, UnikoError, Value,
+    ViewerScope, ingest_source,
+    nl_to_cypher::is_safe_read_only,
     policy::{Viewer, visibility_admits},
+    resolve_mime,
 };

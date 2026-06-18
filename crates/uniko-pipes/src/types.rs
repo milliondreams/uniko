@@ -91,6 +91,96 @@ pub struct IngestPdf {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+/// The payload of an [`IngestSource`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IngestData {
+    /// Raw bytes (MIME sniffed from magic bytes when not given).
+    Bytes(Vec<u8>),
+    /// UTF-8 text.
+    Text(String),
+    /// A filesystem path; bytes/text are read at ingest time.
+    Path(std::path::PathBuf),
+}
+
+/// A blob to ingest through the unified, MIME-routed dispatch.
+///
+/// Construct with [`IngestSource::bytes`] / [`text`](IngestSource::text) /
+/// [`path`](IngestSource::path) and refine with the chainable setters. The
+/// MIME is resolved as: explicit [`mime`](IngestSource::mime) → magic bytes →
+/// file extension → text/plain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestSource {
+    /// The content payload.
+    pub data: IngestData,
+    /// Explicit MIME override; skips sniffing when set.
+    pub mime: Option<crate::content::Mime>,
+    /// Explicit artifact id (otherwise a UUID v7 is generated).
+    pub id: Option<String>,
+    /// Source path / URL recorded on the artifact.
+    pub path: Option<String>,
+    /// Arbitrary metadata forwarded to ingest.
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+impl IngestSource {
+    /// A byte payload.
+    #[must_use]
+    pub fn bytes(bytes: Vec<u8>) -> Self {
+        Self::with_data(IngestData::Bytes(bytes))
+    }
+
+    /// A text payload.
+    #[must_use]
+    pub fn text(content: impl Into<String>) -> Self {
+        Self::with_data(IngestData::Text(content.into()))
+    }
+
+    /// A filesystem path payload.
+    #[must_use]
+    pub fn path(path: impl Into<std::path::PathBuf>) -> Self {
+        let path = path.into();
+        let recorded = path.display().to_string();
+        Self {
+            data: IngestData::Path(path),
+            mime: None,
+            id: None,
+            path: Some(recorded),
+            metadata: HashMap::new(),
+        }
+    }
+
+    fn with_data(data: IngestData) -> Self {
+        Self {
+            data,
+            mime: None,
+            id: None,
+            path: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Set an explicit MIME, skipping sniffing.
+    #[must_use]
+    pub fn with_mime(mut self, mime: crate::content::Mime) -> Self {
+        self.mime = Some(mime);
+        self
+    }
+
+    /// Set an explicit artifact id.
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Record a source path / URL on the artifact.
+    #[must_use]
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+}
+
 /// A task submitted to the ingest pipeline.
 #[derive(Debug, Clone)]
 pub enum IngestTask {
@@ -100,6 +190,8 @@ pub enum IngestTask {
     Artifact(IngestArtifact),
     /// Ingest a PDF document.
     Pdf(IngestPdf),
+    /// Ingest a MIME-routed blob (document / PDF / future image-audio).
+    Source(IngestSource),
 }
 
 // ── Consolidation tasks ─────────────────────────────────────────────

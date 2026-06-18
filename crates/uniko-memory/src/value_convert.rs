@@ -37,6 +37,32 @@ pub(crate) fn json_to_value(json: &JsonValue) -> Value {
     }
 }
 
+/// Convert a `uniko_store::Value` tree to a `serde_json::Value`.
+///
+/// The inverse of [`json_to_value`] for the read path (e.g. a Goal's
+/// `metrics` blob). `Bytes` / `Temporal` / `Vector` have no natural JSON
+/// form, so they degrade to `Null` — read those through typed accessors.
+pub(crate) fn value_to_json(value: &Value) -> JsonValue {
+    match value {
+        Value::Null => JsonValue::Null,
+        Value::Bool(b) => JsonValue::Bool(*b),
+        Value::Int(i) => JsonValue::Number((*i).into()),
+        Value::Float(f) => {
+            serde_json::Number::from_f64(*f).map_or(JsonValue::Null, JsonValue::Number)
+        }
+        Value::String(s) => JsonValue::String(s.clone()),
+        Value::List(items) => JsonValue::Array(items.iter().map(value_to_json).collect()),
+        Value::Map(m) => {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in m {
+                obj.insert(k.clone(), value_to_json(v));
+            }
+            JsonValue::Object(obj)
+        }
+        _ => JsonValue::Null,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

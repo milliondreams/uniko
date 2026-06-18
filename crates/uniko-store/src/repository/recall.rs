@@ -45,6 +45,51 @@ pub struct NodeContentRow {
     pub content: String,
 }
 
+/// Dimensional recall scope: restrict candidates to nodes anchored to
+/// these sessions / participants / time window.
+///
+/// Resolved once per recall into an allow-set of node ids (see
+/// [`KnowledgeBase::resolve_scope_allow_set`]); each candidate query then
+/// adds `AND id(n) IN $allow`. Session-/time-less tiers (Facts, Topics) are
+/// absent from the allow-set, so a dimensional scope excludes them.
+#[derive(Debug, Clone, Default)]
+pub struct ScopeFilter {
+    /// Allowed `Session.session_id`s.
+    pub sessions: Option<Vec<String>>,
+    /// Allowed `Participant` ids/names (sender or subject).
+    pub participants: Option<Vec<String>>,
+    /// Inclusive lower time bound.
+    pub since: Option<DateTime<Utc>>,
+    /// Exclusive upper time bound.
+    pub until: Option<DateTime<Utc>>,
+}
+
+impl ScopeFilter {
+    /// Whether any dimension constrains the candidate set.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.sessions.is_some()
+            || self.participants.is_some()
+            || self.since.is_some()
+            || self.until.is_some()
+    }
+}
+
+/// Build the `AND id(<alias>) IN $allow` fragment, or empty when no
+/// allow-set is threaded.
+fn allow_clause(alias: &str, allow: Option<&[NodeId]>) -> String {
+    if allow.is_some() {
+        format!(" AND id({alias}) IN $allow")
+    } else {
+        String::new()
+    }
+}
+
+/// The `$allow` parameter value for an allow-set, or `None` to skip binding.
+fn allow_param(allow: Option<&[NodeId]>) -> Option<Value> {
+    allow.map(|ids| Value::List(ids.iter().map(|&n| Value::Int(n)).collect()))
+}
+
 impl KnowledgeBase {
     /// Vector search over `label.embed_field`, projecting `content_field`.
     ///
@@ -55,6 +100,174 @@ impl KnowledgeBase {
     ///
     /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on
     /// query failure (the caller decides whether to skip the tier).
+    /// Resolve a [`ScopeFilter`] into the allow-set of in-scope node ids.
+    ///
+    /// Unions the node types that can anchor *every* active dimension:
+    /// Messages, Observations, and Episodes for session/time; Messages and
+    /// Observations for participant; Chunks for a session-only scope (via
+    /// their owning Session/Message). Types with no anchor for an active
+    /// dimension (Facts, Topics) are absent, so they fall out of recall.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    /// Run read-only Cypher through the graph query engine, decoding each
+    /// row into a column→[`Value`] map.
+    ///
+    /// Unlike [`execute_rule`](KnowledgeBase::execute_rule) (the Locy logic
+    /// runtime, which serves derived facts, not raw node `MATCH`es), this is
+    /// the same Cypher engine the recall cascade uses — so `id(n) IN $allow`
+    /// and other graph predicates work. Callers must ensure the query is
+    /// read-only.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn query_cypher(
+        &self,
+        cypher: &str,
+        params: &std::collections::HashMap<String, Value>,
+    ) -> Result<Vec<std::collections::HashMap<String, Value>>> {
+        let session = self.db.session();
+        let mut builder = session.query_with(cypher);
+        for (k, v) in params {
+            builder = builder.param(k.as_str(), v.clone());
+        }
+        let result = builder.fetch_all().await?;
+        let mut out = Vec::with_capacity(result.rows().len());
+        for row in result.rows() {
+            let mut rec = std::collections::HashMap::new();
+            for col in row.columns() {
+                if let Some(v) = row.value(col) {
+                    rec.insert(col.clone(), v.clone());
+                }
+            }
+            out.push(rec);
+        }
+        Ok(out)
+    }
+
+    /// Resolve a [`ScopeFilter`] into the allow-set of in-scope node ids.
+    pub async fn resolve_scope_allow_set(&self, f: &ScopeFilter) -> Result<Vec<NodeId>> {
+        // An explicit empty list matches nothing — short-circuit before
+        // building an `IN ()` predicate (which the SQL backend rejects).
+        if f.sessions.as_ref().is_some_and(|s| s.is_empty())
+            || f.participants.as_ref().is_some_and(|p| p.is_empty())
+        {
+            return Ok(Vec::new());
+        }
+        let want_session = f.sessions.is_some();
+        let want_part = f.participants.is_some();
+        let want_time = f.since.is_some() || f.until.is_some();
+
+        let sess_pred = if want_session {
+            " AND sc.session_id IN $sessions"
+        } else {
+            ""
+        };
+        let part_pred = if want_part {
+            " AND (pc.participant_id IN $participants OR pc.name IN $participants)"
+        } else {
+            ""
+        };
+        let time_pred = |field: &str| {
+            let mut s = String::new();
+            if f.since.is_some() {
+                s.push_str(&format!(" AND {field} >= $since"));
+            }
+            if f.until.is_some() {
+                s.push_str(&format!(" AND {field} < $until"));
+            }
+            s
+        };
+
+        let mut arms: Vec<String> = Vec::new();
+
+        // Message — anchors session, participant (sender/recipient), time.
+        {
+            let mut a = String::from("MATCH (m:Message)");
+            if want_session {
+                a.push_str("-[:IN_SESSION]->(sc:Session)");
+            }
+            if want_part {
+                a.push_str(" MATCH (m)-[:SENT_BY|ADDRESSED_TO]->(pc:Participant)");
+            }
+            a.push_str(" WHERE 1=1");
+            a.push_str(sess_pred);
+            a.push_str(part_pred);
+            a.push_str(&time_pred("m.timestamp"));
+            a.push_str(" RETURN id(m) AS nid");
+            arms.push(a);
+        }
+        // Observation — session via its message, participant via ABOUT.
+        {
+            let mut a = String::from("MATCH (m:Observation)");
+            if want_session {
+                a.push_str(" MATCH (m)-[:OBSERVED_IN]->(:Message)-[:IN_SESSION]->(sc:Session)");
+            }
+            if want_part {
+                a.push_str(" MATCH (m)-[:ABOUT]->(pc:Participant)");
+            }
+            a.push_str(" WHERE 1=1");
+            a.push_str(sess_pred);
+            a.push_str(part_pred);
+            a.push_str(&time_pred("m.temporal_anchor"));
+            a.push_str(" RETURN id(m) AS nid");
+            arms.push(a);
+        }
+        // Episode — session + time, but no participant anchor.
+        if !want_part {
+            let mut a = String::from("MATCH (m:Episode)");
+            if want_session {
+                a.push_str("-[:IN_SESSION]->(sc:Session)");
+            }
+            a.push_str(" WHERE 1=1");
+            a.push_str(sess_pred);
+            a.push_str(&time_pred("m.timestamp"));
+            a.push_str(" RETURN id(m) AS nid");
+            arms.push(a);
+        }
+        // Chunk — only under a session-only scope (no time/participant
+        // anchor on a chunk); owned by an in-scope Session or Message.
+        if want_session && !want_part && !want_time {
+            arms.push(String::from(
+                "MATCH (sc:Session)-[:HAS_CHUNK]->(m:Chunk) \
+                 WHERE sc.session_id IN $sessions RETURN id(m) AS nid",
+            ));
+            arms.push(String::from(
+                "MATCH (msg:Message)-[:HAS_CHUNK]->(m:Chunk) \
+                 MATCH (msg)-[:IN_SESSION]->(sc:Session) \
+                 WHERE sc.session_id IN $sessions RETURN id(m) AS nid",
+            ));
+        }
+
+        let query = arms.join(" UNION ");
+        let session = self.db.session();
+        let mut builder = session.query_with(&query);
+        if let Some(s) = &f.sessions {
+            let list: Vec<Value> = s.iter().map(|x| Value::String(x.clone())).collect();
+            builder = builder.param("sessions", Value::List(list));
+        }
+        if let Some(p) = &f.participants {
+            let list: Vec<Value> = p.iter().map(|x| Value::String(x.clone())).collect();
+            builder = builder.param("participants", Value::List(list));
+        }
+        if let Some(since) = f.since {
+            builder = builder.param("since", datetime_value(since));
+        }
+        if let Some(until) = f.until {
+            builder = builder.param("until", datetime_value(until));
+        }
+        let result = builder.fetch_all().await?;
+        Ok(result
+            .rows()
+            .iter()
+            .filter_map(|row| row.get::<i64>("nid").ok())
+            .collect())
+    }
+
     pub async fn recall_vector_search(
         &self,
         label: &str,
@@ -62,22 +275,26 @@ impl KnowledgeBase {
         content_field: &str,
         qvec: &[f32],
         limit: i64,
+        allow: Option<&[NodeId]>,
     ) -> Result<Vec<ScoredRow>> {
         let session = self.db.session();
         let cypher = format!(
             "MATCH (m:{label}) \
-             WHERE m.{embed_field} IS NOT NULL \
+             WHERE m.{embed_field} IS NOT NULL{allow_and} \
              RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                     coalesce(m.{content_field}, '') AS content, \
                     similar_to(m.{embed_field}, $qvec) AS score \
-             ORDER BY score DESC LIMIT $lim"
+             ORDER BY score DESC LIMIT $lim",
+            allow_and = allow_clause("m", allow),
         );
-        let result = session
+        let mut builder = session
             .query_with(&cypher)
             .param("qvec", Value::Vector(qvec.to_vec()))
-            .param("lim", limit)
-            .fetch_all()
-            .await?;
+            .param("lim", limit);
+        if let Some(v) = allow_param(allow) {
+            builder = builder.param("allow", v);
+        }
+        let result = builder.fetch_all().await?;
         Ok(decode_scored_rows(result.rows()))
     }
 
@@ -93,21 +310,29 @@ impl KnowledgeBase {
         content_field: &str,
         qtxt: &str,
         limit: i64,
+        allow: Option<&[NodeId]>,
     ) -> Result<Vec<ScoredRow>> {
         let session = self.db.session();
+        let where_clause = if allow.is_some() {
+            "WHERE id(m) IN $allow "
+        } else {
+            ""
+        };
         let cypher = format!(
             "MATCH (m:{label}) \
-             RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+             {where_clause}RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                     coalesce(m.{content_field}, '') AS content, \
                     similar_to(m.{content_field}, $qtxt) AS score \
              ORDER BY score DESC LIMIT $lim"
         );
-        let result = session
+        let mut builder = session
             .query_with(&cypher)
             .param("qtxt", qtxt)
-            .param("lim", limit)
-            .fetch_all()
-            .await?;
+            .param("lim", limit);
+        if let Some(v) = allow_param(allow) {
+            builder = builder.param("allow", v);
+        }
+        let result = builder.fetch_all().await?;
         Ok(decode_scored_rows(result.rows()))
     }
 
@@ -194,12 +419,14 @@ impl KnowledgeBase {
         lim_fact: i64,
         lim_obs: i64,
         lim_eps: i64,
+        allow: Option<&[NodeId]>,
     ) -> Result<Vec<TemporalRow>> {
         let qbtic = temporal_window_to_btic_value(lo, hi);
         let session = self.db.session();
-        let cypher = "MATCH (f:Fact) \
+        let cypher = format!(
+            "MATCH (f:Fact) \
                       WHERE f.valid_at IS NOT NULL \
-                        AND btic_overlaps(f.valid_at, $qbtic) \
+                        AND btic_overlaps(f.valid_at, $qbtic){af} \
                       WITH f LIMIT $lim_fact \
                       RETURN id(f) AS nid, labels(f)[0] AS lbl, 'fact' AS source, \
                              (coalesce(f.subject, '') + ' ' \
@@ -208,27 +435,33 @@ impl KnowledgeBase {
                       UNION ALL \
                       MATCH (o:Observation) \
                       WHERE o.temporal_anchor >= $lo \
-                        AND o.temporal_anchor < $hi \
+                        AND o.temporal_anchor < $hi{ao} \
                       WITH o LIMIT $lim_obs \
                       RETURN id(o) AS nid, labels(o)[0] AS lbl, 'observation' AS source, \
                              coalesce(o.content, '') AS content \
                       UNION ALL \
                       MATCH (e:Episode) \
                       WHERE e.timestamp >= $lo \
-                        AND e.timestamp < $hi \
+                        AND e.timestamp < $hi{ae} \
                       WITH e LIMIT $lim_eps \
                       RETURN id(e) AS nid, labels(e)[0] AS lbl, 'episode' AS source, \
-                             coalesce(e.action_type, '') AS content";
-        let result = session
-            .query_with(cypher)
+                             coalesce(e.action_type, '') AS content",
+            af = allow_clause("f", allow),
+            ao = allow_clause("o", allow),
+            ae = allow_clause("e", allow),
+        );
+        let mut builder = session
+            .query_with(&cypher)
             .param("qbtic", qbtic)
             .param("lo", datetime_value(lo))
             .param("hi", datetime_value(hi))
             .param("lim_fact", lim_fact)
             .param("lim_obs", lim_obs)
-            .param("lim_eps", lim_eps)
-            .fetch_all()
-            .await?;
+            .param("lim_eps", lim_eps);
+        if let Some(v) = allow_param(allow) {
+            builder = builder.param("allow", v);
+        }
+        let result = builder.fetch_all().await?;
         let mut out = Vec::with_capacity(result.rows().len());
         for row in result.rows() {
             let Ok(nid) = row.get::<i64>("nid") else {
@@ -360,6 +593,7 @@ impl KnowledgeBase {
     /// Returns the merged hits including empty-content rows — the caller
     /// applies its own empty-content filter and ranking.
     #[must_use]
+    #[expect(clippy::too_many_arguments, reason = "recall channel knobs + scope")]
     pub async fn recall_chunk_and_entity_scoped(
         &self,
         qvec: &[f32],
@@ -368,8 +602,11 @@ impl KnowledgeBase {
         per_variant_limit: i64,
         vector_weight: f64,
         bm25_weight: f64,
+        allow: Option<&[NodeId]>,
     ) -> Vec<ScoredRow> {
         use std::collections::HashMap;
+
+        let allow_and = allow_clause("m", allow);
 
         let session = self.db.session();
         let mut scored: HashMap<NodeId, (String, String, f64)> = HashMap::new();
@@ -389,9 +626,12 @@ impl KnowledgeBase {
             ("m.text", "$qtxt", String::new(), false, true)
         };
 
-        for chunk_type in ["session", "observation"] {
+        // "block" covers tiered-PDF doc-IR chunks (one per :Block); "page"
+        // covers the legacy text-only PDF path. Both were previously absent
+        // here, so PDF chunks were silently unrecallable.
+        for chunk_type in ["session", "observation", "block", "page"] {
             let cypher = format!(
-                "MATCH (m:Chunk) WHERE m.chunk_type = $ctype \
+                "MATCH (m:Chunk) WHERE m.chunk_type = $ctype{allow_and} \
                  RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                         m.text AS content, \
                         similar_to({sources}, {queries}{fusion}) AS score \
@@ -400,6 +640,9 @@ impl KnowledgeBase {
             let mut builder = session.query_with(&cypher);
             builder = builder.param("ctype", chunk_type);
             builder = builder.param("lim", per_variant_limit);
+            if let Some(v) = allow_param(allow) {
+                builder = builder.param("allow", v);
+            }
             if needs_qvec {
                 builder = builder.param("qvec", Value::Vector(qvec.to_vec()));
             }
@@ -453,7 +696,7 @@ impl KnowledgeBase {
             .map(|&(label, content_field, embed_field, pattern)| {
                 let cypher = if has_vec {
                     format!(
-                        "MATCH (m:{label}) WHERE {pattern} \
+                        "MATCH (m:{label}) WHERE {pattern}{allow_and} \
                          RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                                 m.{content_field} AS content, \
                                 similar_to([m.{embed_field}, m.{content_field}], [$qvec, $qtxt]) AS score \
@@ -461,7 +704,7 @@ impl KnowledgeBase {
                     )
                 } else {
                     format!(
-                        "MATCH (m:{label}) WHERE {pattern} \
+                        "MATCH (m:{label}) WHERE {pattern}{allow_and} \
                          RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                                 m.{content_field} AS content, \
                                 similar_to(m.{content_field}, $qtxt) AS score \
@@ -479,6 +722,9 @@ impl KnowledgeBase {
                     .param("ename", entity_name.as_str())
                     .param("qtxt", qtxt)
                     .param("lim", per_variant_limit);
+                if let Some(v) = allow_param(allow) {
+                    builder = builder.param("allow", v);
+                }
                 if has_vec {
                     builder = builder.param("qvec", Value::Vector(qvec.to_vec()));
                 }

@@ -44,6 +44,8 @@ fn mock_opts(artifact_id: &str, pages: Vec<ExtractedPage>) -> PdfIngestOptions {
         artifact_id: artifact_id.into(),
         extractor: Some(Arc::new(MockExtractor { pages })),
         source_path: None,
+        session_id: None,
+        triggered_by_message_id: None,
     }
 }
 
@@ -132,6 +134,8 @@ async fn ingest_pdf_persists_artifact_on_extractor_failure() {
         artifact_id: "pdf-fail-1".into(),
         extractor: Some(Arc::new(FailingExtractor)),
         source_path: None,
+        session_id: None,
+        triggered_by_message_id: None,
     };
     let result = ingest_pdf(&kb, PdfInput::Bytes(b"junk".to_vec()), opts)
         .await
@@ -210,6 +214,8 @@ async fn ingest_pdf_real_pdf_round_trip() {
         artifact_id: "pdf-real-1".into(),
         extractor: None, // default = PdfExtractCrate
         source_path: Some("tests/fixtures/dummy.pdf".into()),
+        session_id: None,
+        triggered_by_message_id: None,
     };
     let result = ingest_pdf(&kb, PdfInput::Bytes(bytes), opts)
         .await
@@ -258,6 +264,8 @@ async fn ingest_pdf_real_pdf_via_path() {
         artifact_id: "pdf-real-path-1".into(),
         extractor: None,
         source_path: Some(path.display().to_string()),
+        session_id: None,
+        triggered_by_message_id: None,
     };
     let result = ingest_pdf(&kb, PdfInput::Path(path), opts)
         .await
@@ -274,6 +282,8 @@ async fn ingest_pdf_rejects_empty_artifact_id() {
         artifact_id: String::new(),
         extractor: Some(Arc::new(MockExtractor { pages: Vec::new() })),
         source_path: None,
+        session_id: None,
+        triggered_by_message_id: None,
     };
     let err = ingest_pdf(&kb, PdfInput::Bytes(b"x".to_vec()), opts)
         .await

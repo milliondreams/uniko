@@ -15,6 +15,10 @@ pub(crate) fn register_labels<'a>(
         .property("content", DataType::String)
         .property_nullable("content_type", DataType::String)
         .property("timestamp", DataType::DateTime)
+        // Soft-forget tombstone. `null`/absent = visible; `true` = the
+        // turn was forgotten and the recall post-filter drops it. NULL
+        // default means no backfill migration is needed.
+        .property_nullable("redacted", DataType::Bool)
         .property_nullable(
             "embedding",
             DataType::Vector {

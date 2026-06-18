@@ -8,6 +8,7 @@
 pub mod cancel;
 pub mod circuit_breaker;
 pub mod config;
+pub mod content;
 pub mod dead_letter;
 pub mod health;
 pub mod metrics;
@@ -22,9 +23,11 @@ pub use circuit_breaker::{CircuitBreaker, CircuitState};
 #[doc(inline)]
 pub use config::PipelineConfig;
 #[doc(inline)]
+pub use content::{ContentType, Mime, MimeError, Modality, modality_for_mime};
+#[doc(inline)]
 pub use step::{PipelineContext, Step};
 #[doc(inline)]
 pub use types::{
-    ConsolidationTask, IngestArtifact, IngestMessage, IngestPdf, IngestTask, ItemResult,
-    ObservationsReady, PdfInput, StepErrorPolicy, StepOutcome,
+    ConsolidationTask, IngestArtifact, IngestData, IngestMessage, IngestPdf, IngestSource,
+    IngestTask, ItemResult, ObservationsReady, PdfInput, StepErrorPolicy, StepOutcome,
 };

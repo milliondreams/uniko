@@ -102,13 +102,32 @@ pub fn count_tokens(text: &str) -> usize {
     }
 }
 
-/// Select the appropriate chunker for a content type and optional language.
-pub fn select_chunker(
-    content_type: &str,
+/// Select the appropriate chunker for a legacy content-type token.
+///
+/// Routes the bare `content_type` string through the
+/// [`Modality`](uniko_pipes::content::Modality) taxonomy, then to a
+/// chunker. Behavior is identical to the former hand-rolled `match`: only
+/// `"code"`, `"html"`, `"csv"`, `"json"`, `"structured"` are special;
+/// everything else (incl. `"text"`, `"tool_result"`, full MIME strings)
+/// uses the text chunker.
+pub fn select_chunker(content_type: &str, language: Option<&str>) -> Box<dyn Chunker> {
+    let modality = uniko_pipes::content::modality_for_mime(
+        &uniko_pipes::content::legacy_content_type_to_mime(content_type),
+    );
+    chunker_for(modality, language)
+}
+
+/// Select a chunker directly from a resolved [`Modality`].
+///
+/// The single mapping from modality to chunking strategy, shared by
+/// [`select_chunker`] and the unified ingest dispatch.
+pub fn chunker_for(
+    modality: uniko_pipes::content::Modality,
     #[cfg_attr(not(feature = "code-parse"), allow(unused_variables))] language: Option<&str>,
 ) -> Box<dyn Chunker> {
-    match content_type {
-        "code" => {
+    use uniko_pipes::content::Modality;
+    match modality {
+        Modality::Code => {
             #[cfg(feature = "code-parse")]
             if let Some(lang) = language.filter(|l| code::CodeChunker::supports(l)) {
                 return Box::new(code::CodeChunker::new(lang));
@@ -116,9 +135,10 @@ pub fn select_chunker(
             // Unsupported language or feature disabled — fall back to text.
             Box::new(text::TextChunker)
         }
-        "html" => Box::new(html::HtmlChunker),
-        "csv" | "json" | "structured" => Box::new(structured::StructuredChunker),
-        // Default for "text", "tool_result", "error", "system", and unknown.
+        Modality::Markup => Box::new(html::HtmlChunker),
+        Modality::Structured => Box::new(structured::StructuredChunker),
+        // Text, Document, Pdf, Image, Audio, Video, and anything else
+        // fall back to the text chunker.
         _ => Box::new(text::TextChunker),
     }
 }

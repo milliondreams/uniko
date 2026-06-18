@@ -314,7 +314,7 @@ async fn debug_chunk_existence() {
         eprintln!(
             "  #{:2} [{:12}] score={:.4} | {}...",
             i + 1,
-            item.node_type,
+            format!("{:?}", item.kind),
             item.score,
             &preview[..preview.len().min(100)]
         );

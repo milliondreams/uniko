@@ -324,12 +324,12 @@ async fn answer_query_skips_recording_when_record_is_none() {
     .expect("answer_query");
 
     assert!(
-        outcome.episode_id.is_none(),
+        outcome.recorded_episode.is_none(),
         "record=None must NOT produce an Episode"
     );
-    assert_eq!(outcome.answer.text, "synthetic answer");
+    assert_eq!(outcome.text, "synthetic answer");
     assert!(
-        outcome.bundle.items.is_empty(),
+        outcome.context.items.is_empty(),
         "empty query short-circuits to an empty bundle"
     );
 }
@@ -364,8 +364,8 @@ async fn answer_query_records_episode_when_opted_in() {
     // Recording is best-effort — when embedding is unavailable the
     // helper returns None rather than erroring.  Only check the
     // recorded path when an Episode was successfully created.
-    assert_eq!(outcome.answer.text, "synthetic answer");
-    if let Some(episode_id) = outcome.episode_id {
+    assert_eq!(outcome.text, "synthetic answer");
+    if let Some(episode_id) = outcome.recorded_episode {
         let node = fetch_episode(&kb, episode_id).await;
         let state = state_map(&node);
         assert_eq!(state_str(state, "answer"), "synthetic answer");

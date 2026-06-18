@@ -114,15 +114,15 @@ fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recall::RecallTier;
+    use crate::recall::RecallKind;
 
     fn item(id: i64, content: &str, score: f64) -> RecallItem {
         RecallItem {
             node_id: id,
-            node_type: "Observation".into(),
+            kind: RecallKind::Observation,
             score,
             content: content.into(),
-            tier: RecallTier::Episodic,
+            sources: Vec::new(),
         }
     }
 

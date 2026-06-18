@@ -38,6 +38,11 @@ pub struct PdfIngestOptions {
     /// [`PdfInput::Path`] — set this when ingesting `Bytes(...)` from a
     /// known source you want recorded.
     pub source_path: Option<String>,
+    /// Session this PDF was shared in; links `Artifact -ATTACHED_TO-> Session`.
+    pub session_id: Option<String>,
+    /// Message this PDF was attached to; links `Artifact -ATTACHED_TO->
+    /// Message` (conversational attachment provenance).
+    pub triggered_by_message_id: Option<String>,
 }
 
 impl std::fmt::Debug for PdfIngestOptions {

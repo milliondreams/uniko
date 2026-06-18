@@ -35,6 +35,10 @@ pub(crate) fn register_labels<'a>(
         // Tracks which derivation model produced this chunk. NULL for
         // non-derived chunks (e.g., direct text chunking).
         .property_nullable("source_model_version", DataType::String)
+        // Soft-forget tombstone (mirrors `:Message.redacted`). `null` =
+        // visible; `true` = the owning turn/document was forgotten and the
+        // recall post-filter drops this chunk. NULL default → no backfill.
+        .property_nullable("redacted", DataType::Bool)
         // Modality-specific scalars (page_number, time bounds, bbox, …)
         // ride in this JSON bag until a Cypher query needs to filter on
         // one — at which point that field gets promoted to its own
@@ -64,10 +68,17 @@ pub(crate) fn register_labels<'a>(
 
 pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
     builder
-        // HAS_CHUNK: multi-source (Artifact, Message, Session → Chunk)
+        // HAS_CHUNK: multi-source (Artifact, Message, Session, Block → Chunk).
+        // Block is a source for tiered PDF extraction: each :Block owns a child
+        // :Chunk (chunk_type = "block") that carries the embeddable text.
         .edge_type(
             edges::HAS_CHUNK,
-            &[labels::ARTIFACT, labels::MESSAGE, labels::SESSION],
+            &[
+                labels::ARTIFACT,
+                labels::MESSAGE,
+                labels::SESSION,
+                labels::BLOCK,
+            ],
             &[labels::CHUNK],
         )
         .property_nullable("index", DataType::Int64)

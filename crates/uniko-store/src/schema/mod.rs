@@ -11,6 +11,7 @@ pub mod constants;
 mod actions;
 mod artifact_content;
 mod artifacts;
+mod blocks;
 mod chunks;
 mod consolidation;
 mod entities;
@@ -21,6 +22,7 @@ mod kb_stats;
 mod messages;
 mod observations;
 mod organization;
+mod pages;
 mod participants;
 mod procedures;
 mod rules;
@@ -44,6 +46,11 @@ pub const NLP_ALIAS: &str = "nlp/default";
 
 /// Cross-encoder reranker alias (ONNX `local/onnx`, registered only when enabled).
 pub const RERANK_ALIAS: &str = "rerank/default";
+
+/// Pipeline-OCR alias (ONNX `local/onnx`, registered only when enabled).
+///
+/// Drives the `Ocr` tier of tiered PDF extraction (`uni-xervo-pdf`).
+pub const OCR_ALIAS: &str = "ocr/default";
 
 /// Build a vector index from config (no auto-embed).
 ///
@@ -101,6 +108,8 @@ pub async fn register_schema(db: &Uni, config: &UnikoConfig) -> crate::Result<()
     let builder = artifacts::register_labels(builder, config);
     let builder = artifact_content::register_labels(builder);
     let builder = chunks::register_labels(builder, config);
+    let builder = pages::register_labels(builder, config);
+    let builder = blocks::register_labels(builder, config);
     let builder = entities::register_labels(builder, config);
     let builder = observations::register_labels(builder, config);
     let builder = facts::register_labels(builder, config);
@@ -121,6 +130,8 @@ pub async fn register_schema(db: &Uni, config: &UnikoConfig) -> crate::Result<()
     let builder = artifacts::register_edges(builder);
     let builder = artifact_content::register_edges(builder);
     let builder = chunks::register_edges(builder);
+    let builder = pages::register_edges(builder);
+    let builder = blocks::register_edges(builder);
     let builder = entities::register_edges(builder);
     let builder = observations::register_edges(builder);
     let builder = facts::register_edges(builder);

@@ -7,6 +7,7 @@
 pub mod batch;
 pub mod batch_record;
 pub mod blob;
+pub mod deletion;
 pub mod edges;
 pub mod filter;
 pub mod kb_stats;
@@ -51,7 +52,7 @@ fn apply_perf_knobs_from_env() -> Option<UniConfig> {
 use crate::config::UnikoConfig;
 use crate::error::{Result, UnikoError};
 use crate::schema::constants::{edges as edge_consts, labels};
-use crate::schema::{EMBED_ALIAS, NLP_ALIAS, RERANK_ALIAS, register_schema};
+use crate::schema::{EMBED_ALIAS, NLP_ALIAS, OCR_ALIAS, RERANK_ALIAS, register_schema};
 pub use edges::{Direction, EdgeRecord};
 pub use filter::Filter;
 
@@ -585,6 +586,7 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
         Some(eps) => eps.to_vec(),
         None => embed_eps.clone(),
     };
+    let ocr_eps = resolve_eps(config.ocr.execution_providers.as_deref());
 
     let mut catalog = vec![
         ModelAliasSpec {
@@ -642,6 +644,36 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
             options: serde_json::json!({
                 "execution_providers": rerank_eps,
                 "style": config.reranker.style,
+            }),
+        });
+    }
+
+    if config.ocr.enabled {
+        // Two-stage pipeline OCR (DBNet detection + CRNN/CTC recognition) on
+        // uni-db's `local/onnx` provider. Drives the `Ocr` tier of
+        // `uni-xervo-pdf`. Option keys mirror uni-xervo's `local_onnx` OCR
+        // loader (`onnx_path`/`char_dict_path`/`det_onnx_path`/…); defaults
+        // target the English PP-OCRv5 export `monkt/paddleocr-onnx`.
+        catalog.push(ModelAliasSpec {
+            alias: OCR_ALIAS.to_string(),
+            task: ModelTask::Ocr,
+            provider_id: "local/onnx".to_string(),
+            model_id: config.ocr.model_id.clone(),
+            revision: None,
+            warmup: WarmupPolicy::Lazy,
+            required: false,
+            timeout: None,
+            load_timeout: None,
+            retry: None,
+            options: serde_json::json!({
+                "onnx_path": config.ocr.rec_artifact,
+                "char_dict_path": config.ocr.char_dict_path,
+                "det_onnx_path": config.ocr.det_artifact,
+                "image_height": config.ocr.image_height,
+                "image_width": config.ocr.image_width,
+                "normalization": config.ocr.normalization,
+                "blank_class": 0,
+                "execution_providers": ocr_eps,
             }),
         });
     }

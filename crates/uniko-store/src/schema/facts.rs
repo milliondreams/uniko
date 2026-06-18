@@ -20,6 +20,13 @@ pub(crate) fn register_labels<'a>(
         .property_nullable("valid_at", DataType::Btic)
         .property_nullable("source_rule", DataType::String)
         .property_nullable("visibility", DataType::String)
+        // Node-level invalidation audit. Set when `valid_at` is closed —
+        // by contradiction (F38), evidence removal, or subject erasure.
+        // `null` = never invalidated. Unlike the `INVALIDATES` edge (which
+        // exists only with a successor fact), these record a standalone
+        // close. NULL default ⇒ no backfill migration.
+        .property_nullable("invalidation_reason", DataType::String)
+        .property_nullable("invalidated_at", DataType::DateTime)
         .property_nullable(
             "embedding",
             DataType::Vector {

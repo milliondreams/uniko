@@ -2,19 +2,18 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use uniko_extract::ingest::artifact::ingest_artifact;
 use uniko_extract::ingest::atomic::ingest_message_atomic;
 use uniko_extract::ingest::context::SessionContext;
-use uniko_extract::ingest::pdf::{PdfIngestOptions, PdfInput, ingest_pdf};
-use uniko_extract::ingest::{ArtifactIngestResult, AtomicIngestResult, PdfIngestResult};
+use uniko_extract::ingest::{
+    AtomicIngestResult, IngestContext, IngestOutcome, IngestSource, ModalityRegistry, ingest_source,
+};
 use uniko_pipes::IngestMessage;
-use uniko_pipes::types::{IngestArtifact, IngestTask};
-use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+use uniko_pipes::types::IngestTask;
+use uniko_store::{DeletionReport, KnowledgeBase, NodeId, UnikoError};
 
 use crate::pipeline::PipelineSystem;
 use crate::summary::generate_session_summary;
@@ -37,6 +36,7 @@ pub struct Session {
     ctx: SessionContext,
     streaming: Option<Arc<PipelineSystem>>,
     llm_alias: Option<String>,
+    extractors: Arc<ModalityRegistry>,
 }
 
 impl fmt::Debug for Session {
@@ -59,6 +59,7 @@ impl Session {
         session_id: impl Into<String>,
         streaming: Option<Arc<PipelineSystem>>,
         llm_alias: Option<String>,
+        extractors: Arc<ModalityRegistry>,
     ) -> Self {
         // `session_nid = 0` is the sentinel the ingest path resolves /
         // creates on first sight (see `ensure_session_and_sender`).
@@ -68,6 +69,7 @@ impl Session {
             ctx,
             streaming,
             llm_alias,
+            extractors,
         }
     }
 
@@ -87,13 +89,39 @@ impl Session {
     ///
     /// Returns [`UnikoError`] on any extraction or write failure; on error
     /// no partial state persists for the turn.
-    pub async fn observe(&mut self, turn: Turn) -> Result<AtomicIngestResult, UnikoError> {
+    pub async fn observe(&mut self, turn: Turn) -> Result<ObserveResult, UnikoError> {
         // Update speaker / pronoun window before ingest so recipient
         // inference and pronoun resolution see the right context.
         self.ctx.set_current_speaker(&turn.sender_id);
         let session_id = self.ctx.session_id.clone();
-        let msg = turn.into_ingest_message(session_id);
-        ingest_message_atomic(&self.kb, &msg, &mut self.ctx).await
+
+        // Resolve the message id up front so attachments can link to it.
+        let message_id = turn
+            .message_id
+            .clone()
+            .unwrap_or_else(uniko_store::id::new_id);
+        let mut turn = turn;
+        turn.message_id = Some(message_id.clone());
+        let attachments = std::mem::take(&mut turn.attachments);
+
+        let msg = turn.into_ingest_message(session_id.clone());
+        let message = ingest_message_atomic(&self.kb, &msg, &mut self.ctx).await?;
+
+        // Ingest each attachment linked to this message (and session).
+        let mut attachment_outcomes = Vec::with_capacity(attachments.len());
+        for source in attachments {
+            let context = IngestContext {
+                session_id: Some(session_id.clone()),
+                triggered_by_message_id: Some(message_id.clone()),
+            };
+            attachment_outcomes
+                .push(ingest_source(&self.kb, &self.extractors, source, context).await?);
+        }
+
+        Ok(ObserveResult {
+            message,
+            attachments: attachment_outcomes,
+        })
     }
 
     /// Enqueue one turn for asynchronous streaming ingest.
@@ -116,6 +144,24 @@ impl Session {
         pipeline.submit_ingest(IngestTask::Message(msg))
     }
 
+    /// Enqueue a MIME-routed blob ([`IngestSource`]) for streaming ingest.
+    ///
+    /// The async analogue of [`ingest`](Session::ingest): documents and PDFs
+    /// flow through the pipeline; image/audio/video require a registered
+    /// extractor (none on the streaming path → [`UnikoError::Unsupported`]
+    /// at processing time). Streamed sources are **not** session-linked, the
+    /// same caveat as [`submit`](Session::submit). Await
+    /// [`flush`](Session::flush) before a recall that must see them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Config`] when streaming was not enabled, or
+    /// [`UnikoError::Pipeline`] when the ingest queue is full.
+    pub async fn submit_source(&self, source: IngestSource) -> Result<(), UnikoError> {
+        let pipeline = self.require_streaming("submit_source")?;
+        pipeline.submit_ingest(IngestTask::Source(source))
+    }
+
     /// Await full processing of everything [`submit`](Session::submit)ted.
     ///
     /// A true barrier: returns only once the ingest queue is drained and no
@@ -131,45 +177,29 @@ impl Session {
         Ok(())
     }
 
-    /// Ingest a text document, attaching it to this session.
+    /// Ingest a standalone blob through the unified, MIME-routed dispatch.
     ///
-    /// Deduplicated by content hash: re-ingesting identical content
-    /// returns the existing artifact without re-chunking.
+    /// Resolves the source's MIME (explicit → magic bytes → file extension →
+    /// text) and routes it: text/code/markup/structured/document become an
+    /// artifact attached to this session; PDF takes the tiered PDF path;
+    /// image/audio/video need a registered modality extractor (registered via
+    /// [`UnikoBuilder::extractor`](crate::UnikoBuilder::extractor)) and
+    /// otherwise return [`UnikoError::Unsupported`].
     ///
-    /// # Errors
-    ///
-    /// Returns [`UnikoError`] on any chunking or write failure.
-    pub async fn ingest_document(
-        &self,
-        document: Document,
-    ) -> Result<ArtifactIngestResult, UnikoError> {
-        let artifact = document.into_ingest_artifact(self.ctx.session_id.clone());
-        ingest_artifact(&self.kb, &artifact).await
-    }
-
-    /// Ingest a PDF, extracting its text into chunks.
-    ///
-    /// Uses native (pure-Rust) text extraction; OCR for scanned PDFs
-    /// requires the `pdf-ocr` build. Note: the PDF is **not** linked to
-    /// this session (the underlying ingest carries no session field) —
-    /// it is ingested as a standalone artifact.
+    /// This is the **standalone** blob path (corpus / knowledge-base load).
+    /// To attach a document to a conversation turn, use
+    /// [`Turn::attach`](Turn::attach) + [`observe`](Session::observe).
     ///
     /// # Errors
     ///
-    /// Returns [`UnikoError`] on a read or write failure. Text-extraction
-    /// failures are reported in [`PdfIngestResult::extraction_failure`]
-    /// rather than erroring.
-    pub async fn ingest_pdf(
-        &self,
-        artifact_id: impl Into<String>,
-        source: PdfSource,
-    ) -> Result<PdfIngestResult, UnikoError> {
-        let options = PdfIngestOptions {
-            artifact_id: artifact_id.into(),
-            extractor: None,
-            source_path: source.source_path(),
+    /// Returns [`UnikoError`] on an ingest failure, or
+    /// [`UnikoError::Unsupported`] for a modality with no extractor.
+    pub async fn ingest(&self, source: IngestSource) -> Result<IngestOutcome, UnikoError> {
+        let context = IngestContext {
+            session_id: Some(self.ctx.session_id.clone()),
+            triggered_by_message_id: None,
         };
-        ingest_pdf(&self.kb, source.into_pdf_input(), options).await
+        ingest_source(&self.kb, &self.extractors, source, context).await
     }
 
     /// Generate (or refresh) a synopsis of this session.
@@ -192,6 +222,45 @@ impl Session {
         .await
     }
 
+    /// Soft-forget one turn: hide it from recall, keep the node + lineage.
+    ///
+    /// Derived Facts/Observations are visibility-redacted; the Message and
+    /// its Chunks get a redaction tombstone. Idempotent: an unknown
+    /// `message_id` returns a report with `root_existed = false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError`] on a write failure.
+    pub async fn forget_turn(&self, message_id: &str) -> Result<DeletionReport, UnikoError> {
+        self.kb.forget_message(message_id).await
+    }
+
+    /// Hard-delete one turn and its owned derivations.
+    ///
+    /// Cascades the Message's Chunks and Observations, re-evaluates Facts
+    /// that lose their last support (soft-invalidating orphans), and
+    /// splices the `NEXT` chain closed. Idempotent on an unknown id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError`] on a traversal or write failure.
+    pub async fn delete_turn(&self, message_id: &str) -> Result<DeletionReport, UnikoError> {
+        self.kb.delete_message(message_id).await
+    }
+
+    /// Hard-delete a document Artifact and its structure subtree.
+    ///
+    /// Removes the Artifact, its Pages, Blocks, and Chunks. The deduped,
+    /// content-addressed `:ArtifactContent` blob is left in place.
+    /// Idempotent on an unknown id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError`] on a traversal or write failure.
+    pub async fn delete_document(&self, artifact_id: &str) -> Result<DeletionReport, UnikoError> {
+        self.kb.delete_artifact(artifact_id).await
+    }
+
     /// Borrow the streaming pipeline or explain that it is disabled.
     fn require_streaming(&self, method: &str) -> Result<&Arc<PipelineSystem>, UnikoError> {
         self.streaming.as_ref().ok_or_else(|| {
@@ -202,20 +271,31 @@ impl Session {
     }
 }
 
+/// What [`Session::observe`] ingested: the message plus any attachments.
+#[derive(Debug)]
+pub struct ObserveResult {
+    /// The ingested conversation message.
+    pub message: AtomicIngestResult,
+    /// One outcome per [`Turn`] attachment, in attachment order. Each
+    /// attachment is linked `Artifact -ATTACHED_TO-> Message`.
+    pub attachments: Vec<IngestOutcome>,
+}
+
 /// One conversation turn to feed into a [`Session`].
 ///
 /// Construct with [`Turn::new`] (sender + content) and refine with the
 /// chainable setters. Maps to a single message ingest; a UUID v7 message
-/// id is generated automatically.
+/// id is generated automatically. Attach documents/files shared in the turn
+/// with [`attach`](Turn::attach) — they ingest linked to this message.
 ///
 /// # Examples
 ///
 /// ```
-/// use uniko_memory::Turn;
+/// use uniko_memory::{IngestSource, Turn};
 ///
-/// let turn = Turn::new("alice", "the deploy finished at noon")
-///     .content_type("text")
-///     .addressed_to(vec!["bob".to_string()]);
+/// let turn = Turn::new("alice", "here's the spec we discussed")
+///     .addressed_to(vec!["bob".to_string()])
+///     .attach(IngestSource::text("# Spec\n\n- requirement one"));
 /// # let _ = turn;
 /// ```
 #[derive(Debug, Clone)]
@@ -227,6 +307,7 @@ pub struct Turn {
     addressed_to: Option<Vec<String>>,
     timestamp: DateTime<Utc>,
     metadata: HashMap<String, serde_json::Value>,
+    attachments: Vec<IngestSource>,
 }
 
 impl Turn {
@@ -240,6 +321,7 @@ impl Turn {
             addressed_to: None,
             timestamp: Utc::now(),
             metadata: HashMap::new(),
+            attachments: Vec::new(),
         }
     }
 
@@ -284,6 +366,24 @@ impl Turn {
         self
     }
 
+    /// Attach a document/file shared in this turn.
+    ///
+    /// On [`observe`](Session::observe) each attachment is ingested and
+    /// linked `Artifact -ATTACHED_TO-> Message` (and to the session).
+    /// Chainable; attachments ingest in the order added.
+    #[must_use]
+    pub fn attach(mut self, source: IngestSource) -> Self {
+        self.attachments.push(source);
+        self
+    }
+
+    /// Attach several documents/files at once (see [`attach`](Turn::attach)).
+    #[must_use]
+    pub fn attachments(mut self, sources: impl IntoIterator<Item = IngestSource>) -> Self {
+        self.attachments.extend(sources);
+        self
+    }
+
     /// Lower into the wire ingest message for `session_id`.
     fn into_ingest_message(self, session_id: String) -> IngestMessage {
         IngestMessage {
@@ -295,113 +395,6 @@ impl Turn {
             addressed_to: self.addressed_to,
             timestamp: self.timestamp,
             metadata: self.metadata,
-        }
-    }
-}
-
-/// A text document to ingest via [`Session::ingest_document`].
-///
-/// Construct with [`Document::new`] (the content) and refine with the
-/// chainable setters. Maps to one artifact ingest; a UUID v7 artifact id
-/// is generated automatically unless set with [`Document::id`].
-///
-/// # Examples
-///
-/// ```
-/// use uniko_memory::Document;
-///
-/// let doc = Document::new("# Release notes\n\n- fixed the deploy")
-///     .kind("document")
-///     .path("notes.md");
-/// # let _ = doc;
-/// ```
-#[derive(Debug, Clone)]
-pub struct Document {
-    artifact_id: Option<String>,
-    content: String,
-    kind: String,
-    path: Option<String>,
-    metadata: HashMap<String, serde_json::Value>,
-}
-
-impl Document {
-    /// A `"document"`-kind artifact carrying `content`.
-    pub fn new(content: impl Into<String>) -> Self {
-        Self {
-            artifact_id: None,
-            content: content.into(),
-            kind: "document".to_string(),
-            path: None,
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Set an explicit artifact id (otherwise a UUID v7 is generated).
-    #[must_use]
-    pub fn id(mut self, artifact_id: impl Into<String>) -> Self {
-        self.artifact_id = Some(artifact_id.into());
-        self
-    }
-
-    /// Override the artifact kind (defaults to `"document"`).
-    #[must_use]
-    pub fn kind(mut self, kind: impl Into<String>) -> Self {
-        self.kind = kind.into();
-        self
-    }
-
-    /// Record the source path / URL on the artifact.
-    #[must_use]
-    pub fn path(mut self, path: impl Into<String>) -> Self {
-        self.path = Some(path.into());
-        self
-    }
-
-    /// Attach one arbitrary metadata entry forwarded to ingest.
-    #[must_use]
-    pub fn metadata(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
-        self.metadata.insert(key.into(), value);
-        self
-    }
-
-    /// Lower into the wire artifact, attached to `session_id`.
-    fn into_ingest_artifact(self, session_id: String) -> IngestArtifact {
-        IngestArtifact {
-            artifact_id: self.artifact_id.unwrap_or_else(uniko_store::id::new_id),
-            content: self.content,
-            kind: self.kind,
-            path: self.path,
-            metadata: self.metadata,
-            session_id: Some(session_id),
-            triggered_by_message_id: None,
-            produced_by_action_id: None,
-        }
-    }
-}
-
-/// Where the bytes of a PDF come from, for [`Session::ingest_pdf`].
-#[derive(Debug, Clone)]
-pub enum PdfSource {
-    /// In-memory bytes.
-    Bytes(Vec<u8>),
-    /// A filesystem path; bytes are read at ingest time.
-    Path(PathBuf),
-}
-
-impl PdfSource {
-    /// The original path recorded on the artifact, when known.
-    fn source_path(&self) -> Option<String> {
-        match self {
-            Self::Bytes(_) => None,
-            Self::Path(path) => Some(path.display().to_string()),
-        }
-    }
-
-    /// Lower into the extractor's input type.
-    fn into_pdf_input(self) -> PdfInput {
-        match self {
-            Self::Bytes(bytes) => PdfInput::Bytes(bytes),
-            Self::Path(path) => PdfInput::Path(path),
         }
     }
 }

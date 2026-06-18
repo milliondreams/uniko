@@ -23,6 +23,22 @@ pub fn chunk_id(parent_id: &str, index: usize) -> String {
     format!("{parent_id}:{index}")
 }
 
+/// Generate a deterministic page ID: `{artifact_id}:p{page_number}`.
+///
+/// Page numbers are 1-based. Deterministic so re-ingesting the same PDF
+/// re-targets the same `:Page` nodes instead of duplicating them.
+pub fn page_id(artifact_id: &str, page_number: u32) -> String {
+    format!("{artifact_id}:p{page_number}")
+}
+
+/// Generate a deterministic block ID: `{page_id}:b{reading_order}`.
+///
+/// Reading order is the block's monotonic index within its page, so the same
+/// page always yields the same block IDs across re-ingests.
+pub fn block_id(page_id: &str, reading_order: u32) -> String {
+    format!("{page_id}:b{reading_order}")
+}
+
 /// Validate that a string is a valid UUID v7.
 ///
 /// Checks both that the string parses as a UUID and that its version field is 7.

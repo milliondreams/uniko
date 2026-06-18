@@ -154,7 +154,7 @@ pub fn format_context(
     for (i, item) in bundle.items.iter().enumerate() {
         let session_date = session_dates.get(&item.node_id);
         let temporal = temporal_anchors.get(&item.node_id);
-        let mut header = format!("[{}] ({}, score={:.3}", i + 1, item.node_type, item.score,);
+        let mut header = format!("[{}] ({:?}, score={:.3}", i + 1, item.kind, item.score,);
         if let Some(date) = session_date {
             header.push_str(&format!(", session_date={date}"));
         }

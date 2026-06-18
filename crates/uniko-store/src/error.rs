@@ -57,6 +57,12 @@ pub enum UnikoError {
     /// Unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// The content modality has no registered extractor (e.g. image/audio
+    /// ingest before a `ModalityExtractor` is wired in). The string names
+    /// the unsupported modality.
+    #[error("unsupported modality: {0}")]
+    Unsupported(String),
 }
 
 impl UnikoError {

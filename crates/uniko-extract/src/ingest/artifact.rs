@@ -17,6 +17,9 @@ use super::message::create_chunks;
 pub struct ArtifactIngestResult {
     /// Internal node ID of the Artifact.
     pub artifact_node_id: NodeId,
+    /// External artifact id — pass to `agent.data().artifact(..)` to fetch
+    /// it back.
+    pub artifact_id: String,
     /// Node IDs of the created chunks.
     pub chunk_node_ids: Vec<NodeId>,
     /// Whether this artifact was a duplicate (skipped chunking).
@@ -44,6 +47,7 @@ pub async fn ingest_artifact(
     if let Some((existing_id, _)) = kb.get_node_by_ext_id("Artifact", "hash", &hash).await? {
         return Ok(ArtifactIngestResult {
             artifact_node_id: existing_id,
+            artifact_id: artifact.artifact_id.clone(),
             chunk_node_ids: Vec::new(),
             was_deduplicated: true,
         });
@@ -56,6 +60,7 @@ pub async fn ingest_artifact(
     {
         return Ok(ArtifactIngestResult {
             artifact_node_id: existing_id,
+            artifact_id: artifact.artifact_id.clone(),
             chunk_node_ids: Vec::new(),
             was_deduplicated: true,
         });
@@ -77,7 +82,8 @@ pub async fn ingest_artifact(
             content_id: hash.clone(),
             bytes: put.bytes_inline,
             uri: put.uri,
-            mime: mime_for_kind(&artifact.kind, language.as_deref()),
+            mime: uniko_pipes::content::mime_for_kind(&artifact.kind, language.as_deref())
+                .to_string(),
             size,
             perceptual_hash: None,
             audio_fingerprint: None,
@@ -147,6 +153,7 @@ pub async fn ingest_artifact(
 
     Ok(ArtifactIngestResult {
         artifact_node_id: artifact_nid,
+        artifact_id: artifact.artifact_id.clone(),
         chunk_node_ids: chunk_nids,
         was_deduplicated: false,
     })
@@ -233,31 +240,6 @@ async fn link_artifact_context(
     }
 
     Ok(())
-}
-
-/// Best-effort MIME from kind + detected language.
-///
-/// Text ingest only — caller passes the same `kind` the upstream API
-/// used (`"text"`, `"code"`, `"html"`, `"markdown"`, …). Modality-
-/// specific ingest paths (image / audio / pdf / video) supply the
-/// MIME directly and never call this.
-fn mime_for_kind(kind: &str, language: Option<&str>) -> String {
-    match (kind, language) {
-        (_, Some("python")) => "text/x-python".into(),
-        (_, Some("rust")) => "text/x-rust".into(),
-        (_, Some("javascript")) => "application/javascript".into(),
-        (_, Some("typescript")) => "application/typescript".into(),
-        (_, Some("tsx")) => "application/typescript".into(),
-        (_, Some("html")) => "text/html".into(),
-        (_, Some("css")) => "text/css".into(),
-        (_, Some("json")) => "application/json".into(),
-        (_, Some("csv")) => "text/csv".into(),
-        (_, Some("markdown")) => "text/markdown".into(),
-        ("markdown", _) => "text/markdown".into(),
-        ("html", _) => "text/html".into(),
-        ("code", _) => "text/plain".into(),
-        _ => "text/plain".into(),
-    }
 }
 
 /// Detect programming language from a file path extension.

@@ -35,6 +35,8 @@ pub mod types;
 pub use error::{Result, UnikoError};
 #[doc(inline)]
 pub use storage::KnowledgeBase;
+#[doc(inline)]
+pub use storage::deletion::DeletionReport;
 // Diagnostic batch-recording surface, only present with the
 // `batch-record` feature (used by the bulk-vs-UNWIND benchmark).
 #[cfg(feature = "batch-record")]

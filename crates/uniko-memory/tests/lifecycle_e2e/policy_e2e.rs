@@ -6,7 +6,7 @@ use uni_db::Value;
 
 use uniko_memory::policy::{Viewer, filter_bundle, visibility_admits};
 use uniko_memory::recall::{
-    ContextBundle, RecallConfig, RecallItem, RecallTier, ViewerScope, recall,
+    ContextBundle, RecallConfig, RecallItem, RecallKind, ViewerScope, recall,
 };
 use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
@@ -68,10 +68,10 @@ fn bundle_with(items: Vec<RecallItem>) -> ContextBundle {
 fn fact_item(node_id: i64) -> RecallItem {
     RecallItem {
         node_id,
-        node_type: "Fact".into(),
+        kind: RecallKind::Fact,
         score: 1.0,
         content: "x".into(),
-        tier: RecallTier::Semantic,
+        sources: Vec::new(),
     }
 }
 
@@ -145,17 +145,17 @@ async fn filter_bundle_leaves_non_policy_items_alone() {
         fact_item(private_fact),
         RecallItem {
             node_id: 999,
-            node_type: "Message".into(),
+            kind: RecallKind::Message,
             score: 0.5,
             content: "x".into(),
-            tier: RecallTier::Provenance,
+            sources: Vec::new(),
         },
     ]);
     filter_bundle(&kb, &mut bundle, &alice)
         .await
         .expect("filter");
-    let types: Vec<&str> = bundle.items.iter().map(|i| i.node_type.as_str()).collect();
-    assert_eq!(types, vec!["Message"]);
+    let kinds: Vec<RecallKind> = bundle.items.iter().map(|i| i.kind).collect();
+    assert_eq!(kinds, vec![RecallKind::Message]);
 }
 
 /// Seed a Fact with distinctive `object` text plus a visibility scope.

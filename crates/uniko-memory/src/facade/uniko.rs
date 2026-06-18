@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use uni_db::{ModelAliasSpec, ModelTask, WarmupPolicy};
+use uniko_extract::ingest::{ModalityExtractor, ModalityRegistry};
 use uniko_pipes::config::PipelineConfig;
 use uniko_store::config::{EmbeddingConfig, UnikoConfig};
-use uniko_store::{KnowledgeBase, UnikoError};
+use uniko_store::{DeletionReport, KnowledgeBase, UnikoError};
 
 use super::RecallScope;
 use crate::Agent;
@@ -43,6 +44,7 @@ pub struct Uniko {
     llm_alias: Option<String>,
     streaming: Option<Arc<PipelineSystem>>,
     scope: RecallScope,
+    extractors: Arc<ModalityRegistry>,
 }
 
 impl fmt::Debug for Uniko {
@@ -66,7 +68,13 @@ impl Uniko {
     /// store open).
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, UnikoError> {
         let kb = KnowledgeBase::open(path, UnikoConfig::default()).await?;
-        Ok(Self::from_parts(kb, None, None, RecallScope::Unrestricted))
+        Ok(Self::from_parts(
+            kb,
+            None,
+            None,
+            RecallScope::Unrestricted,
+            Arc::new(ModalityRegistry::default()),
+        ))
     }
 
     /// Open an ephemeral in-memory instance with best defaults.
@@ -76,7 +84,13 @@ impl Uniko {
     /// Propagates [`KnowledgeBase::in_memory`] failures.
     pub async fn in_memory() -> Result<Self, UnikoError> {
         let kb = KnowledgeBase::in_memory(UnikoConfig::default()).await?;
-        Ok(Self::from_parts(kb, None, None, RecallScope::Unrestricted))
+        Ok(Self::from_parts(
+            kb,
+            None,
+            None,
+            RecallScope::Unrestricted,
+            Arc::new(ModalityRegistry::default()),
+        ))
     }
 
     /// Start a [`UnikoBuilder`] for non-default construction.
@@ -93,12 +107,22 @@ impl Uniko {
             self.llm_alias.clone(),
             self.streaming.clone(),
             self.scope.clone(),
+            self.extractors.clone(),
         )
     }
 
     /// The validated configuration this instance runs with.
     pub fn config(&self) -> &UnikoConfig {
         self.kb.config()
+    }
+
+    /// Erase the entire graph. Intended for dev/test reset.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError`] on a write failure.
+    pub async fn purge(&self) -> Result<DeletionReport, UnikoError> {
+        self.kb.purge_all().await
     }
 
     /// Shut down the pipeline (if any) and then the store.
@@ -140,12 +164,14 @@ impl Uniko {
         llm_alias: Option<String>,
         streaming: Option<Arc<PipelineSystem>>,
         scope: RecallScope,
+        extractors: Arc<ModalityRegistry>,
     ) -> Self {
         Self {
             kb,
             llm_alias,
             streaming,
             scope,
+            extractors,
         }
     }
 }
@@ -191,6 +217,7 @@ pub struct UnikoBuilder {
     llm: Option<LlmSpec>,
     streaming: bool,
     scope: RecallScope,
+    extractors: ModalityRegistry,
 }
 
 impl UnikoBuilder {
@@ -261,6 +288,17 @@ impl UnikoBuilder {
         self
     }
 
+    /// Register a [`ModalityExtractor`] for image/audio/video ingest.
+    ///
+    /// Without one for a given modality, [`Session::ingest`](super::Session::ingest)
+    /// of that modality returns [`UnikoError::Unsupported`]. Chainable;
+    /// later registrations replace earlier ones for the same modality.
+    #[must_use]
+    pub fn extractor(mut self, extractor: Arc<dyn ModalityExtractor>) -> Self {
+        self.extractors.register(extractor);
+        self
+    }
+
     /// Build the [`Uniko`] instance.
     ///
     /// # Errors
@@ -297,7 +335,13 @@ impl UnikoBuilder {
             None
         };
 
-        Ok(Uniko::from_parts(kb, llm_alias, streaming, self.scope))
+        Ok(Uniko::from_parts(
+            kb,
+            llm_alias,
+            streaming,
+            self.scope,
+            Arc::new(self.extractors),
+        ))
     }
 }
 

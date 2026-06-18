@@ -218,3 +218,54 @@ async fn test_rrf_constants() {
     assert!((RRF_K - 60.0).abs() < f64::EPSILON);
     assert!((TIER_WEIGHT_SEMANTIC - 1.0).abs() < f64::EPSILON);
 }
+
+/// PDF-origin chunks (`chunk_type` "block" / "page") must be recalled by
+/// `recall_chunk_and_entity_scoped`. They were previously absent from its
+/// `["session", "observation"]` filter, so all PDF text was unrecallable.
+/// BM25-only path (empty query vector) keeps this independent of any model.
+#[tokio::test]
+async fn recall_includes_block_and_page_chunk_types() {
+    let kb = test_kb().await;
+
+    for (i, (ctype, text)) in [
+        ("block", "quarterly revenue table figures"),
+        ("page", "annual shareholder report summary"),
+        // A non-PDF chunk_type that must NOT match the PDF query, as a control.
+        ("session", "unrelated meeting transcript"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut p = HashMap::new();
+        p.insert("chunk_id".into(), Value::String(format!("rc-{i}")));
+        p.insert("text".into(), Value::String((*text).into()));
+        p.insert("chunk_type".into(), Value::String((*ctype).into()));
+        // Provide the embedding explicitly so insertion needs no embed model.
+        p.insert("embedding".into(), Value::Vector(vec![0.0f32; embed_dim()]));
+        kb.create_node("Chunk", &p).await.unwrap();
+    }
+
+    // BM25-only recall (empty qvec, bm25 weight 1.0) for the PDF text.
+    let rows = kb
+        .recall_chunk_and_entity_scoped(&[], "revenue table figures", &[], 10, 0.0, 1.0, None)
+        .await;
+
+    assert!(
+        rows.iter().any(|r| r.content.contains("revenue table")),
+        "block chunk_type must be recalled, got: {:?}",
+        rows.iter().map(|r| &r.content).collect::<Vec<_>>()
+    );
+
+    // The "page" chunk is also reachable under its own query.
+    let page_rows = kb
+        .recall_chunk_and_entity_scoped(&[], "shareholder report summary", &[], 10, 0.0, 1.0, None)
+        .await;
+    assert!(
+        page_rows
+            .iter()
+            .any(|r| r.content.contains("shareholder report")),
+        "page chunk_type must be recalled"
+    );
+
+    kb.shutdown().await.unwrap();
+}

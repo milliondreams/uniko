@@ -15,9 +15,9 @@ pub use intent::{IntentProfile, build_intent, build_intent_at};
 use std::collections::HashMap;
 
 use futures::future::join_all;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use uniko_store::{KnowledgeBase, NodeId, UnikoError};
+use uniko_store::{KnowledgeBase, NodeId, UnikoError, Value};
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -53,21 +53,108 @@ impl RecallTier {
             Self::Provenance => 0.4,
         }
     }
+}
 
-    /// Classify a node type label into a tier.
-    fn from_label(label: &str) -> Self {
+/// What a recalled item *is* — its place in the cognitive stack.
+///
+/// Distinguishes raw input ([`Chunk`](RecallKind::Chunk),
+/// [`Message`](RecallKind::Message)) from derived memory (Fact / Procedure /
+/// Topic / Observation). Replaces the former stringly `node_type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecallKind {
+    /// Raw content chunk — from a message turn or an attachment/document.
+    Chunk,
+    /// An atomic extracted statement.
+    Observation,
+    /// Derived, consolidated knowledge (multi-evidence).
+    Fact,
+    /// A learned procedure / routine.
+    Procedure,
+    /// A clustered topic.
+    Topic,
+    /// A recorded episode / event.
+    Episode,
+    /// A conversation message itself.
+    Message,
+    /// Any other node type (Goal/Task/Entity/…).
+    Other,
+}
+
+impl RecallKind {
+    /// Classify a node-type label.
+    #[must_use]
+    pub fn from_label(label: &str) -> Self {
         match label {
-            "Fact" | "Topic" => Self::Semantic,
-            "Procedure" => Self::Procedural,
-            "Episode" => Self::Episodic,
-            // Observations index `content` directly and compete with
-            // Chunks on raw similarity, so they share the KnowledgeBase
-            // tier — the multiplier would otherwise crowd Chunks out
-            // of the bundle.
-            "Observation" | "Chunk" | "Artifact" => Self::KnowledgeBase,
-            _ => Self::Provenance,
+            "Chunk" => Self::Chunk,
+            "Observation" => Self::Observation,
+            "Fact" => Self::Fact,
+            "Procedure" => Self::Procedure,
+            "Topic" => Self::Topic,
+            "Episode" => Self::Episode,
+            "Message" => Self::Message,
+            _ => Self::Other,
         }
     }
+
+    /// The scoring tier for this kind (mirrors the v6 hybrid-scoring map).
+    #[must_use]
+    pub fn tier(self) -> RecallTier {
+        match self {
+            Self::Fact | Self::Topic => RecallTier::Semantic,
+            Self::Procedure => RecallTier::Procedural,
+            Self::Episode => RecallTier::Episodic,
+            // Observations index `content` directly and compete with Chunks
+            // on raw similarity, so they share the KnowledgeBase tier.
+            Self::Observation | Self::Chunk => RecallTier::KnowledgeBase,
+            Self::Message | Self::Other => RecallTier::Provenance,
+        }
+    }
+
+    /// `true` for synthesized memory (Fact/Procedure/Topic/Observation);
+    /// `false` for raw input (Chunk/Message). Answers "did the system
+    /// derive this, or is it verbatim?"
+    #[must_use]
+    pub fn is_derived(self) -> bool {
+        matches!(
+            self,
+            Self::Fact | Self::Procedure | Self::Topic | Self::Observation
+        )
+    }
+}
+
+/// Where a recalled item's content originated — its lineage.
+///
+/// A [`RecallKind::Chunk`] has one source; a derived
+/// [`RecallKind::Fact`] lists the messages/attachments its supporting
+/// observations came from. Aggregates with no clean message lineage
+/// (Topic/Procedure) carry an empty list.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecallSource {
+    /// The content is a message's own text.
+    Message {
+        /// The message it traces to.
+        message_id: String,
+        /// The specific evidence chunk, when content-bearing.
+        chunk_id: Option<String>,
+    },
+    /// The content is from a document attached to a message.
+    Attachment {
+        /// The message the document was shared in.
+        message_id: String,
+        /// The attached document.
+        artifact_id: String,
+        /// The specific evidence chunk, when content-bearing.
+        chunk_id: Option<String>,
+    },
+    /// The content is from a standalone-loaded document (no message).
+    Document {
+        /// The document.
+        artifact_id: String,
+        /// The specific evidence chunk, when content-bearing.
+        chunk_id: Option<String>,
+    },
 }
 
 /// A single recalled item.
@@ -75,14 +162,23 @@ impl RecallTier {
 pub struct RecallItem {
     /// Node ID.
     pub node_id: NodeId,
-    /// Node type label.
-    pub node_type: String,
+    /// What this item is (raw vs derived). Use [`RecallKind::is_derived`].
+    pub kind: RecallKind,
     /// Fused score after RRF and tier weighting.
     pub score: f64,
     /// Display text.
     pub content: String,
-    /// Tier classification.
-    pub tier: RecallTier,
+    /// Lineage — the messages/attachments this content came from. One entry
+    /// for a chunk, many for a Fact, empty for aggregates.
+    pub sources: Vec<RecallSource>,
+}
+
+impl RecallItem {
+    /// The first source, for the common single-origin case.
+    #[must_use]
+    pub fn primary_source(&self) -> Option<&RecallSource> {
+        self.sources.first()
+    }
 }
 
 /// Ranked result bundle from a recall query.
@@ -143,6 +239,113 @@ pub enum ViewerScope {
     /// Filter the returned bundle to what this [`crate::policy::Viewer`]
     /// is allowed to see (private/team/org visibility).
     As(crate::policy::Viewer),
+}
+
+/// Dimensional hard-filters applied during recall candidate generation.
+///
+/// Mirrors mem0's `search(query, filters={...})`: each `Some` narrows the
+/// candidate set; `None` leaves that dimension unconstrained. An empty
+/// `Vec` matches nothing — `sessions: Some(vec![])` returns no results,
+/// distinct from `None`. Time bounds are half-open `[since, until)`.
+///
+/// The all-`None` [`Default`] imposes no constraint, so an unscoped recall
+/// generates byte-identical Cypher to before this type existed. Nodes that
+/// cannot anchor a dimension (e.g. Facts have no session) are *excluded*
+/// by a filter on that dimension — a session filter is "only these
+/// sessions", so session-less tiers go dark under it.
+#[derive(Debug, Clone, Default)]
+pub struct Dimensions {
+    /// Restrict to items anchored to one of these `Session.session_id`s.
+    pub sessions: Option<Vec<String>>,
+    /// Restrict to items whose sender *or* subject is one of these
+    /// `Participant.name`s (matches `SENT_BY`/`PARTICIPATED_IN` or
+    /// `ABOUT`).
+    pub participants: Option<Vec<String>>,
+    /// Lower time bound, inclusive.
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Upper time bound, exclusive.
+    pub until: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl Dimensions {
+    /// `true` when no dimension constrains the candidate set.
+    ///
+    /// The recall push-down emits no predicate in this case, preserving
+    /// the unscoped query path exactly.
+    #[must_use]
+    pub fn is_unconstrained(&self) -> bool {
+        self.sessions.is_none()
+            && self.participants.is_none()
+            && self.since.is_none()
+            && self.until.is_none()
+    }
+}
+
+/// An optional, per-call recall scope: visibility plus dimensional filters.
+///
+/// Pass to [`Agent::recall_in`](crate::Agent::recall_in) /
+/// [`Agent::answer_in`](crate::Agent::answer_in) to override the
+/// instance-global scope for a single call — the way mem0 and Zep accept
+/// per-call `user_id` / `session` filters. The [`Default`] is empty: empty
+/// dimensions plus [`ViewerScope::Unrestricted`], which the facade reads as
+/// "fall back to the instance default visibility".
+///
+/// # Examples
+///
+/// ```
+/// use uniko_memory::Scope;
+///
+/// let scope = Scope::default()
+///     .sessions(["chat-1"])
+///     .since(chrono::Utc::now() - chrono::Duration::days(7));
+/// # let _ = scope;
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct Scope {
+    /// Visibility scope — who may see the results.
+    pub viewer: ViewerScope,
+    /// Dimensional hard-filters — session / participant / time.
+    pub dims: Dimensions,
+}
+
+impl Scope {
+    /// Restrict recall to these session ids.
+    #[must_use]
+    pub fn sessions(mut self, sessions: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.dims.sessions = Some(sessions.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Restrict recall to these participant names (sender or subject).
+    #[must_use]
+    pub fn participants(
+        mut self,
+        participants: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.dims.participants = Some(participants.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Set the inclusive lower time bound.
+    #[must_use]
+    pub fn since(mut self, since: chrono::DateTime<chrono::Utc>) -> Self {
+        self.dims.since = Some(since);
+        self
+    }
+
+    /// Set the exclusive upper time bound.
+    #[must_use]
+    pub fn until(mut self, until: chrono::DateTime<chrono::Utc>) -> Self {
+        self.dims.until = Some(until);
+        self
+    }
+
+    /// Scope visibility to an explicit [`Viewer`](crate::policy::Viewer).
+    #[must_use]
+    pub fn as_viewer(mut self, viewer: crate::policy::Viewer) -> Self {
+        self.viewer = ViewerScope::As(viewer);
+        self
+    }
 }
 
 /// Recall query configuration.
@@ -250,6 +453,14 @@ pub struct RecallConfig {
     /// [`ViewerScope::Unrestricted`] (no filtering) — set this for any
     /// caller serving a specific participant. See issue #5.
     pub viewer: ViewerScope,
+    /// Dimensional hard-filters (session / participant / time) pushed into
+    /// candidate generation. [`Default`] is unconstrained — an unscoped
+    /// recall behaves exactly as before. Set via
+    /// [`Agent::recall_in`](crate::Agent::recall_in) with a [`Scope`].
+    pub dimensions: Dimensions,
+    /// Internally-computed allow-set resolved from [`Self::dimensions`].
+    /// Populated by [`recall`]; callers set `dimensions`, not this.
+    pub dimensions_allow: Option<Vec<NodeId>>,
     /// F58 drift override. When `true` (default) and any query entity ref
     /// resolves to an Entity flagged `unstable` (F39 drift), the Phase-1
     /// early exit is suppressed and the cascade always runs Phase 2+ so
@@ -299,6 +510,8 @@ impl Default for RecallConfig {
             enable_video_channel: false,
             enable_multimodal_channel: false,
             viewer: ViewerScope::Unrestricted,
+            dimensions: Dimensions::default(),
+            dimensions_allow: None,
             drift_override_enabled: true,
         }
     }
@@ -327,6 +540,29 @@ pub fn default_phase2_graph_edge_weights() -> std::collections::HashMap<String, 
 }
 
 impl RecallConfig {
+    /// The cross-modal channels currently enabled, as shared
+    /// [`Modality`](uniko_pipes::content::Modality) values.
+    ///
+    /// Ties the recall channel toggles to the same modality vocabulary the
+    /// ingest router uses, so the two ends of the pipeline never diverge.
+    /// (The multimodal joint-space column is a fusion channel, not a single
+    /// modality, so it is not represented here.)
+    #[must_use]
+    pub fn enabled_modalities(&self) -> std::collections::HashSet<uniko_pipes::content::Modality> {
+        use uniko_pipes::content::Modality;
+        let mut set = std::collections::HashSet::new();
+        if self.enable_image_channel {
+            set.insert(Modality::Image);
+        }
+        if self.enable_audio_channel {
+            set.insert(Modality::Audio);
+        }
+        if self.enable_video_channel {
+            set.insert(Modality::Video);
+        }
+        set
+    }
+
     /// Build from [`UnikoConfig`](uniko_store::config::UnikoConfig).
     pub fn from_uniko_config(cfg: &uniko_store::config::UnikoConfig) -> Self {
         Self {
@@ -370,6 +606,8 @@ impl RecallConfig {
             enable_video_channel: false,
             enable_multimodal_channel: false,
             viewer: ViewerScope::Unrestricted,
+            dimensions: Dimensions::default(),
+            dimensions_allow: None,
             drift_override_enabled: true,
         }
     }
@@ -440,6 +678,10 @@ pub async fn recall(
     config: &RecallConfig,
 ) -> Result<ContextBundle, UnikoError> {
     let mut bundle = recall_unfiltered(kb, query, config).await?;
+    // Redaction gate: soft-forgotten content is dropped for every recall,
+    // regardless of viewer scope (forgetting is content redaction, not
+    // access control). Runs before the access-control filter.
+    crate::policy::filter_redacted(kb, &mut bundle).await?;
     // Access-control gate (issue #5). Fail-open is an explicit, named
     // choice (`ViewerScope::Unrestricted`), not a silent default omission.
     match &config.viewer {
@@ -450,7 +692,7 @@ pub async fn recall(
             if bundle
                 .items
                 .iter()
-                .any(|i| matches!(i.node_type.as_str(), "Fact" | "Observation"))
+                .any(|i| matches!(i.kind, RecallKind::Fact | RecallKind::Observation))
             {
                 tracing::warn!(
                     "recall() returning policy-scoped items UNFILTERED \
@@ -459,7 +701,210 @@ pub async fn recall(
             }
         }
     }
+    // Lineage: stamp each surviving item with the messages/attachments it
+    // came from. Runs once over the (small) final bundle — off the hot
+    // candidate-generation path. Best-effort: a resolution failure leaves
+    // `sources` empty rather than failing the recall.
+    if let Err(e) = populate_sources(kb, &mut bundle).await {
+        tracing::debug!(error = %e, "source lineage resolution failed; items keep empty sources");
+    }
     Ok(bundle)
+}
+
+/// Stamp every item in `bundle` with its source lineage — the
+/// messages/attachments its content derives from.
+///
+/// Resolves over the final item ids in a handful of batched queries, one per
+/// kind, then groups the flat rows in Rust (no aggregation-in-Cypher).
+/// Chunks resolve to their owning message, or to the attachment/document the
+/// chunk belongs to; Observations and Facts to the messages of their
+/// evidence; Messages to themselves. Aggregates (Topic/Procedure/Episode/
+/// Other) keep an empty list.
+///
+/// # Errors
+///
+/// Returns [`UnikoError`] when a graph query fails.
+async fn populate_sources(
+    kb: &KnowledgeBase,
+    bundle: &mut ContextBundle,
+) -> Result<(), UnikoError> {
+    let ids_of = |kind: RecallKind| -> Vec<NodeId> {
+        bundle
+            .items
+            .iter()
+            .filter(|i| i.kind == kind)
+            .map(|i| i.node_id)
+            .collect()
+    };
+    let chunk_ids = ids_of(RecallKind::Chunk);
+    let obs_ids = ids_of(RecallKind::Observation);
+    let fact_ids = ids_of(RecallKind::Fact);
+    let msg_ids = ids_of(RecallKind::Message);
+
+    let mut sources: HashMap<NodeId, Vec<RecallSource>> = HashMap::new();
+
+    // Chunks: owning Message, or Artifact (direct text/markdown ingest or a
+    // tiered-PDF page→block chain). An Artifact that is `ATTACHED_TO` a
+    // message is an Attachment; otherwise a standalone Document.
+    if !chunk_ids.is_empty() {
+        let rows = kb
+            .query_cypher(
+                "MATCH (c:Chunk) WHERE id(c) IN $ids \
+                 OPTIONAL MATCH (m:Message)-[:HAS_CHUNK]->(c) \
+                 OPTIONAL MATCH (a:Artifact)-[:HAS_CHUNK]->(c) \
+                 OPTIONAL MATCH (ap:Artifact)-[:HAS_PAGE]->(:Page)-[:CONTAINS]->(:Block)-[:HAS_CHUNK]->(c) \
+                 RETURN id(c) AS cid, m.message_id AS mid, a.artifact_id AS aid, \
+                        ap.artifact_id AS aid2, c.chunk_id AS chid",
+                &ids_param(&chunk_ids),
+            )
+            .await?;
+        let artifact_ids: Vec<String> = rows
+            .iter()
+            .filter_map(|r| row_str(r, "aid").or_else(|| row_str(r, "aid2")))
+            .collect();
+        let attached = attachment_messages(kb, &artifact_ids).await?;
+        for r in &rows {
+            let Some(cid) = row_int(r, "cid") else {
+                continue;
+            };
+            let chunk_id = row_str(r, "chid");
+            let src = if let Some(message_id) = row_str(r, "mid") {
+                RecallSource::Message {
+                    message_id,
+                    chunk_id,
+                }
+            } else if let Some(artifact_id) = row_str(r, "aid").or_else(|| row_str(r, "aid2")) {
+                match attached.get(&artifact_id) {
+                    Some(message_id) => RecallSource::Attachment {
+                        message_id: message_id.clone(),
+                        artifact_id,
+                        chunk_id,
+                    },
+                    None => RecallSource::Document {
+                        artifact_id,
+                        chunk_id,
+                    },
+                }
+            } else {
+                continue;
+            };
+            sources.entry(cid).or_default().push(src);
+        }
+    }
+
+    // Observations: the message they were observed in.
+    if !obs_ids.is_empty() {
+        let rows = kb
+            .query_cypher(
+                "MATCH (o:Observation)-[:OBSERVED_IN]->(m:Message) WHERE id(o) IN $ids \
+                 RETURN id(o) AS nid, m.message_id AS mid",
+                &ids_param(&obs_ids),
+            )
+            .await?;
+        collect_message_sources(&rows, &mut sources);
+    }
+
+    // Facts: the messages of their supporting observations (distinct).
+    if !fact_ids.is_empty() {
+        let rows = kb
+            .query_cypher(
+                "MATCH (f:Fact)-[:SUPPORTED_BY]->(:Observation)-[:OBSERVED_IN]->(m:Message) \
+                 WHERE id(f) IN $ids RETURN DISTINCT id(f) AS nid, m.message_id AS mid",
+                &ids_param(&fact_ids),
+            )
+            .await?;
+        collect_message_sources(&rows, &mut sources);
+    }
+
+    // Messages: themselves.
+    if !msg_ids.is_empty() {
+        let rows = kb
+            .query_cypher(
+                "MATCH (m:Message) WHERE id(m) IN $ids RETURN id(m) AS nid, m.message_id AS mid",
+                &ids_param(&msg_ids),
+            )
+            .await?;
+        collect_message_sources(&rows, &mut sources);
+    }
+
+    for item in &mut bundle.items {
+        if let Some(s) = sources.remove(&item.node_id) {
+            item.sources = s;
+        }
+    }
+    Ok(())
+}
+
+/// Push a `Message` source per `(nid, mid)` row into `sources`.
+fn collect_message_sources(
+    rows: &[HashMap<String, Value>],
+    sources: &mut HashMap<NodeId, Vec<RecallSource>>,
+) {
+    for r in rows {
+        if let (Some(nid), Some(message_id)) = (row_int(r, "nid"), row_str(r, "mid")) {
+            sources.entry(nid).or_default().push(RecallSource::Message {
+                message_id,
+                chunk_id: None,
+            });
+        }
+    }
+}
+
+/// Map `artifact_id` → `message_id` for artifacts `ATTACHED_TO` a message.
+async fn attachment_messages(
+    kb: &KnowledgeBase,
+    artifact_ids: &[String],
+) -> Result<HashMap<String, String>, UnikoError> {
+    if artifact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let params = HashMap::from([(
+        "aids".to_string(),
+        Value::List(
+            artifact_ids
+                .iter()
+                .map(|a| Value::String(a.clone()))
+                .collect(),
+        ),
+    )]);
+    let rows = kb
+        .query_cypher(
+            "MATCH (a:Artifact)-[:ATTACHED_TO]->(m:Message) WHERE a.artifact_id IN $aids \
+             RETURN a.artifact_id AS aid, m.message_id AS mid",
+            &params,
+        )
+        .await?;
+    let mut out = HashMap::new();
+    for r in &rows {
+        if let (Some(aid), Some(mid)) = (row_str(r, "aid"), row_str(r, "mid")) {
+            out.insert(aid, mid);
+        }
+    }
+    Ok(out)
+}
+
+/// Build a `$ids` list parameter from node ids.
+fn ids_param(ids: &[NodeId]) -> HashMap<String, Value> {
+    HashMap::from([(
+        "ids".to_string(),
+        Value::List(ids.iter().map(|&n| Value::Int(n)).collect()),
+    )])
+}
+
+/// Read an integer cell from a decoded row.
+fn row_int(row: &HashMap<String, Value>, key: &str) -> Option<NodeId> {
+    match row.get(key) {
+        Some(Value::Int(i)) => Some(*i),
+        _ => None,
+    }
+}
+
+/// Read a string cell from a decoded row.
+fn row_str(row: &HashMap<String, Value>, key: &str) -> Option<String> {
+    match row.get(key) {
+        Some(Value::String(s)) => Some(s.clone()),
+        _ => None,
+    }
 }
 
 /// The recall cascade proper, before any access-control filtering.
@@ -472,6 +917,26 @@ async fn recall_unfiltered(
     if query.is_empty() {
         return Ok(empty_bundle());
     }
+
+    // Resolve the dimensional scope into an allow-set once, threaded to the
+    // candidate generators via `config.dimensions_allow`. When unconstrained
+    // (the default) this is skipped and the cascade runs exactly as before.
+    let owned_config;
+    let config = if !config.dimensions.is_unconstrained() && config.dimensions_allow.is_none() {
+        let filter = uniko_store::repository::recall::ScopeFilter {
+            sessions: config.dimensions.sessions.clone(),
+            participants: config.dimensions.participants.clone(),
+            since: config.dimensions.since,
+            until: config.dimensions.until,
+        };
+        let allow = kb.resolve_scope_allow_set(&filter).await?;
+        let mut scoped = config.clone();
+        scoped.dimensions_allow = Some(allow);
+        owned_config = scoped;
+        &owned_config
+    } else {
+        config
+    };
 
     let intent =
         intent::build_intent_at(kb, query, &config.query_variants, config.reference_ts).await?;
@@ -633,13 +1098,13 @@ async fn recall_unfiltered(
         .into_iter()
         .filter(|(_, (_, content, _))| !content.is_empty())
         .map(|(nid, (label, content, score))| {
-            let tier = RecallTier::from_label(&label);
+            let kind = RecallKind::from_label(&label);
             RecallItem {
                 node_id: nid,
-                node_type: label,
-                score: score * tier.weight(),
+                kind,
+                score: score * kind.tier().weight(),
                 content,
-                tier,
+                sources: Vec::new(),
             }
         })
         .collect();
@@ -815,7 +1280,14 @@ async fn phase1_compact(
     let mut out: HashMap<NodeId, RecallItem> = HashMap::new();
     for &(label, embed_field, content_field, top_k) in targets {
         let rows = match kb
-            .recall_vector_search(label, embed_field, content_field, qvec, top_k)
+            .recall_vector_search(
+                label,
+                embed_field,
+                content_field,
+                qvec,
+                top_k,
+                config.dimensions_allow.as_deref(),
+            )
             .await
         {
             Ok(r) => r,
@@ -828,8 +1300,8 @@ async fn phase1_compact(
             if row.score < config.min_score {
                 continue;
             }
-            let tier = RecallTier::from_label(&row.label);
-            let weighted = row.score * tier.weight();
+            let kind = RecallKind::from_label(&row.label);
+            let weighted = row.score * kind.tier().weight();
             // Same node could appear from multiple targets if labels
             // overlap (they don't today, but be safe): keep the higher
             // weighted score.
@@ -841,10 +1313,10 @@ async fn phase1_compact(
                 })
                 .or_insert(RecallItem {
                     node_id: row.node_id,
-                    node_type: row.label,
+                    kind,
                     score: weighted,
                     content: row.content,
-                    tier,
+                    sources: Vec::new(),
                 });
         }
     }
@@ -917,6 +1389,7 @@ pub async fn phase2_expand(
             qvec_ref,
             qtxt_owned,
             "embedding",
+            config.dimensions_allow.as_deref(),
         )));
     }
     // Cross-modal channels query :Artifact.{image,audio,multimodal}_embedding
@@ -937,6 +1410,7 @@ pub async fn phase2_expand(
             v,
             String::new(),
             "image_embedding",
+            config.dimensions_allow.as_deref(),
         )));
     }
     if fire_audio && let Some(v) = qm.audio_vec.as_deref() {
@@ -952,6 +1426,7 @@ pub async fn phase2_expand(
             v,
             String::new(),
             "audio_embedding",
+            config.dimensions_allow.as_deref(),
         )));
     }
     if fire_multimodal {
@@ -970,6 +1445,7 @@ pub async fn phase2_expand(
                 v,
                 String::new(),
                 "multimodal_embedding",
+                config.dimensions_allow.as_deref(),
             )));
         }
     }
@@ -1074,13 +1550,13 @@ fn fuse_and_score_phase2(
         .into_iter()
         .filter(|(_, (_, content, _))| !content.is_empty())
         .map(|(nid, (label, content, score))| {
-            let tier = RecallTier::from_label(&label);
+            let kind = RecallKind::from_label(&label);
             RecallItem {
                 node_id: nid,
-                node_type: label,
-                score: score * tier.weight(),
+                kind,
+                score: score * kind.tier().weight(),
                 content,
-                tier,
+                sources: Vec::new(),
             }
         })
         .filter(|item| item.score >= config.min_score)
@@ -1105,16 +1581,17 @@ async fn run_phase2_source(
     qvec: &[f32],
     qtxt: String,
     vector_field: &str,
+    allow: Option<&[NodeId]>,
 ) -> Vec<RankedHit> {
     let start = std::time::Instant::now();
 
     let rows = match mode {
         "vector" => {
-            kb.recall_vector_search(label, vector_field, content_field, qvec, top_k)
+            kb.recall_vector_search(label, vector_field, content_field, qvec, top_k, allow)
                 .await
         }
         "fulltext" => {
-            kb.recall_fulltext_search(label, content_field, qtxt.as_str(), top_k)
+            kb.recall_fulltext_search(label, content_field, qtxt.as_str(), top_k, allow)
                 .await
         }
         _ => return Vec::new(),
@@ -1177,7 +1654,7 @@ async fn run_phase2_source(
 async fn phase2_temporal(
     kb: &KnowledgeBase,
     intent: &IntentProfile,
-    _config: &RecallConfig,
+    config: &RecallConfig,
 ) -> Vec<RankedHit> {
     let Some((lo, hi)) = intent.temporal_window else {
         return Vec::new();
@@ -1189,7 +1666,10 @@ async fn phase2_temporal(
     // within-window. RRF rank order is what matters downstream, and a
     // narrow query window already restricts the candidate set tightly.
     let mut ranked: Vec<RankedHit> = Vec::new();
-    match kb.temporal_window_hits(lo, hi, 20, 20, 10).await {
+    match kb
+        .temporal_window_hits(lo, hi, 20, 20, 10, config.dimensions_allow.as_deref())
+        .await
+    {
         Ok(rows) => {
             for row in rows {
                 if row.content.trim().is_empty() {
@@ -1366,7 +1846,10 @@ async fn session_boost_signals(
     }
 
     for fact in phase1_items {
-        if !matches!(fact.tier, RecallTier::Semantic | RecallTier::Procedural) {
+        if !matches!(
+            fact.kind.tier(),
+            RecallTier::Semantic | RecallTier::Procedural
+        ) {
             continue;
         }
         // One round-trip per Fact.  Cheap relative to the LLM call that
@@ -1402,13 +1885,13 @@ fn compute_coverage(items: &[RecallItem], facet_count: usize) -> f64 {
     let mean_score = items.iter().map(|i| i.score).sum::<f64>() / items.len() as f64;
     let distinct_tiers = items
         .iter()
-        .map(|i| std::mem::discriminant(&i.tier))
+        .map(|i| std::mem::discriminant(&i.kind.tier()))
         .collect::<std::collections::HashSet<_>>()
         .len();
     let diversity = (distinct_tiers as f64) / 5.0;
     let semantic_or_procedural = items
         .iter()
-        .filter(|i| matches!(i.tier, RecallTier::Semantic | RecallTier::Procedural))
+        .filter(|i| matches!(i.kind.tier(), RecallTier::Semantic | RecallTier::Procedural))
         .count();
     let facets = facet_count.max(1) as f64;
     let facet_coverage = (semantic_or_procedural as f64).min(facets) / facets;
@@ -1477,6 +1960,7 @@ async fn run_recall_for_variant(
             config.per_variant_limit as i64,
             config.vector_weight,
             config.bm25_weight,
+            config.dimensions_allow.as_deref(),
         )
         .await;
 

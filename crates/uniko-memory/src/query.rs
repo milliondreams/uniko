@@ -29,7 +29,7 @@ use serde_json::{Value as JsonValue, json};
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 use crate::episode::{RecordEpisodeParams, record_episode};
-use crate::recall::{ContextBundle, RecallConfig, recall};
+use crate::recall::{ContextBundle, RecallConfig, RecallSource, recall};
 
 /// Inputs for [`record_query_episode`].
 ///
@@ -171,22 +171,49 @@ pub struct GeneratedAnswer {
     pub model: Option<String>,
 }
 
-/// Outcome of [`answer_query`].
+/// A generated answer plus the context it was grounded in.
 ///
-/// Holds the recall bundle so the caller can inspect / log it after
-/// generation, the answer the closure produced, and the new Episode
-/// id when recording was opted into.
+/// Returned by [`Agent::answer`](crate::Agent::answer) and
+/// [`answer_query`]. The `context` bundle's items carry their `kind` +
+/// `sources`, so [`citations`](Answer::citations) can report what the
+/// answer was grounded in.
 #[derive(Debug)]
-pub struct QueryOutcome {
-    /// Ranked recall bundle as returned by [`recall`].
-    pub bundle: ContextBundle,
-    /// Answer the generator returned.
-    pub answer: GeneratedAnswer,
-    /// `Some(episode_id)` when recording was requested *and*
-    /// succeeded. `None` when recording was opted out, or when
-    /// [`record_query_episode`] returned an error (which is logged
-    /// at debug level — the answer still flows through).
-    pub episode_id: Option<NodeId>,
+pub struct Answer {
+    /// Final answer text.
+    pub text: String,
+    /// The recall bundle the answer was grounded in.
+    pub context: ContextBundle,
+    /// Model id the generator used, when reported.
+    pub model: Option<String>,
+    /// Provider-reported prompt tokens, when available.
+    pub input_tokens: Option<u64>,
+    /// Provider-reported completion tokens, when available.
+    pub output_tokens: Option<u64>,
+    /// `Some(episode_id)` when query recording was opted into *and*
+    /// succeeded; `None` when opted out or when recording errored (logged
+    /// at debug — the answer still flows through).
+    pub recorded_episode: Option<NodeId>,
+}
+
+impl Answer {
+    /// The deduped sources this answer was grounded in, for citations.
+    ///
+    /// This is grounding context — what the generator was shown — not
+    /// model-attributed citations (the model isn't asked which items it
+    /// used). Order follows the ranked bundle; duplicates are removed.
+    #[must_use]
+    pub fn citations(&self) -> Vec<&RecallSource> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for item in &self.context.items {
+            for src in &item.sources {
+                if seen.insert(src) {
+                    out.push(src);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Opt-in recording config for [`answer_query`].
@@ -254,7 +281,7 @@ pub async fn answer_query<G, Fut>(
     recall_config: &RecallConfig,
     generator: G,
     record: Option<QueryRecordOptions>,
-) -> Result<QueryOutcome, UnikoError>
+) -> Result<Answer, UnikoError>
 where
     G: FnOnce(&ContextBundle, &str) -> Fut,
     Fut: std::future::Future<Output = Result<GeneratedAnswer, UnikoError>>,
@@ -289,9 +316,67 @@ where
         None
     };
 
-    Ok(QueryOutcome {
-        bundle,
-        answer,
-        episode_id,
+    Ok(Answer {
+        text: answer.text,
+        context: bundle,
+        model: answer.model,
+        input_tokens: answer.input_tokens,
+        output_tokens: answer.output_tokens,
+        recorded_episode: episode_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Answer;
+    use crate::recall::{ContextBundle, RecallItem, RecallKind, RecallSource};
+
+    /// `citations()` returns the bundle's sources in order, de-duplicated.
+    #[test]
+    fn citations_dedup_over_context_sources() {
+        let from_msg = RecallSource::Message {
+            message_id: "m1".into(),
+            chunk_id: None,
+        };
+        let from_doc = RecallSource::Attachment {
+            message_id: "m1".into(),
+            artifact_id: "spec.pdf".into(),
+            chunk_id: None,
+        };
+        let bundle = ContextBundle {
+            items: vec![
+                RecallItem {
+                    node_id: 1,
+                    kind: RecallKind::Fact,
+                    score: 1.0,
+                    content: "x".into(),
+                    // duplicate `from_msg` across items collapses to one.
+                    sources: vec![from_msg.clone(), from_doc.clone()],
+                },
+                RecallItem {
+                    node_id: 2,
+                    kind: RecallKind::Chunk,
+                    score: 0.5,
+                    content: "y".into(),
+                    sources: vec![from_msg.clone()],
+                },
+            ],
+            total_tokens: 0,
+            phase1_only: false,
+            phase2_only: false,
+            coverage: 0.0,
+        };
+        let answer = Answer {
+            text: "the deadline is Friday".into(),
+            context: bundle,
+            model: None,
+            input_tokens: None,
+            output_tokens: None,
+            recorded_episode: None,
+        };
+        let cites = answer.citations();
+        assert_eq!(cites.len(), 2, "two distinct sources, deduped");
+        assert_eq!(cites[0], &from_msg, "order follows the ranked bundle");
+        assert_eq!(cites[1], &from_doc);
+    }
 }

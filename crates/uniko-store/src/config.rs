@@ -371,6 +371,57 @@ impl Default for RerankerConfig {
     }
 }
 
+/// Pipeline-OCR model selection for tiered PDF extraction.
+///
+/// When `enabled`, an `ocr/default` [`OcrModel`] alias is registered with
+/// uni-db's `local/onnx` provider and used to drive the `Ocr` tier of
+/// `uni-xervo-pdf` (DBNet detection + CRNN/CTC recognition). Disabled by
+/// default to keep CPU-only CI cheap and avoid the model download.
+///
+/// Defaults target the English PP-OCRv5 export `monkt/paddleocr-onnx`
+/// (Apache-2.0): server detection plus the English mobile recognizer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OcrConfig {
+    /// Whether to register and use the OCR model.
+    pub enabled: bool,
+    /// HuggingFace model id hosting the detection + recognition ONNX exports.
+    pub model_id: String,
+    /// Recognizer ONNX path within `model_id/` (CRNN/CTC).
+    pub rec_artifact: String,
+    /// Character-dictionary path within `model_id/` (one token per line).
+    pub char_dict_path: String,
+    /// Detector ONNX path within `model_id/` (DBNet). Enables the two-stage
+    /// detect → crop → recognize path with real per-block bounding boxes.
+    pub det_artifact: String,
+    /// Recognizer input height in pixels.
+    pub image_height: u32,
+    /// Recognizer input width in pixels.
+    pub image_width: u32,
+    /// Recognizer normalization: `"imagenet"` or `"siglip"`.
+    pub normalization: String,
+    /// Optional override for ONNX execution providers. `None` → feature-aware
+    /// default (cpu unless a GPU feature is enabled), same as the embedder.
+    #[serde(default)]
+    pub execution_providers: Option<Vec<String>>,
+}
+
+impl Default for OcrConfig {
+    /// English PP-OCRv5 (`monkt/paddleocr-onnx`), **disabled**.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_id: "monkt/paddleocr-onnx".to_string(),
+            rec_artifact: "languages/english/rec.onnx".to_string(),
+            char_dict_path: "languages/english/dict.txt".to_string(),
+            det_artifact: "detection/v5/det.onnx".to_string(),
+            image_height: 48,
+            image_width: 320,
+            normalization: "siglip".to_string(),
+            execution_providers: None,
+        }
+    }
+}
+
 /// Vector index algorithm and quantization strategy.
 ///
 /// Controls how embedding vectors are indexed for similarity search.
@@ -521,6 +572,9 @@ pub struct UnikoConfig {
     /// NLP cascade selection (model id + ONNX artifact).
     #[serde(default)]
     pub nlp: NlpConfig,
+    /// Pipeline-OCR selection for tiered PDF extraction (disabled by default).
+    #[serde(default)]
+    pub ocr: OcrConfig,
     /// Vector index algorithm and quantization strategy.
     pub vector_algorithm: VectorAlgorithm,
     /// Distance metric for similarity search.
@@ -687,6 +741,7 @@ impl Default for UnikoConfig {
             embedding: EmbeddingConfig::bge_small_en_v15(),
             reranker: RerankerConfig::default(),
             nlp: NlpConfig::default(),
+            ocr: OcrConfig::default(),
             vector_algorithm: VectorAlgorithm::HnswSq {
                 m: 16,
                 ef_construction: 100,

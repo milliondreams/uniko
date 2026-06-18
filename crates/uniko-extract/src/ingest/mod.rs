@@ -10,17 +10,25 @@ pub mod atomic;
 pub mod chunking;
 pub mod context;
 pub mod message;
+pub mod modality;
 pub mod pdf;
 pub mod session;
 pub mod session_chunk;
+pub mod source;
 
 pub use artifact::ArtifactIngestResult;
 pub use atomic::{AtomicIngestResult, AtomicTimings, ingest_message_atomic};
 pub use chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, select_chunker};
+pub use modality::{ModalityExtractor, ModalityRegistry};
+// IngestSource/IngestData live in uniko-pipes (wire types) so IngestTask can
+// carry them; re-exported here so existing `uniko_extract::ingest` imports
+// and the facade are unchanged.
 pub use pdf::{
     PdfExtractCrate, PdfExtractError, PdfIngestOptions, PdfIngestResult, PdfInput,
     PdfTextExtractor, ingest_pdf,
 };
+pub use source::{IngestContext, IngestOutcome, ingest_source, resolve_mime};
+pub use uniko_pipes::types::{IngestData, IngestSource};
 
 use async_trait::async_trait;
 
@@ -87,6 +95,42 @@ impl uniko_pipes::Step for IngestStep {
                     "chunk_node_ids".to_string(),
                     serde_json::to_value(&result.chunk_node_ids).unwrap_or_default(),
                 );
+                Ok(StepOutcome::Completed)
+            }
+            "pdf" => {
+                let task: uniko_pipes::IngestPdf = deserialize_payload(&ctx.metadata, "IngestPdf")?;
+                let input = match task.input {
+                    uniko_pipes::PdfInput::Bytes(b) => pdf::PdfInput::Bytes(b),
+                    uniko_pipes::PdfInput::Path(p) => pdf::PdfInput::Path(p),
+                };
+                let options = pdf::PdfIngestOptions {
+                    artifact_id: task.artifact_id,
+                    extractor: None,
+                    source_path: task.source_path,
+                    // Streamed PDFs aren't session/message-linked.
+                    session_id: None,
+                    triggered_by_message_id: None,
+                };
+                let result = pdf::ingest_pdf(&ctx.kb, input, options).await?;
+                ctx.node_id = result.artifact_node_id;
+                Ok(StepOutcome::Completed)
+            }
+            "source" => {
+                let src: uniko_pipes::IngestSource =
+                    deserialize_payload(&ctx.metadata, "IngestSource")?;
+                // Streamed sources aren't session-linked (same caveat as
+                // streamed turns); no registered extractors on this path.
+                let outcome = source::ingest_source(
+                    &ctx.kb,
+                    &modality::ModalityRegistry::default(),
+                    src,
+                    source::IngestContext::default(),
+                )
+                .await?;
+                ctx.node_id = match outcome {
+                    source::IngestOutcome::Artifact(r) => r.artifact_node_id,
+                    source::IngestOutcome::Pdf(r) => r.artifact_node_id,
+                };
                 Ok(StepOutcome::Completed)
             }
             other => Ok(StepOutcome::Skipped {

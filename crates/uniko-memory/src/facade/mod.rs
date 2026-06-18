@@ -27,10 +27,16 @@
 //! # }
 //! ```
 
+mod data;
+mod goals;
 mod session;
+#[cfg(test)]
+mod tests;
 mod uniko;
 
-pub use session::{Document, PdfSource, Session, Turn};
+pub use data::{ArtifactView, Data, MessageView};
+pub use goals::{GoalContext, GoalPhase, GoalView, Goals, TaskPhase, TaskView};
+pub use session::{ObserveResult, Session, Turn};
 pub use uniko::{LlmSpec, Uniko, UnikoBuilder};
 
 use crate::policy::Viewer;

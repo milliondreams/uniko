@@ -44,7 +44,6 @@ pub mod rules;
 pub mod summary;
 pub mod task;
 pub(crate) mod value_convert;
-pub mod working_memory;
 
 #[doc(inline)]
 pub use action::{RecordActionParams, RecordActionResult, record_action};
@@ -53,7 +52,10 @@ pub use agent::Agent;
 #[doc(inline)]
 pub use episode::{RecordEpisodeParams, record_episode};
 #[doc(inline)]
-pub use facade::{Document, LlmSpec, PdfSource, RecallScope, Session, Turn, Uniko, UnikoBuilder};
+pub use facade::{
+    ArtifactView, Data, GoalContext, GoalPhase, GoalView, Goals, LlmSpec, MessageView,
+    ObserveResult, RecallScope, Session, TaskPhase, TaskView, Turn, Uniko, UnikoBuilder,
+};
 #[doc(inline)]
 pub use fact::{AssertFactParams, InvalidateFactParams, assert_fact, invalidate_fact};
 #[doc(inline)]
@@ -61,19 +63,29 @@ pub use goal::{CreateGoalParams, create_goal};
 #[doc(inline)]
 pub use policy::Viewer;
 #[doc(inline)]
-pub use recall::{ContextBundle, RecallConfig, RecallItem, RecallTier, ViewerScope};
+pub use recall::{
+    ContextBundle, Dimensions, RecallConfig, RecallItem, RecallKind, RecallSource, RecallTier,
+    Scope, ViewerScope,
+};
 // Method return / field types surfaced so the facade exposes no
 // un-nameable types: `Agent::assert_fact` -> FactUpsert, the `Session`
 // ingest verbs -> *IngestResult.
 #[doc(no_inline)]
-pub use uniko_extract::ingest::{ArtifactIngestResult, AtomicIngestResult, PdfIngestResult};
+pub use uniko_extract::ingest::{
+    ArtifactIngestResult, AtomicIngestResult, IngestContext, IngestData, IngestOutcome,
+    IngestSource, ModalityExtractor, ModalityRegistry, PdfIngestResult, ingest_source,
+    resolve_mime,
+};
+// Content-type taxonomy shared by ingest routing and recall channels.
+#[doc(no_inline)]
+pub use uniko_pipes::content::{ContentType, Mime, Modality};
 #[doc(no_inline)]
 pub use uniko_store::operations::facts::FactUpsert;
 // The canonical error type and node-id alias that pervade every facade
 // method signature, surfaced so callers handle errors / name ids without
 // reaching into `uniko_store`.
 #[doc(no_inline)]
-pub use uniko_store::{NodeId, UnikoError};
+pub use uniko_store::{DeletionReport, NodeId, UnikoError};
 // Logic / query surface: `Agent::query` / `run_rule` / `abduce` return
 // these; `Value` is the graph value type for query params and rows.
 #[doc(no_inline)]
@@ -89,7 +101,7 @@ pub use observation::{AddObservationParams, add_observation};
 pub use pipeline::PipelineSystem;
 #[doc(inline)]
 pub use query::{
-    GeneratedAnswer, QueryOutcome, QueryRecordOptions, RecordQueryEpisodeParams, answer_query,
+    Answer, GeneratedAnswer, QueryRecordOptions, RecordQueryEpisodeParams, answer_query,
     record_query_episode,
 };
 #[doc(inline)]
@@ -98,15 +110,12 @@ pub use summary::generate_session_summary;
 pub use task::{CreateTaskParams, create_task};
 #[doc(no_inline)]
 pub use uniko_store::config::{EmbeddingConfig, UnikoConfig};
-#[doc(inline)]
-pub use working_memory::{WorkingMemoryParams, working_memory};
 
 /// Sort `items` in descending order by the `f64` key returned by `score`.
 ///
 /// `NaN` scores are treated as `Equal` so the sort is total. Used across
-/// the recall cascade and working-memory ranking; centralised here so
-/// the `partial_cmp(...).unwrap_or(Equal)` boilerplate lives in exactly
-/// one place.
+/// the recall cascade; centralised here so the
+/// `partial_cmp(...).unwrap_or(Equal)` boilerplate lives in exactly one place.
 pub(crate) fn sort_by_score_desc<T>(items: &mut [T], score: impl Fn(&T) -> f64) {
     items.sort_by(|a, b| {
         score(b)

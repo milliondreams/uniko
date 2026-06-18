@@ -25,6 +25,10 @@ pub mod labels {
     pub const ARTIFACT: &str = "Artifact";
     pub const ARTIFACT_CONTENT: &str = "ArtifactContent";
     pub const CHUNK: &str = "Chunk";
+    /// A page of a PDF artifact (document-IR; tiered PDF extraction).
+    pub const PAGE: &str = "Page";
+    /// An atomic content block within a `:Page` (document-IR).
+    pub const BLOCK: &str = "Block";
 
     // Layer 4 — Semantic Memory
     pub const ENTITY: &str = "Entity";
@@ -60,6 +64,8 @@ pub mod labels {
         ARTIFACT,
         ARTIFACT_CONTENT,
         CHUNK,
+        PAGE,
+        BLOCK,
         ENTITY,
         OBSERVATION,
         FACT,
@@ -105,6 +111,12 @@ pub mod edges {
     // Layer 3 edges
     pub const HAS_CHUNK: &str = "HAS_CHUNK";
     pub const HAS_CONTENT: &str = "HAS_CONTENT";
+    /// Attaches a PDF `Artifact` to one of its `Page`s (document-IR).
+    pub const HAS_PAGE: &str = "HAS_PAGE";
+    /// Attaches a `Page` to one of its `Block`s (document-IR).
+    pub const CONTAINS: &str = "CONTAINS";
+    /// Chains `Block`s in page reading order (document-IR).
+    pub const NEXT_IN_READING_ORDER: &str = "NEXT_IN_READING_ORDER";
     pub const CREATED_BY: &str = "CREATED_BY";
     pub const MODIFIED_BY: &str = "MODIFIED_BY";
     /// Attaches an Artifact to the conversational context (Session or
@@ -168,6 +180,9 @@ pub mod edges {
         FOLLOWED_BY,
         HAS_CHUNK,
         HAS_CONTENT,
+        HAS_PAGE,
+        CONTAINS,
+        NEXT_IN_READING_ORDER,
         CREATED_BY,
         MODIFIED_BY,
         ATTACHED_TO,

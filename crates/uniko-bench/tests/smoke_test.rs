@@ -97,11 +97,11 @@ async fn test_ingest_and_recall() {
         bundle.coverage
     );
     for item in &bundle.items {
+        let kind = format!("{:?}", item.kind);
         eprintln!(
-            "  [{:.3}] {} (tier {}): content_len={} '{}'",
+            "  [{:.3}] {kind} (tier {}): content_len={} '{}'",
             item.score,
-            item.node_type,
-            item.tier as u8,
+            item.kind.tier() as u8,
             item.content.len(),
             &item.content[..item.content.len().min(100)]
         );

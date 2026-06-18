@@ -625,7 +625,7 @@ impl KnowledgeBase {
 }
 
 /// Convert an in-memory [`Btic`] to the [`Value::Temporal`] wire form.
-fn btic_to_value(b: &Btic) -> Value {
+pub(crate) fn btic_to_value(b: &Btic) -> Value {
     Value::Temporal(TemporalValue::Btic {
         lo: b.lo(),
         hi: b.hi(),
@@ -638,7 +638,7 @@ fn btic_to_value(b: &Btic) -> Value {
 /// Returns `None` when the property is absent, null, or not a BTIC
 /// temporal value (defensive — uni-db should not produce other shapes
 /// for a column declared as [`uni_db::DataType::Btic`]).
-fn extract_btic(value: Option<&Value>) -> Option<Btic> {
+pub(crate) fn extract_btic(value: Option<&Value>) -> Option<Btic> {
     match value? {
         Value::Temporal(TemporalValue::Btic { lo, hi, meta }) => Btic::new(*lo, *hi, *meta).ok(),
         _ => None,
@@ -835,6 +835,12 @@ impl KnowledgeBase {
         let closed = crate::schema::btic::btic_invalidate(old_interval, now);
         let mut updates: HashMap<String, Value> = HashMap::new();
         updates.insert("valid_at".into(), btic_to_value(&closed));
+        // Stamp the node-level invalidation audit (recorded even when there
+        // is no successor fact, i.e. no INVALIDATES edge below).
+        updates.insert("invalidated_at".into(), crate::types::datetime_value(now));
+        if let Some(r) = reason {
+            updates.insert("invalidation_reason".into(), Value::String(r.to_string()));
+        }
         self.update_node(stale_fact, &updates).await?;
 
         if let Some(new_fact) = replacement {

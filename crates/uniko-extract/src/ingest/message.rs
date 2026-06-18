@@ -351,7 +351,7 @@ pub async fn create_chunks_in_tx(
 /// JSON numbers split across `Value::Int` (when they fit in `i64` and
 /// have no fractional part) or `Value::Float` otherwise. Nulls become
 /// `Value::Null`; arrays / objects recurse.
-fn json_to_uni_value(v: &serde_json::Value) -> Value {
+pub(crate) fn json_to_uni_value(v: &serde_json::Value) -> Value {
     match v {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),

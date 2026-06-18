@@ -13,11 +13,13 @@
 
 mod blob_store_roundtrip;
 mod btic_tests;
+mod deletion_tests;
 mod locy_tests;
 mod migration_artifact_content;
 mod schema_artifact_content;
 mod schema_completeness;
 mod schema_tests;
+mod scope_tests;
 mod search_tests;
 mod storage_tests;
 mod traversal_tests;

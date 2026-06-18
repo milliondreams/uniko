@@ -63,7 +63,7 @@ async fn debug_single_hop_misses() {
             eprintln!(
                 "  #{:2} [{:7}] {:.4} | {}",
                 i + 1,
-                item.node_type,
+                format!("{:?}", item.kind),
                 item.score,
                 short
             );

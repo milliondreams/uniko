@@ -44,6 +44,14 @@ uni-db = { version = "2.2.1", features = ["mimalloc"] }
 # pinned to whatever uni-db currently depends on (see
 # `../uni/Cargo.toml`).
 uni-xervo = { version = "0.15.0", default-features = false }
+# Tiered PDF extraction (native text -> OCR -> doc-VLM). Pulls only traits +
+# the pure-Rust native (lopdf) + rasterizer (hayro) tiers; the inference
+# providers ride on `uni-xervo` itself. Built against the same crates.io
+# uni-xervo 0.15.0, so the `OcrModel` / `ModelRuntime` types unify.
+uni-xervo-pdf = { version = "0.15.0", default-features = false, features = [
+    "pdf-input",
+    "hayro",
+] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -55,6 +63,11 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Identifiers
 uuid = { version = "1", features = ["v7"] }
+
+# MIME / content-type taxonomy
+mime = "0.3"
+mime_guess = "2"
+infer = "0.16"
 
 # Error handling
 thiserror = "2"

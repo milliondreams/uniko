@@ -19,7 +19,7 @@ use std::collections::HashSet;
 
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
-use crate::recall::{ContextBundle, RecallItem};
+use crate::recall::{ContextBundle, RecallItem, RecallKind};
 
 /// Viewer identity used for filtering.
 ///
@@ -127,7 +127,7 @@ pub async fn filter_bundle(
     let policy_node_ids: Vec<NodeId> = bundle
         .items
         .iter()
-        .filter(|i| matches!(i.node_type.as_str(), "Fact" | "Observation"))
+        .filter(|i| matches!(i.kind, RecallKind::Fact | RecallKind::Observation))
         .map(|i| i.node_id)
         .collect();
     if policy_node_ids.is_empty() {
@@ -145,11 +145,62 @@ pub async fn filter_bundle(
     Ok(())
 }
 
+/// Drop soft-forgotten items from a [`ContextBundle`], unconditionally.
+///
+/// Unlike [`filter_bundle`], this runs for *every* recall regardless of
+/// viewer scope, because forgetting is content redaction, not access
+/// control. Forgotten Facts/Observations carry a `redacted:`-scheme
+/// `visibility`; forgotten Messages/Chunks carry a `redacted = true` flag.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Storage`] when a lookup fails.
+pub async fn filter_redacted(
+    kb: &KnowledgeBase,
+    bundle: &mut ContextBundle,
+) -> Result<(), UnikoError> {
+    let flag_ids: Vec<NodeId> = bundle
+        .items
+        .iter()
+        .filter(|i| matches!(i.kind, RecallKind::Message | RecallKind::Chunk))
+        .map(|i| i.node_id)
+        .collect();
+    let vis_ids: Vec<NodeId> = bundle
+        .items
+        .iter()
+        .filter(|i| matches!(i.kind, RecallKind::Fact | RecallKind::Observation))
+        .map(|i| i.node_id)
+        .collect();
+    if flag_ids.is_empty() && vis_ids.is_empty() {
+        return Ok(());
+    }
+
+    let redacted = kb.fetch_redacted(&flag_ids).await?;
+    let visibilities = if vis_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        kb.fetch_visibilities(&vis_ids).await?
+    };
+
+    let before = bundle.items.len();
+    bundle.items.retain(|item| match item.kind {
+        RecallKind::Message | RecallKind::Chunk => !redacted.contains(&item.node_id),
+        RecallKind::Fact | RecallKind::Observation => !visibilities
+            .get(&item.node_id)
+            .is_some_and(|v| v.starts_with("redacted:")),
+        _ => true,
+    });
+    if bundle.items.len() != before {
+        bundle.total_tokens = bundle.items.len() * 50;
+    }
+    Ok(())
+}
+
 fn visibility_for<'a>(
     item: &RecallItem,
     visibilities: &'a std::collections::HashMap<NodeId, String>,
 ) -> Option<&'a String> {
-    if !matches!(item.node_type.as_str(), "Fact" | "Observation") {
+    if !matches!(item.kind, RecallKind::Fact | RecallKind::Observation) {
         return None;
     }
     visibilities.get(&item.node_id)

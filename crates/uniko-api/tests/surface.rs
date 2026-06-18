@@ -15,17 +15,28 @@ fn facade_entry_points_are_exported() {
     assert_exists::<uniko_api::tools::UnikoBuilder>();
     assert_exists::<uniko_api::tools::Session>();
     assert_exists::<uniko_api::tools::Turn>();
-    assert_exists::<uniko_api::tools::Document>();
-    assert_exists::<uniko_api::tools::PdfSource>();
+    assert_exists::<uniko_api::tools::ObserveResult>();
     assert_exists::<uniko_api::tools::Agent>();
     assert_exists::<uniko_api::tools::LlmSpec>();
     assert_exists::<uniko_api::tools::RecallScope>();
     assert_exists::<uniko_api::tools::ContextBundle>();
-    assert_exists::<uniko_api::tools::QueryOutcome>();
-    // Method return / field types must be nameable.
-    assert_exists::<uniko_api::tools::FactUpsert>();
-    assert_exists::<uniko_api::tools::GeneratedAnswer>();
+    assert_exists::<uniko_api::tools::Answer>();
+    // Recall item provenance: typed kind + source lineage.
+    assert_exists::<uniko_api::tools::RecallItem>();
+    assert_exists::<uniko_api::tools::RecallKind>();
+    assert_exists::<uniko_api::tools::RecallSource>();
     assert_exists::<uniko_api::tools::RecallTier>();
+    // Addressed-retrieval views (agent.data()).
+    assert_exists::<uniko_api::tools::MessageView>();
+    assert_exists::<uniko_api::tools::ArtifactView>();
+    // Goal/task lifecycle surface (agent.goals()).
+    assert_exists::<uniko_api::tools::GoalView>();
+    assert_exists::<uniko_api::tools::TaskView>();
+    assert_exists::<uniko_api::tools::GoalPhase>();
+    assert_exists::<uniko_api::tools::TaskPhase>();
+    assert_exists::<uniko_api::tools::GoalContext>();
+    assert_exists::<uniko_api::tools::CreateGoalParams>();
+    assert_exists::<uniko_api::tools::CreateTaskParams>();
     assert_exists::<uniko_api::tools::AtomicIngestResult>();
     assert_exists::<uniko_api::tools::ArtifactIngestResult>();
     assert_exists::<uniko_api::tools::PdfIngestResult>();
@@ -37,4 +48,18 @@ fn facade_entry_points_are_exported() {
     // Error / id types must be nameable for handling and storing results.
     assert_exists::<uniko_api::tools::UnikoError>();
     assert_exists::<uniko_api::tools::NodeId>();
+    // Per-call scoping surface.
+    assert_exists::<uniko_api::tools::Scope>();
+    assert_exists::<uniko_api::tools::Dimensions>();
+    // Delete / forget surface.
+    assert_exists::<uniko_api::tools::DeletionReport>();
+    // Content-type taxonomy + unified ingest surface.
+    assert_exists::<uniko_api::tools::Mime>();
+    assert_exists::<uniko_api::tools::Modality>();
+    assert_exists::<uniko_api::tools::ContentType>();
+    assert_exists::<uniko_api::tools::IngestSource>();
+    assert_exists::<uniko_api::tools::IngestData>();
+    assert_exists::<uniko_api::tools::IngestOutcome>();
+    assert_exists::<uniko_api::tools::IngestContext>();
+    assert_exists::<uniko_api::tools::ModalityRegistry>();
 }

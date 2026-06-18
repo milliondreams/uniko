@@ -26,3 +26,4 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+mime = { workspace = true }
