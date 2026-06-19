@@ -47,7 +47,8 @@
 // as `Agent` / `Session` methods rather than as free functions taking a
 // `&KnowledgeBase`, so the public surface never exposes the store handle.
 pub use uniko_memory::{
-    AbductionResult, Agent, Answer, ArtifactIngestResult, ArtifactView, AssumeBuilder,
+    AbducedModification, AbductionResult, Agent, Answer, ArtifactIngestResult, ArtifactView,
+    AssumeBuilder,
     AtomicIngestResult, ContentType, ContextBundle, CreateGoalParams, CreateTaskParams,
     DeletionReport, DerivationNode, DerivationTree, Dimensions, EmbeddingConfig, GoalContext,
     GoalPhase, GoalView, IngestContext, IngestData, IngestOutcome, IngestSource, LlmSpec,

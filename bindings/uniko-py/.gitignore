@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target/
+
+# Python virtualenv + caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Compiled extension produced by `maturin develop` (editable install)
+*.so
+*.pyd
+*.dylib
+
+# Build / dist
+/dist/
+*.egg-info/

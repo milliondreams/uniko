@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use uni_db::Value;
+use uni_db::locy::CommandResult;
 
 use crate::error::{Result, UnikoError};
 use crate::locy::Record;
@@ -61,8 +62,16 @@ impl<'a> AssumeBuilder<'a> {
     ///
     /// Returns [`UnikoError::Locy`] on evaluation failure.
     pub async fn run(self) -> Result<Vec<Record>> {
+        // Locy grammar is `ASSUME { mutations } THEN <body>` where the body is a
+        // braced block (e.g. `THEN { MATCH (n) RETURN n }`). Splice the query in
+        // as that body, wrapping it in braces unless the caller already did.
         let program = if let Some(ref q) = self.query {
-            format!("{}\n{}", self.assume_block, q)
+            let body = q.trim();
+            if body.starts_with('{') {
+                format!("{} THEN {}", self.assume_block, body)
+            } else {
+                format!("{} THEN {{ {body} }}", self.assume_block)
+            }
         } else {
             self.assume_block.clone()
         };
@@ -77,7 +86,18 @@ impl<'a> AssumeBuilder<'a> {
             .await
             .map_err(|e| UnikoError::Locy(e.to_string()))?;
 
-        Ok(result.rows().map(|rs| rs.to_vec()).unwrap_or_default())
+        // The `THEN` body's rows surface as a `CommandResult::Assume`, not via
+        // `LocyResult::rows()` (which finds only the `Query` goal command). Pull
+        // the assume (or plain query) command's rows directly.
+        let rows = result
+            .command_results()
+            .iter()
+            .find_map(|cr| match cr {
+                CommandResult::Assume(rows) | CommandResult::Query(rows) => Some(rows.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        Ok(rows)
     }
 }
 

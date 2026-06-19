@@ -21,5 +21,5 @@ pub struct RuleInfo {
     pub name: String,
 }
 
-pub use abduce::{AbductionResult, DerivationNode, DerivationTree};
+pub use abduce::{AbducedModification, AbductionResult, DerivationNode, DerivationTree};
 pub use assume::AssumeBuilder;

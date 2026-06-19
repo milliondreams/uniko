@@ -1,22 +1,35 @@
-//! Abductive reasoning: given a conclusion, find minimal supporting facts.
+//! Abductive reasoning: given a conclusion, find the graph modifications that
+//! would make it hold.
 
 use std::collections::HashMap;
 
 use uni_db::Value;
+use uni_db::locy::CommandResult;
 
 use crate::error::{Result, UnikoError};
 use crate::storage::KnowledgeBase;
-use crate::types::NodeId;
 
-/// Result of abductive reasoning.
+/// Result of abductive reasoning: ranked, validated graph modifications.
+///
+/// `ABDUCE <rule> WHERE …` asks "what changes to the graph would satisfy this
+/// rule?" and returns each candidate modification, whether it was validated
+/// against the goal, and a ranking cost.
 #[derive(Debug, Clone)]
 pub struct AbductionResult {
-    /// Facts that support the conclusion.
-    pub supporting_facts: Vec<(NodeId, HashMap<String, Value>)>,
-    /// Confidence in the abduction.
-    pub confidence: f64,
-    /// Human-readable explanation.
-    pub explanation: String,
+    /// The proposed modifications, in the engine's ranked order.
+    pub modifications: Vec<AbducedModification>,
+}
+
+/// One proposed graph modification with its validation status and cost.
+#[derive(Debug, Clone)]
+pub struct AbducedModification {
+    /// The modification, serialized (`add_edge` / `remove_edge` /
+    /// `change_property` plus its variant-specific fields).
+    pub modification: serde_json::Value,
+    /// Whether applying it (via savepoint) satisfies the ABDUCE goal.
+    pub validated: bool,
+    /// Ranking cost (`RemoveEdge` = 1.0, `ChangeProperty` = 0.5, `AddEdge` = 1.5).
+    pub cost: f64,
 }
 
 /// A derivation tree explaining how a rule derived a result.
@@ -40,9 +53,10 @@ pub struct DerivationNode {
 }
 
 impl KnowledgeBase {
-    /// Find the minimal set of facts supporting a conclusion.
+    /// Find the graph modifications that would make a conclusion hold.
     ///
-    /// Runs the ABDUCE program via Locy and returns the supporting facts.
+    /// Runs the `ABDUCE` program via Locy and returns the proposed
+    /// modifications (decoded from the `Abduce` command result).
     ///
     /// # Errors
     ///
@@ -62,26 +76,31 @@ impl KnowledgeBase {
             .await
             .map_err(|e| UnikoError::Locy(e.to_string()))?;
 
-        let mut supporting = Vec::new();
-        if let Some(command_results) = result.rows() {
-            for record in command_results {
-                let nid = record
-                    .get("vid")
-                    .and_then(|v: &Value| v.as_i64())
-                    .unwrap_or(0);
-                supporting.push((nid, record.clone()));
-            }
-        }
+        // ABDUCE output lands in a `CommandResult::Abduce`, not `rows()`.
+        let modifications = result
+            .command_results()
+            .iter()
+            .find_map(|cr| match cr {
+                CommandResult::Abduce(abduction) => Some(abduction),
+                _ => None,
+            })
+            .map(|abduction| {
+                abduction
+                    .modifications
+                    .iter()
+                    .map(|vm| AbducedModification {
+                        // `Modification` derives `Serialize`; fall back to its
+                        // `Debug` form if serialization ever fails.
+                        modification: serde_json::to_value(&vm.modification).unwrap_or_else(|_| {
+                            serde_json::Value::String(format!("{:?}", vm.modification))
+                        }),
+                        validated: vm.validated,
+                        cost: vm.cost,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        let count = supporting.len();
-        // TODO(abduction): MVP placeholder. Real abduction will score
-        // the explanation by support strength + rule-derived priors;
-        // until that lands we surface the unconditional 1.0 so the
-        // shape matches what downstream callers eventually want.
-        Ok(AbductionResult {
-            supporting_facts: supporting,
-            confidence: 1.0,
-            explanation: format!("Found {count} supporting facts"),
-        })
+        Ok(AbductionResult { modifications })
     }
 }

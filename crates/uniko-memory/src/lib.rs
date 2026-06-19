@@ -92,7 +92,7 @@ pub use uniko_store::{DeletionReport, NodeId, UnikoError};
 pub use uniko_store::Value;
 #[doc(no_inline)]
 pub use uniko_store::locy::{
-    AbductionResult, AssumeBuilder, DerivationNode, DerivationTree, Record,
+    AbducedModification, AbductionResult, AssumeBuilder, DerivationNode, DerivationTree, Record,
 };
 // Config presets surfaced so end users touch only the facade crate.
 #[doc(inline)]

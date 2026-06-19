@@ -1,0 +1,48 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "uniko"
+dynamic = ["version"]
+description = "Python bindings for uniko cognitive memory"
+authors = [
+    { name = "Dragonscale Industries Inc.", email = "dev@dragonscale.ai" },
+]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Database",
+]
+
+[project.urls]
+Homepage = "https://www.rustic.ai"
+Documentation = "https://rustic-ai.github.io/uniko"
+Repository = "https://github.com/rustic-ai/uniko"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.0,<2.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-xdist>=3.8.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.maturin]
+# The compiled extension lives at `uniko._uniko`; the hand-written Python
+# package under `python/uniko/` re-exports it and carries the type stubs.
+module-name = "uniko._uniko"
+python-source = "python"

@@ -11,13 +11,24 @@ homepage.workspace = true
 documentation.workspace = true
 keywords.workspace = true
 categories.workspace = true
-# Work-in-progress PyO3 skeleton (Phase 4) — not functional yet, not published.
+# Async-first PyO3 SDK over the `Uniko` facade. Built and distributed as a
+# maturin wheel (`uniko._uniko`); not a crates.io publish target.
 publish = false
 
 [lib]
-name = "uniko"
+name = "_uniko"
 crate-type = ["cdylib"]
 
 [dependencies]
-uniko-api = { workspace = true }
-pyo3 = { workspace = true }
+# The single facade dependency. `onnx` forwards to uniko-extract's ort-backed
+# extraction adapters; the embedding/NLP runtime itself rides in via uni-db's
+# default provider-onnx (statically linked).
+uniko-api = { workspace = true, features = ["onnx"] }
+# `extension-module` comes from the workspace pin; `abi3-py310` builds a single
+# wheel per platform spanning CPython >= 3.10 (matches the sibling uni-db wheel).
+pyo3 = { workspace = true, features = ["abi3-py310"] }
+# Version-locked to pyo3 0.29; bridges Rust futures to Python awaitables.
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
+tokio = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }

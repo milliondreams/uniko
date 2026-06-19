@@ -15,3 +15,12 @@ categories.workspace = true
 [dependencies]
 uniko-cortex = { workspace = true }
 uniko-memory = { workspace = true }
+
+[features]
+# Forward the ONNX content-extraction path (ort/tokenizers/ndarray) through the
+# facade so downstream consumers — notably the `uniko-py` Python binding — can
+# request it without naming the engine crates. Chains to
+# `uniko-memory/onnx` -> `uniko-extract/onnx`. Note: the embedding/NLP runtime
+# is already statically linked via uni-db's default `provider-onnx`; this only
+# adds uniko-extract's own ort-backed extraction adapters.
+onnx = ["uniko-memory/onnx"]
