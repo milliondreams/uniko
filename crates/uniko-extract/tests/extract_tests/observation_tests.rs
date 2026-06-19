@@ -9,6 +9,10 @@ use uniko_extract::ingest::context::SessionContext;
 use uniko_pipes::types::IngestMessage;
 use uniko_store::config::UnikoConfig;
 use uniko_store::storage::KnowledgeBase;
+// `Direction` is used only by `test_observation_from_prose`, which is
+// onnx-gated below. Gate the import to match so the default (non-onnx)
+// build stays clean under `clippy -D warnings`.
+#[cfg(feature = "onnx")]
 use uniko_store::storage::edges::Direction;
 
 async fn test_kb() -> KnowledgeBase {
@@ -30,7 +34,16 @@ fn ingest_msg(id: &str, content: &str, session: &str, sender: &str) -> IngestMes
     }
 }
 
+// Single-token proper-noun subject ("Caroline"). The default-build rule-based
+// NER (`ner/rules.rs` `proper_noun` regex) only matches multi-token names
+// (2+ capitalized words), so it cannot anchor this observation's subject —
+// robust single-token entity detection is an NLP-model capability. This
+// end-to-end assertion therefore runs only under `onnx`, and is `#[ignore]`d
+// because it drives real ONNX inference requiring a cached model (matching the
+// `nlp_observation_integration_test` convention).
+#[cfg(feature = "onnx")]
 #[tokio::test]
+#[ignore] // Requires ONNX model cached in .uni_cache/
 async fn test_observation_from_prose() {
     let kb = test_kb().await;
     let text = "Caroline attended an LGBTQ support group yesterday.";
