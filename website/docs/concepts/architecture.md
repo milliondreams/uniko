@@ -87,7 +87,7 @@ The cognitive heart. It depends on `uniko-cortex`, `uniko-extract`, `uniko-pipes
 - **`PipelineSystem`** — the root orchestrator. It owns all workers, bounded channels, the LLM circuit breaker, and worker handles; it is the single entry point for submitting ingest and consolidation tasks. Submission is non-blocking via bounded channels with backpressure.
 - **Recall** (`recall`, `query`) — the 3-phase recall cascade with coverage gating and drift override; `answer_query`, `record_query_episode`.
 - **Consolidation** (`consolidation`, `fact`) — fact derivation, contradiction handling, drift detection, and reinforcement/decay.
-- **Subjective-state tools** (`action`, `agent`, `episode`, `goal`, `observation`, `task`, `summary`, `working_memory`) — the things only an agent can decide to record: `record_episode`, `assert_fact`/`invalidate_fact`, `add_observation`, `create_goal`, `create_task`, `record_action`, `working_memory`, `generate_session_summary`.
+- **Subjective-state tools** (`action`, `agent`, `episode`, `goal`, `observation`, `task`, `summary`) — the things only an agent can decide to record: `record_episode`, `assert_fact`/`invalidate_fact`, `add_observation`, `create_goal`, `create_task`, `record_action`, `generate_session_summary`. The `Uniko` facade surfaces goals/tasks through `agent.goals()` and by-id retrieval through `agent.data()`.
 - **Rules** (`rules`) and **policy** (`policy`).
 - **`nl_to_cypher`** — natural-language-to-Cypher translation.
 
@@ -105,7 +105,7 @@ It depends on `uniko-store` only. The consolidation worker in `uniko-memory` cal
 
 ### uniko-api — public facade
 
-The agent-facing surface, containing **no logic** — only re-exports. It wildcard-re-exports `uniko-cortex`, and its `tools` module re-exports the subjective-state tools from `uniko-memory` (`record_episode`, `assert_fact`, `add_observation`, `create_goal`, `create_task`, `record_action`, `working_memory`, `generate_session_summary`, the `rules` and `policy` items, and the `nl_to_cypher` helpers). Downstream consumers depend on this crate rather than reaching into the cognitive stack directly.
+The agent-facing surface, containing **no logic** — only re-exports. The `Uniko` facade (`Uniko`, `Agent`, `Session`, `Turn`, `Data`, `Goals`, and the recall/answer types) is the single public entry point. Its `tools` module also re-exports the lower-level subjective-state functions from `uniko-memory` (`record_episode`, `assert_fact`, `add_observation`, `create_goal`, `create_task`, `record_action`, `generate_session_summary`, the `rules` and `policy` items, and the `nl_to_cypher` helpers). Downstream consumers depend on this crate rather than reaching into the cognitive stack directly.
 
 ### uniko-bench — benchmarks
 

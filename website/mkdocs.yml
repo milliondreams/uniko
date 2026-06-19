@@ -27,7 +27,9 @@ nav:
       - Recall: pipelines/recall.md
   - Guides:
       - Overview: guides/index.md
+      - Working with the Facade: guides/facade.md
       - Agent Tools: guides/agent-tools.md
+      - Recall & Retrieval: guides/retrieval.md
       - Reasoning with Locy: guides/reasoning-with-locy.md
       - Configuration: guides/configuration.md
   - Reference:

@@ -125,8 +125,8 @@ filter_bundle(&kb, &mut bundle, &viewer).await?;
 
 `filter_bundle` mutates the bundle in place:
 
-1. It collects the `node_id`s of items whose `node_type` is `"Fact"` or
-   `"Observation"`. If there are none, it returns immediately.
+1. It collects the `node_id`s of items whose `kind` is `Fact` or
+   `Observation`. If there are none, it returns immediately.
 2. It batch-fetches their `visibility` properties in a single store call
    (`fetch_visibilities`), keeping the filter O(items).
 3. It retains each policy item only when `visibility_admits` accepts it for the
@@ -136,7 +136,7 @@ filter_bundle(&kb, &mut bundle, &viewer).await?;
 
 ```mermaid
 flowchart LR
-    A[ContextBundle] --> B{node_type in Fact, Observation?}
+    A[ContextBundle] --> B{kind in Fact, Observation?}
     B -- no --> K[keep]
     B -- yes --> C[fetch_visibilities batch]
     C --> D{visibility_admits viewer?}

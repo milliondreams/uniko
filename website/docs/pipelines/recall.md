@@ -278,7 +278,8 @@ let cfg = RecallConfig::from_uniko_config(&uniko_cfg);
 let bundle = recall(&kb, "What pet does Caroline have?", &cfg).await?;
 
 for item in &bundle.items {
-    println!("[{:?}] {:.3} {}", item.tier, item.score, item.content);
+    // each item carries its `kind` (Chunk/Fact/…) and the `sources` it traces to
+    println!("[{:?}] {:.3} {}", item.kind, item.score, item.content);
 }
 println!("coverage={:.2} tokens={}", bundle.coverage, bundle.total_tokens);
 ```
@@ -302,15 +303,16 @@ There are two entry points:
   `recall_coverage`, `recall_tokens`, and (when supplied) the answer model's token usage.
 - **`answer_query`** — convenience wrapper that runs `recall` + the caller's generator closure
   + (optional) `record_query_episode` in one call. uniko deliberately does **not** own LLM
-  selection or prompts; the generator is a closure so the caller brings their own model.
+  selection or prompts; the generator is a closure so the caller brings their own model. (The
+  facade's `agent.answer(...)` wraps this with the configured LLM and returns the same `Answer`.)
 
 Recording is **opt-in** — pass `QueryRecordOptions` to enable it. Recording failures are
-logged at debug and surface as `episode_id = None`; they never break a user-visible answer.
+logged at debug and surface as `recorded_episode = None`; they never break a user-visible answer.
 
 ```rust
 use uniko_memory::{answer_query, GeneratedAnswer, QueryRecordOptions};
 
-let outcome = answer_query(
+let answer = answer_query(
     &kb,
     question,
     &recall_config,
@@ -330,7 +332,7 @@ let outcome = answer_query(
     }),
 ).await?;
 
-// outcome.bundle, outcome.answer, outcome.episode_id
+// returns an `Answer`: answer.text, answer.context, answer.recorded_episode
 ```
 
 !!! note "Why recording lives in `uniko-memory`"

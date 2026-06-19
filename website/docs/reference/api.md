@@ -1,362 +1,330 @@
 # API Reference
 
-uniko is a Rust library, so its API is the set of crates you link and the functions you call —
-there is no service to wire up. This page catalogs the public surface a downstream consumer
-actually touches: opening a [`KnowledgeBase`](#knowledgebase-lifecycle), driving an ingest pipeline
-through `PipelineSystem`, and reading memory back through `recall` and `answer_query`. Every
-signature is reproduced from the source.
+uniko is a Rust library, so its API is the set of crates you link and the methods you call — there
+is no service to wire up. The public surface is the **`Uniko` facade**: one owning handle from which
+you mint agents, open sessions, observe turns, and read memory back. Every signature below is
+reproduced from the source.
 
-Two crates matter for callers:
+One crate matters for callers:
 
-- **`uniko-api`** — the public facade. It contains no logic; it re-exports the cognitive
-  stack (`uniko-cortex` and below) plus a curated [`tools`](#agent-tools) module of
-  agent-facing functions. Depend on this crate and you get the whole reachable surface.
-- **`uniko-memory`** — where the lifecycle, recall, query, working-memory, summary, and
-  agent-tool entry points live. `uniko-api::tools` re-exports the subset you most often
-  reach for.
+- **`uniko-api`** — the public facade. It contains no logic; its `tools` module re-exports the
+  curated surface (`Uniko`, `Agent`, `Session`, the view/result types). Depend on this crate and you
+  get the whole reachable surface. The same types are re-exported from `uniko-memory`, which is where
+  they're defined.
 
-Storage primitives (`KnowledgeBase`, `Value`, `Transaction`, `NodeId`) come from
-**`uniko-store`**, which seals uni-db behind a typed surface.
+The lower-level engine (`KnowledgeBase`, `PipelineSystem`, the `recall`/`answer_query` free
+functions) is still available for embedded/advanced use — see [Engine internals](#engine-internals).
 
 !!! note
-    Every signature below is reproduced from the source. Parameter structs use
-    `..Default::default()` patterns heavily — most fields are optional and documented inline
-    in the crate's rustdoc. Only the load-bearing shape is shown here.
+    Parameter structs use `..Default::default()` heavily — most fields are optional and documented
+    inline in the crate's rustdoc. Only the load-bearing shape is shown here.
 
 ---
 
-## KnowledgeBase lifecycle
+## Uniko — the instance
 
-A `KnowledgeBase` is the handle every other call takes. It wraps uni-db, registers the full
-uniko schema on creation, and (by default) eagerly warms the embedding / model runtime.
+`Uniko` owns the store, the model runtime, and the ingest pipeline. Build one, mint agents from it,
+and `shutdown` when done.
 
-=== "In-memory"
-
-    ```rust
-    use uniko_store::{KnowledgeBase, config::UnikoConfig};
-
-    let kb = KnowledgeBase::in_memory(UnikoConfig::default()).await?;
-    ```
-
-=== "Persistent"
+=== "Zero-config"
 
     ```rust
-    use uniko_store::{KnowledgeBase, config::UnikoConfig};
+    use uniko_memory::Uniko;
 
-    let kb = KnowledgeBase::open("./data/kb", UnikoConfig::default()).await?;
+    let memory = Uniko::in_memory().await?;        // ephemeral
+    let memory = Uniko::open("./data/kb").await?;  // persistent
     ```
 
-| Constructor | Signature | Description |
+=== "Builder"
+
+    ```rust
+    use uniko_memory::{EmbeddingConfig, LlmSpec, Uniko};
+
+    let memory = Uniko::builder()
+        .path("./data/kb")
+        .embedding(EmbeddingConfig::bge_small_en_v15())
+        .llm(LlmSpec::openai("llm/default", "gpt-4o-mini", None))
+        .streaming(true)
+        .scope_to_agent()
+        .build()
+        .await?;
+    ```
+
+| Method | Signature | Description |
 | --- | --- | --- |
-| `in_memory` | `async fn in_memory(config: UnikoConfig) -> Result<Self>` | Ephemeral KB; registers schema, prefetches models. |
-| `in_memory_with_xervo` | `async fn in_memory_with_xervo(config: UnikoConfig, extra_catalog: Vec<ModelAliasSpec>) -> Result<Self>` | As above, merging extra model aliases (e.g. an LLM for answer synthesis). |
-| `open` | `async fn open(path: impl AsRef<Path>, config: UnikoConfig) -> Result<Self>` | Open or create a persistent KB; schema registration is idempotent. |
-| `open_with_xervo` | `async fn open_with_xervo(path, config, extra_catalog) -> Result<Self>` | Persistent open with extra model aliases. |
-| `open_with_xervo_no_prefetch` | `async fn open_with_xervo_no_prefetch(path, config, extra_catalog) -> Result<Self>` | Persistent open that skips model pre-warming; models load lazily on first use. |
-| `open_with_runtime` | `async fn open_with_runtime(...)` | Open against a shared `ModelRuntime` (multi-KB workflows sharing one ONNX session). |
+| `open` | `async fn open(path: impl AsRef<Path>) -> Result<Self, UnikoError>` | Persistent, zero-config defaults. |
+| `in_memory` | `async fn in_memory() -> Result<Self, UnikoError>` | Ephemeral, zero-config defaults. |
+| `builder` | `fn builder() -> UnikoBuilder` | Configure capabilities, then `build()`. |
+| `agent` | `fn agent(&self, agent_id: impl Into<String>) -> Agent` | Mint an agent identity (cheap). |
+| `config` | `fn config(&self) -> &UnikoConfig` | The resolved configuration. |
+| `purge` | `async fn purge(&self) -> Result<DeletionReport, UnikoError>` | Wipe all data (dev/test). |
+| `shutdown` | `async fn shutdown(self) -> Result<(), UnikoError>` | Drain workers and close. Needs sole ownership — drop agents/sessions first. |
 
-!!! note
-    `ModelAliasSpec` (the `extra_catalog` element type for the xervo constructors above) comes
-    from `uni_db` directly — the one type you import past the sealed `uniko-store` surface, for
-    registering extra model aliases.
+**`UnikoBuilder`** (chainable): `.path(p)` / `.in_memory()` (location) · `.embedding(EmbeddingConfig)`
+· `.llm(LlmSpec)` (enables `answer()`) · `.raw_config(UnikoConfig)` (full override) ·
+`.streaming(bool)` (enables `submit`/`flush`) · `.scope_to_agent()` / `.scope(RecallScope)`
+(read visibility) · `.extractor(Arc<dyn ModalityExtractor>)` (pluggable modality) · `.build()`.
 
-`generate` runs a completion through the model runtime registered on the KB:
-
-```rust
-use uniko_store::xervo::{GenerationOptions, Message};
-
-let text: String = kb
-    .generate("llm/default", &[Message::user("Summarise…")], GenerationOptions::default())
-    .await?;
-```
+**`LlmSpec`** constructors: `openai(alias, model_id, base_url: Option<&str>)` (reads
+`OPENAI_API_KEY`) · `openai_with_key_env(alias, model_id, base_url, key_env)` ·
+`mistralrs(alias, model_id)` (local model).
 
 ---
 
-## PipelineSystem
+## Agent
 
-`PipelineSystem` is the orchestration root: it owns the ingest worker, the consolidation
-worker, bounded channels with backpressure, an LLM circuit breaker, and health tracking.
-Submitting a task is non-blocking.
+An `Agent` binds an identity to the store. Reads can be scoped to what that agent may see.
 
 ```rust
-use std::sync::Arc;
-use uniko_pipes::PipelineConfig;
-use uniko_memory::pipeline::PipelineSystem;
-
-let ps = PipelineSystem::new(PipelineConfig::default(), Arc::new(kb), vec![]);
-ps.submit_ingest(task)?;        // enqueue a message / artifact / pdf
-// …
-ps.shutdown().await?;           // graceful drain
+let agent = memory.agent("assistant");
+let bundle = agent.recall("what does the user prefer?").await?;
+let answer = agent.answer("when is the deadline?").await?;   // needs .llm(...)
 ```
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `new` | `fn new(config: PipelineConfig, kb: Arc<KnowledgeBase>, ingest_steps: Vec<Box<dyn Step>>) -> Self` | Spawn workers and begin processing immediately. |
-| `submit_ingest` | `fn submit_ingest(&self, task: IngestTask) -> Result<(), UnikoError>` | Enqueue an ingest task; `Err` on backpressure / shutdown. |
-| `submit_consolidation` | `fn submit_consolidation(&self, task: ConsolidationTask) -> Result<(), UnikoError>` | Enqueue a consolidation task. |
-| `health` | `fn health(&self) -> PipelineHealth` | Aggregate queue depth, circuit state, and uptime. |
-| `shutdown` | `async fn shutdown(self) -> Result<(), String>` | Drain workers within the configured timeout. |
+| `recall` | `async fn recall(&self, query: &str) -> Result<ContextBundle, UnikoError>` | Ranked, prompt-ready context. |
+| `recall_in` | `async fn recall_in(&self, query: &str, scope: Scope) -> Result<ContextBundle, UnikoError>` | Recall confined to a session/participant/time scope. |
+| `answer` | `async fn answer(&self, question: &str) -> Result<Answer, UnikoError>` | Recall + the configured LLM. |
+| `answer_in` | `async fn answer_in(&self, question: &str, scope: Scope) -> Result<Answer, UnikoError>` | Scoped `answer`. |
+| `query` | `async fn query(&self, cypher: &str) -> Result<Vec<Record>, UnikoError>` | Read-only Cypher against the graph. |
+| `query_in` | `async fn query_in(&self, cypher: &str, scope: &Scope) -> Result<Vec<Record>, UnikoError>` | Binds the scope's allow-set as `$allow`. |
+| `session` | `fn session(&self, session_id: impl Into<String>) -> Session` | Open a conversation thread. |
+| `data` | `fn data(&self) -> Data<'_>` | Addressed retrieval — see [Data](#data-retrieval). |
+| `goals` | `fn goals(&self) -> Goals<'_>` | Goal/task lifecycle — see [Goals](#goals-tasks). |
+| `delete_session` | `async fn delete_session(&self, session_id: &str) -> Result<DeletionReport, UnikoError>` | Delete a whole conversation. |
+| `forget_participant` | `async fn forget_participant(&self, participant_id: &str) -> Result<DeletionReport, UnikoError>` | GDPR erasure of a person's data. |
+| `agent_id` | `fn agent_id(&self) -> &str` | The bound participant id. |
 
-An `IngestTask` is an enum over the three ingest kinds:
-
-```rust
-pub enum IngestTask {
-    Message(IngestMessage),   // a conversation Message
-    Artifact(IngestArtifact), // a file / document / URL / snippet
-    Pdf(IngestPdf),           // a PDF document
-}
-```
-
-A `ConsolidationTask` requests a consolidation cycle — either reactively
-(`ObservationsReady`) or explicitly (`ForceConsolidate { agent_id }`, `RunCycle { agent_id }`).
-
-!!! tip
-    The consolidation worker is the heartbeat: after a successful cycle it triggers the cortex
-    sweeps (procedure promotion, topic detection) under a per-agent throttle. You enqueue
-    work; the system schedules the downstream cognition.
+**Logic surface:** `define_rule(name, source)` → `NodeId` · `run_rule(name, &cols, params)` →
+`Vec<Record>` · `assume(block) -> AssumeBuilder` (what-if, rolled back) ·
+`abduce(program, params) -> AbductionResult`. See [Reasoning with Locy](../guides/reasoning-with-locy.md).
 
 ---
 
-## Recall
+## Session & Turn
 
-Recall runs the 3-phase cascade (Compact → Expand → Broaden) with coverage gating and returns
-a ranked `ContextBundle`.
+A `Session` is a conversation thread. `observe` is durable (commits before returning); the streaming
+verbs need `.streaming(true)`.
 
 ```rust
-use uniko_memory::recall::{recall, RecallConfig};
+let mut session = agent.session("chat-42");
+let result = session
+    .observe(Turn::new("alice", "here's the spec").attach(IngestSource::path("spec.pdf")))
+    .await?;
+session.ingest(IngestSource::path("handbook.md")).await?;   // standalone document
+```
 
-let bundle = recall(&kb, "what does the user prefer?", &RecallConfig::default()).await?;
+| Method | Signature | Description |
+| --- | --- | --- |
+| `observe` | `async fn observe(&mut self, turn: Turn) -> Result<ObserveResult, UnikoError>` | Ingest a conversational turn (+ attachments); read-after-write. |
+| `submit` | `async fn submit(&self, turn: Turn) -> Result<(), UnikoError>` | Streaming fire-and-forget turn. |
+| `submit_source` | `async fn submit_source(&self, source: IngestSource) -> Result<(), UnikoError>` | Streaming blob. |
+| `flush` | `async fn flush(&self) -> Result<(), UnikoError>` | Barrier: drain the streaming pipeline. |
+| `ingest` | `async fn ingest(&self, source: IngestSource) -> Result<IngestOutcome, UnikoError>` | Load a standalone document. |
+| `summarize` | `async fn summarize(&self) -> Result<Option<NodeId>, UnikoError>` | Build/refresh the session Summary. |
+| `forget_turn` | `async fn forget_turn(&self, message_id: &str) -> Result<DeletionReport, UnikoError>` | Soft-redact (hidden from recall, lineage kept). |
+| `delete_turn` | `async fn delete_turn(&self, message_id: &str) -> Result<DeletionReport, UnikoError>` | Hard-delete + cascade. |
+| `delete_document` | `async fn delete_document(&self, artifact_id: &str) -> Result<DeletionReport, UnikoError>` | Delete an ingested document. |
+
+**`Turn`** (builder): `Turn::new(sender, content)` · `.id(message_id)` (idempotency) ·
+`.content_type(s)` · `.at(DateTime<Utc>)` · `.addressed_to(Vec<String>)` ·
+`.metadata(k, serde_json::Value)` · `.attach(IngestSource)` · `.attachments(iter)`.
+
+**`ObserveResult`** `{ message: AtomicIngestResult, attachments: Vec<IngestOutcome> }` — each
+attachment's `IngestOutcome::Artifact(_).artifact_id` is the handle for later retrieval.
+
+---
+
+## Recall results
+
+`recall`/`recall_in` return a `ContextBundle` of ranked items, each carrying **what** it is (`kind`)
+and **where** it came from (`sources`).
+
+```rust
 for item in &bundle.items {
-    println!("[{:?}] {} — {}", item.tier, item.score, item.content);
+    println!("[{:?}] {}", item.kind, item.content);
+    for src in &item.sources { /* RecallSource::Message | Attachment | Document */ }
 }
 ```
 
-| Symbol | Signature / shape | Description |
+| Type | Shape | Description |
 | --- | --- | --- |
-| `recall` | `async fn recall(kb: &KnowledgeBase, query: &str, config: &RecallConfig) -> Result<ContextBundle, UnikoError>` | Run the cascade; applies the `viewer` access-control gate before returning. |
-| `RecallConfig` | struct | Cascade tuning: `limit`, `token_budget`, `min_score`, hybrid `vector_weight`/`bm25_weight`, reranker, query variants, per-phase gates, and `viewer` scope. `Default` ships sensible values (`limit: 15`, `token_budget: 8192`). |
-| `ContextBundle` | `{ items: Vec<RecallItem>, total_tokens: usize, coverage: f64, … }` | Ranked result set plus coverage and token accounting. |
-| `RecallItem` | `{ node_id: NodeId, node_type: String, score: f64, content: String, tier: RecallTier }` | One recalled node. |
-| `RecallTier` | enum | `Semantic` / `Procedural` / `Episodic` / `KnowledgeBase` / `Provenance` — drives the scoring weight via `RecallTier::weight()`. |
+| `ContextBundle` | `{ items: Vec<RecallItem>, total_tokens, coverage, phase1_only, phase2_only }` | Ranked result set + accounting. |
+| `RecallItem` | `{ node_id: NodeId, kind: RecallKind, score: f64, content: String, sources: Vec<RecallSource> }` | One recalled node. `primary_source()` returns the first. |
+| `RecallKind` | `Chunk · Observation · Fact · Procedure · Topic · Episode · Message · Other` | What it is. `is_derived()` ⇒ true for Fact/Procedure/Topic/Observation; `tier()` ⇒ its `RecallTier`. |
+| `RecallSource` | `Message { message_id, chunk_id? }` · `Attachment { message_id, artifact_id, chunk_id? }` · `Document { artifact_id, chunk_id? }` | Lineage — 1 for a chunk, many for a Fact. |
+| `RecallTier` | `Semantic · Procedural · Episodic · KnowledgeBase · Provenance` | Scoring weight band. |
+
+**Scoping (`Scope`)** — chainable, passed to the `_in` variants: `.sessions([...])` ·
+`.participants([...])` · `.since(DateTime)` · `.until(DateTime)` · `.as_viewer(Viewer)`.
+`Dimensions` holds the resolved filters; `ViewerScope` is `Unrestricted | As(Viewer)`.
 
 !!! warning
-    `RecallConfig::viewer` defaults to `ViewerScope::Unrestricted` — recall does **not** filter
-    Fact/Observation visibility unless you set `viewer` to a concrete participant. Always set a
-    viewer when answering on behalf of a specific user; treat post-filtering with
-    [`filter_bundle`](#access-control-policy) as a fallback for direct lookups, not a substitute
-    for scoping recall itself.
+    Unscoped reads default to `ViewerScope::Unrestricted` — recall does **not** filter
+    Fact/Observation visibility unless you scope to a viewer (`recall_in(.., Scope::default().as_viewer(v))`
+    or build with `.scope_to_agent()`).
 
 ---
 
-## Query
+## Answer
 
-The query layer pairs recall with answer generation and records the result as an Episode —
-the input that procedure promotion learns from. Recording is opt-in.
+`agent.answer(...)` returns an `Answer` — the generated text plus the grounding context, citable.
 
 ```rust
-use uniko_memory::{answer_query, QueryRecordOptions, GeneratedAnswer};
-
-let outcome = answer_query(
-    &kb,
-    question,
-    &recall_config,
-    |bundle, q| async move {
-        // your own LLM call; uniko-memory does not own model selection
-        let text = kb.generate("llm/default", &messages, opts).await?;
-        Ok(GeneratedAnswer { text, input_tokens: None, output_tokens: None, model: None })
-    },
-    Some(QueryRecordOptions { participant_id: "agent-1".into(), ..Default::default() }),
-).await?;
+let ans = agent.answer("when is the deadline?").await?;
+println!("{}", ans.text);
+for src in ans.citations() { /* deduped grounding sources */ }
 ```
 
-| Symbol | Signature / shape | Description |
+| Field / method | Type | Description |
 | --- | --- | --- |
-| `answer_query` | `async fn answer_query<G, Fut>(kb, question: &str, recall_config: &RecallConfig, generator: G, record: Option<QueryRecordOptions>) -> Result<QueryOutcome, UnikoError>` | Run recall, hand the bundle to your generator closure, and optionally record an Episode. |
-| `record_query_episode` | `async fn record_query_episode(kb, agent_id: &str, params: RecordQueryEpisodeParams<'_>) -> Result<NodeId, UnikoError>` | The primitive: materialise an Episode from a question / answer / recall pair you already own. |
-| `QueryOutcome` | `{ bundle: ContextBundle, answer: GeneratedAnswer, episode_id: Option<NodeId> }` | Recall bundle, generated answer, and the new Episode id when recording succeeded. |
-| `GeneratedAnswer` | `{ text: String, input_tokens: Option<u64>, output_tokens: Option<u64>, model: Option<String> }` | What a generator closure returns. |
-| `QueryRecordOptions` | `{ participant_id: String, action_type, outcome, importance, extra_state }` | Opt-in recording config; the Participant must already exist. |
-| `RecordQueryEpisodeParams<'a>` | struct | Inputs for the primitive: `question`, `answer`, `recall_node_ids`, coverage / token / token-usage metadata. |
+| `text` | `String` | The synthesized answer. |
+| `context` | `ContextBundle` | The recall bundle that grounded it (items carry `kind` + `sources`). |
+| `model` / `input_tokens` / `output_tokens` | `Option<…>` | Generation telemetry. |
+| `recorded_episode` | `Option<NodeId>` | Set when query-episode recording was opted in and succeeded. |
+| `citations()` | `fn citations(&self) -> Vec<&RecallSource>` | Deduped grounding sources, in bundle order. |
 
 !!! note
-    The generator is a closure, not a trait, so uniko-memory never owns LLM selection or
-    system prompts. Recording failure surfaces as `episode_id = None` (logged at debug) — it
-    never breaks a user-visible answer.
+    `citations()` reports the grounding context (what the model was shown), not model-attributed
+    citations — the model isn't asked which items it used.
 
 ---
 
-## Working memory
+## Data — retrieval
 
-Working memory is **not** a stored node — it is computed live by traversing the graph from a
-Goal outward through its Tasks, Sessions, Messages, Facts, and Entities. The result reflects
-the current graph on every call.
+`agent.data()` dereferences the ids that recall hands back.
 
 ```rust
-use uniko_memory::{working_memory, WorkingMemoryParams};
-
-let bundle = working_memory(&kb, WorkingMemoryParams::new("goal-1")).await?;
+let view = agent.data().artifact("spec.pdf").await?;        // Option<ArtifactView>
+let bytes = agent.data().artifact_bytes("spec.pdf").await?; // Option<Vec<u8>>
+let msg = agent.data().message("m-12").await?;              // Option<MessageView>
 ```
 
-| Symbol | Signature / shape | Description |
+| Method | Signature | Description |
 | --- | --- | --- |
-| `working_memory` | `async fn working_memory(kb: &KnowledgeBase, params: WorkingMemoryParams) -> Result<ContextBundle, UnikoError>` | Assemble the goal-anchored working-memory bundle. |
-| `WorkingMemoryParams` | `{ goal_id: String, budget: Option<usize>, include_subgoals: bool, per_tier_limit: usize }` | `new(goal_id)` defaults to budget `None` (→ 8192 tokens), `include_subgoals: true`, `per_tier_limit: 25`. |
+| `message` | `async fn message(&self, message_id: &str) -> Result<Option<MessageView>, UnikoError>` | A turn: sender, content, session, recipients, attachments. |
+| `artifact` | `async fn artifact(&self, artifact_id: &str) -> Result<Option<ArtifactView>, UnikoError>` | Metadata + reassembled text + the message it was attached to. |
+| `artifact_bytes` | `async fn artifact_bytes(&self, artifact_id: &str) -> Result<Option<Vec<u8>>, UnikoError>` | The original blob. |
 
-An absent goal returns an empty bundle (`coverage = 0.0`) rather than an error, so callers can
-poll while a goal is being created.
+**`MessageView`** `{ message_id, sender_id, content, timestamp, session_id, addressed_to: Vec<String>,
+attachments: Vec<String> }` · **`ArtifactView`** `{ artifact_id, kind, mime: Option<String>,
+path: Option<String>, text: String, attached_to_message: Option<String> }`.
 
 ---
 
-## Summaries
+## Goals & tasks
 
-`generate_session_summary` builds (or refreshes) a Summary for a Session — the F59 capability
-Phase-3 recall falls back to when finer-grained Observations/Facts under-cover a query.
-
-```rust
-use uniko_memory::generate_session_summary;
-use chrono::Utc;
-
-let summary = generate_session_summary(&kb, "session-1", Utc::now(), None).await?;
-```
-
-| Symbol | Signature | Description |
-| --- | --- | --- |
-| `generate_session_summary` | `async fn generate_session_summary(kb: &KnowledgeBase, session_id: &str, now: DateTime<Utc>, llm_alias: Option<&str>) -> Result<Option<NodeId>, UnikoError>` | Extractive by default (deterministic, offline). With `llm_alias` set **and** the `llm` feature built, the material is rewritten abstractively. Idempotent on a stable `summary_id`. Returns `None` when the session has no summarisable content. |
-
----
-
-## Agent tools
-
-Pipelines handle what can be *inferred* from messages; agent tools handle what only the agent
-can *decide* to record. These are re-exported by both `uniko-memory` and `uniko-api::tools`.
-Most tools take `agent_id` referring to a Participant that must already exist, and return the
-new node id. The exceptions are `assert_fact` and `invalidate_fact`, which take no `agent_id`
-and return `FactUpsert` and `()` respectively.
+`agent.goals()` is the goal/task lifecycle surface — create, transition, read sliced by phase, and
+expand a goal's working context.
 
 ```rust
-use uniko_api::tools::{assert_fact, AssertFactParams};
-
-let upsert = assert_fact(&kb, AssertFactParams {
-    subject: "user".into(),
-    predicate: "prefers".into(),
-    object: Some("dark mode".into()),
-    ..Default::default()
-}).await?;
+let g = agent.goals().create(CreateGoalParams { title: "Ship the release".into(), ..Default::default() }).await?;
+agent.goals().complete("goal-1", Some(serde_json::json!({ "shipped": true }))).await?;
+let active = agent.goals().active().await?;              // Vec<GoalView>
+let ctx = agent.goals().context("goal-1").await?;        // Option<GoalContext>
 ```
 
-| Function | Signature | Description |
-| --- | --- | --- |
-| `add_observation` | `async fn add_observation(kb, agent_id: &str, params: AddObservationParams) -> Result<NodeId, UnikoError>` | Record an explicit Observation anchored to a Message. |
-| `assert_fact` | `async fn assert_fact(kb, params: AssertFactParams) -> Result<FactUpsert, UnikoError>` | Upsert a `(subject, predicate, object)` Fact, embed it, and wire provenance. |
-| `invalidate_fact` | `async fn invalidate_fact(kb, params: InvalidateFactParams) -> Result<(), UnikoError>` | Retract a Fact by closing its bitemporal validity interval (F37). |
-| `create_goal` | `async fn create_goal(kb, agent_id: &str, params: CreateGoalParams) -> Result<NodeId, UnikoError>` | Create a Goal, wire `OWNED_BY` (and optional `PARENT_GOAL`), embed. |
-| `create_task` | `async fn create_task(kb, agent_id: &str, params: CreateTaskParams) -> Result<NodeId, UnikoError>` | Create a Task, wire `ASSIGNED_TO` and optional `PART_OF`/`DEPENDS_ON`/`SUBTASK_OF`. |
-| `record_episode` | `async fn record_episode(kb, agent_id: &str, params: RecordEpisodeParams) -> Result<NodeId, UnikoError>` | Record an Episode (action + outcome + state) and embed it. |
-| `record_action` | `async fn record_action(kb, agent_id: &str, params: RecordActionParams) -> Result<RecordActionResult, UnikoError>` | Record an Action node, wire its edges, and overflow large output to an Artifact. |
-
-Parameter structs (selected fields; all derive `Default`):
-
-| Struct | Key fields |
+| Group | Methods |
 | --- | --- |
-| `AddObservationParams` | `message_id`, `content`, `subject`, `predicate?`, `object?`, `confidence?` |
-| `AssertFactParams` | `subject`, `predicate`, `object?`, `observation_count?`, `supporting_observation_ids` |
-| `InvalidateFactParams` | `fact_id`, `replacement_fact_id?`, `reason?`, `now?` |
-| `CreateGoalParams` | `title`, `description?`, `status?`, `metrics?`, `guardrails?`, `deadline?`, `parent_goal_id?` |
-| `CreateTaskParams` | `title`, `description?`, `status?`, `priority?`, `goal_id?`, `depends_on_task_id?`, `subtask_of_task_id?` |
-| `RecordEpisodeParams` | `action_type`, `outcome?`, `state?`, `delta?`, `importance?`, `involved_action_ids` |
-| `RecordActionParams` | `action_type`, `input?`, `output?`, `status?`, `triggered_by_message_id?`, `session_id?`, `previous_action_id?` |
-| `RecordActionResult` | `{ action_node: NodeId, overflow_artifact: Option<NodeId> }` |
+| **Read** | `all()` · `in_phase(GoalPhase)` · `active()` · `planned()` · `completed()` · `get(id)` · `tasks()` · `tasks_in(TaskPhase)` · `tasks_of(goal_id)` · `context(goal_id)` |
+| **Transition** (→ `Result<bool>`, `false` = unknown id) | `start(id)` · `complete(id, Option<Json>)` · `abandon(id)` · `set_status(id, &str)` · `start_task` · `complete_task` · `block_task` · `set_task_status` |
+| **Create** | `create(CreateGoalParams) -> NodeId` · `create_task(CreateTaskParams) -> NodeId` |
 
-### Agent facade
+**`GoalView`** `{ goal_id, title, description?, status, phase: GoalPhase, created_at?, deadline?,
+completed_at?, metrics: Option<Json> }` · **`TaskView`** `{ task_id, title, description?, status,
+phase: TaskPhase, priority?, goal_id?, created_at?, completed_at? }` · **`GoalContext`**
+`{ goal: GoalView, tasks: Vec<TaskView>, sessions, recent_messages, facts, entities }`.
 
-`Agent` binds a `KnowledgeBase` and an `agent_id` so you don't repeat the id on every call.
+**`GoalPhase`** `Planned · Active · Completed · Abandoned` · **`TaskPhase`** `Planned · Active ·
+Completed · Blocked` — derived from the free-form `status` (+ `completed_at`); the raw `status` stays
+exposed.
 
-```rust
-use uniko_memory::Agent;
+!!! note "Participant must exist"
+    `create`/`create_task` require the agent's `Participant` to exist — `observe()` creates it on
+    first sight. A pure-planning agent should observe at least once, or seed the participant.
 
-let agent = Agent::new(kb, "agent-1");
-let goal = agent.create_goal(CreateGoalParams { title: "Ship the release".into(), ..Default::default() }).await?;
-```
+---
 
-`Agent` exposes the same operations as methods (`create_goal`, `create_task`, `assert_fact`,
-`invalidate_fact`, `add_observation`, `record_episode`, `record_action`, `working_memory`,
-`recall`), each delegating to the free function with the bound `agent_id`.
+## Ingest sources
+
+A single blob type drives both `Turn::attach` and `Session::ingest`.
+
+| Constructor | Description |
+| --- | --- |
+| `IngestSource::text(s)` / `::bytes(b)` / `::path(p)` | Build from text, bytes, or a file. |
+| `.with_mime(m)` / `.with_id(id)` / `.with_path(p)` | Override MIME, set the artifact id, set a display path. |
+
+`IngestOutcome` is `Artifact(ArtifactIngestResult)` · `Pdf(PdfIngestResult)` · `Unsupported`; the
+result types carry `artifact_id` + node ids. MIME is resolved explicit → magic-bytes → extension →
+text, then routed (text/markdown/code/json → artifact, PDF → tiered extractor, image/audio/video →
+a registered `ModalityExtractor`).
+
+---
+
+## Recording primitives (low-level)
+
+Beyond `agent.goals()`, the subjective-state **free functions** are available at the `uniko_memory`
+crate root for fine-grained recording. Each takes `(&kb, agent_id, params)` (except `assert_fact` /
+`invalidate_fact`, which take no `agent_id`) and the Participant must already exist.
+
+| Function | Returns | Description |
+| --- | --- | --- |
+| `create_goal` / `create_task` | `NodeId` | The primitives behind `agent.goals().create*`. |
+| `assert_fact` | `FactUpsert` | Upsert a `(subject, predicate, object)` Fact. |
+| `invalidate_fact` | `()` | Close a Fact's bitemporal validity interval. |
+| `add_observation` | `NodeId` | An explicit Observation anchored to a Message. |
+| `record_episode` | `NodeId` | An Episode (action + outcome + state). |
+| `record_action` | `RecordActionResult` | An Action node; large output overflows to an Artifact. |
+
+See [Agent Tools](../guides/agent-tools.md) for the parameter structs and edge wiring.
 
 ---
 
 ## Access-control policy
 
-Facts and Observations carry a `visibility` property (`public` / `private:{id}` /
-`team:{id}` / `org:{id}`). The policy module filters a `ContextBundle` against a viewer
-(F66). `recall` applies this automatically when `RecallConfig::viewer` is set; you can also
-apply it directly.
-
-```rust
-use uniko_memory::policy::{Viewer, filter_bundle};
-
-let viewer = Viewer::new(&kb, "participant-1").await?;
-filter_bundle(&kb, &mut bundle, &viewer).await?;
-```
+Facts/Observations carry a `visibility` (`public` / `private:{id}` / `team:{id}` / `org:{id}`).
+Scoped reads filter automatically; you can also apply it directly.
 
 | Symbol | Signature | Description |
 | --- | --- | --- |
-| `Viewer::new` | `async fn new(kb: &KnowledgeBase, participant_id: impl Into<String>) -> Result<Self, UnikoError>` | Resolve a viewer's team / org memberships from the graph. |
-| `Viewer::from_parts` | `fn from_parts(participant_id, teams, orgs) -> Self` | Build a viewer from already-resolved memberships (no round-trip). |
-| `filter_bundle` | `async fn filter_bundle(kb, bundle: &mut ContextBundle, viewer: &Viewer) -> Result<(), UnikoError>` | Remove items the viewer cannot see (Fact / Observation only); recomputes token count. |
-| `visibility_admits` | `fn visibility_admits(visibility: Option<&str>, viewer: &Viewer) -> bool` | Decide whether a single visibility tag admits the viewer. Unknown schemes fail closed. |
+| `Viewer::new` | `async fn new(kb, participant_id) -> Result<Self, UnikoError>` | Resolve team/org memberships from the graph. |
+| `Viewer::from_parts` | `fn from_parts(participant_id, teams, orgs) -> Self` | Build from already-resolved memberships. |
+| `visibility_admits` | `fn visibility_admits(visibility: Option<&str>, viewer: &Viewer) -> bool` | Whether a tag admits the viewer. Unknown schemes fail closed. |
 
 ---
 
-## Rules (lifecycle)
+## Errors & ids
 
-Authored or induced Locy rules carry a confidence that decays each cycle and earns promotion
-through match success.
-
-| Symbol | Signature | Description |
-| --- | --- | --- |
-| `add_rule` | `async fn add_rule(kb, params: AddRuleParams) -> Result<NodeId, UnikoError>` | Register a rule in `candidate` status and load its Locy source; bad syntax returns `UnikoError::Locy` and leaves no node behind. |
-| `apply_decay_cycle` | `async fn apply_decay_cycle(kb, cfg: RuleLifecycleConfig) -> Result<DecayReport, UnikoError>` | One decay pass over every non-stdlib rule, applying demote / repromote / prune transitions. |
-| `record_rule_match` | `async fn record_rule_match(kb, name: &str, cfg: RuleLifecycleConfig) -> Result<(), UnikoError>` | Reset `missed_cycles` and reward a rule that bound a match this cycle. |
-| `AddRuleParams` | `{ rule_id?, name, source, natural_language?, source_type, initial_confidence? }` | Rule registration inputs. |
-| `RuleLifecycleConfig` | `{ decay_per_cycle, demote_threshold, repromote_threshold, prune_after_days }` | Defaults: `0.95` / `0.40` / `0.60` / `90`. |
-| `DecayReport` | `{ decayed, demoted, promoted, pruned }` | Per-cycle transition counts. |
+| Re-export | Use |
+| --- | --- |
+| `UnikoError` | The crate-wide error type every method returns. |
+| `NodeId` | Internal node id (`i64`) returned by create/ingest. |
+| `DeletionReport` | What a delete/forget changed. |
+| `Value`, `Record` | Graph value type and a query result row (`query`/`run_rule`). |
 
 ---
 
-## NL → Cypher
+## Engine internals
 
-A read-only natural-language-to-Cypher translator, guarded against mutating output.
+`Uniko` wraps the low-level engine, which remains public for embedded/advanced use. These are the
+mechanisms the facade exists to hide — reach for them only when you need to.
 
-| Symbol | Signature | Description |
+| Symbol | Where | Wrapped by |
 | --- | --- | --- |
-| `translate` | `async fn translate(kb, nl_query: &str, llm_alias: &str) -> Result<String, UnikoError>` | Translate a question to read-only Cypher (cached by normalised input). Re-exported as `translate_nl_to_cypher`. |
-| `is_safe_read_only` | `fn is_safe_read_only(cypher: &str) -> bool` | Reject any query containing a mutating keyword (`CREATE`, `MERGE`, `DELETE`, `SET`, …). |
+| `KnowledgeBase` (`uniko_store`) | the graph + model runtime handle | `Uniko` |
+| `PipelineSystem` (`uniko_memory`) | ingest/consolidation workers, channels, circuit breaker | `Uniko` (streaming) |
+| `recall(&kb, q, &RecallConfig)` | the 3-phase cascade free function | `Agent::recall` |
+| `answer_query(&kb, q, &cfg, generator, record)` | recall + a generator closure (returns `GeneratedAnswer`) → `Answer` | `Agent::answer` |
+| `ingest_message_atomic(&kb, &msg, &mut ctx)` | the single-transaction ingest path | `Session::observe` |
 
-!!! warning
-    `translate` produces a **read-only Cypher string** and never executes it — the caller runs
-    the returned query. `is_safe_read_only` guards the output, rejecting any mutating keyword as
-    a defence against hallucinated or injected writes.
-
----
-
-## Sealed storage types
-
-`uniko-store` re-exports the only uni-db value types higher crates legitimately name, so
-consumers write `use uniko_store::…` and never reach into uni-db directly.
-
-| Re-export | From | Use |
-| --- | --- | --- |
-| `KnowledgeBase` | `uniko_store::storage` | The graph handle every call takes. |
-| `Value`, `Transaction`, `RetryOptions` | `uni_db` | Graph value type, write transactions, retry policy. |
-| `ModelRuntime` | `uni_xervo::runtime` | Shared ONNX session for multi-KB workflows. |
-| `temporal::{Btic, TemporalValue}` | `uni_db::common` | Bitemporal interval types on `valid_at` columns. |
-| `xervo::{GenerationOptions, Message}` | `uni_db::xervo` | Prompt / generation types for `KnowledgeBase::generate`. |
-| `Result`, `UnikoError` | `uniko_store::error` | The crate-wide error type. |
+See [Pipelines](../pipelines/index.md) for the engine's ingest/consolidation/recall internals.
 
 ---
 
 ## See also
 
-- [Architecture](../concepts/architecture.md) — how these layers fit together.
-- [Recall](../pipelines/recall.md) — the cascade behind `recall` / `working_memory`.
-- [Consolidation](../pipelines/consolidation.md) — what the consolidation worker does.
+- [Recall & Retrieval](../guides/retrieval.md) — `recall`/`answer`, provenance, and `data()`.
+- [Agent Tools](../guides/agent-tools.md) — goals/tasks and the recording primitives.
+- [Architecture](../concepts/architecture.md) — how the layers fit together.
+- [Schema](schema.md) — the node and edge catalog.

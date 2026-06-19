@@ -1,7 +1,7 @@
 # Getting Started
 
 By the end of this section you will have a working memory layer running inside your own Rust
-process: a `KnowledgeBase` open on disk, a conversation ingested at **$0 in LLM cost**, and a
+process: a `Uniko` instance open on disk, a conversation observed at **$0 in LLM cost**, and a
 question answered from compiled knowledge — with no LLM in the recall path. It takes about fifteen
 minutes, most of which is a one-time model download.
 
@@ -17,7 +17,7 @@ Add uniko to your Cargo workspace and pull in the uni-db engine it builds on.
 </div>
 <div class="feature-card" markdown>
 ### [Quick Start](quickstart.md)
-Open a `KnowledgeBase`, ingest a `Message`, and run your first recall — end to end in Rust.
+Build a `Uniko` instance, observe a `Turn`, and run your first recall — end to end in Rust.
 </div>
 </div>
 
@@ -28,9 +28,9 @@ Open a `KnowledgeBase`, ingest a `Message`, and run your first recall — end to
 
 ## How to get started (5–15 minutes)
 
-1. **[Install](installation.md)** — add two crates. Nothing to deploy. uniko targets the Rust 2024
-   edition on the stable toolchain.
-2. **[Quick Start](quickstart.md)** — ingest a few `Message`s and answer a question end to end,
+1. **[Install](installation.md)** — add the `uniko-api` crate. Nothing to deploy. uniko targets the
+   Rust 2024 edition on the stable toolchain.
+2. **[Quick Start](quickstart.md)** — observe a few `Turn`s and answer a question end to end,
    seeing the compile-once / query-forever flow in action.
 3. **[Learn the model](../concepts/architecture.md)** — understand how `Message`s become
    `Observation`s, `Fact`s, and `Procedure`s, and how the recall cascade assembles a

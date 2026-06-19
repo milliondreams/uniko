@@ -1,7 +1,7 @@
 # Installation
 
-**There is nothing to deploy.** uniko is a Rust library: you add two crates to `Cargo.toml`, open
-a [`KnowledgeBase`](../concepts/architecture.md), and the entire memory system — storage, vector
+**There is nothing to deploy.** uniko is a Rust library: you add a crate to `Cargo.toml`, build
+a [`Uniko`](../reference/api.md) instance, and the entire memory system — storage, vector
 and hybrid search, local NLP extraction, and the recall cascade — runs inside your process, backed
 by the embedded [uni-db](https://github.com/rustic-ai/uni-db) engine and the uni-xervo model
 runtime. No server, no daemon, no external vector store.
@@ -34,23 +34,46 @@ stable toolchain that supports it.
     uniko-api = { git = "https://github.com/rustic-ai/uniko" }
     ```
 
-## Open a KnowledgeBase
+## Build a Uniko instance
 
-Opening a knowledge base is the entry point. Everything else hangs off the `KnowledgeBase` handle:
+The `Uniko` facade is the entry point. Everything else hangs off the handle — `memory.agent(id)`
+for an agent, `agent.session(id)` for a conversation:
 
 ```rust
-use uniko_store::{KnowledgeBase, config::UnikoConfig};
+use uniko_memory::Uniko;
 
-# async fn demo() -> uniko_store::Result<()> {
-// Persistent KB on disk. Registers the schema (idempotent) and
-// eagerly warms the embedding / NLP models.
-let kb = KnowledgeBase::open("./memory.db", UnikoConfig::default()).await?;
+# async fn demo() -> Result<(), uniko_store::UnikoError> {
+// Persistent on disk, zero-config defaults. Registers the schema
+// (idempotent) and eagerly warms the embedding / NLP models.
+let memory = Uniko::open("./memory.db").await?;
 
-// Or an ephemeral in-memory KB, e.g. for tests:
-let kb = KnowledgeBase::in_memory(UnikoConfig::default()).await?;
+// Or ephemeral, e.g. for tests:
+let memory = Uniko::in_memory().await?;
 # Ok(())
 # }
 ```
+
+Reach for the builder to tune capabilities — the embedder, an LLM for `answer()`, streaming ingest,
+or a fully custom config:
+
+```rust
+use uniko_memory::{EmbeddingConfig, LlmSpec, Uniko};
+
+# async fn demo() -> Result<(), uniko_store::UnikoError> {
+let memory = Uniko::builder()
+    .path("./memory.db")
+    .embedding(EmbeddingConfig::bge_small_en_v15())
+    .llm(LlmSpec::openai("llm/default", "gpt-4o-mini", None))
+    .build()
+    .await?;
+# Ok(())
+# }
+```
+
+!!! note "The low-level engine is still there"
+    `Uniko` wraps a `KnowledgeBase` (the `uniko-store` engine) plus the ingest pipeline. For embedded
+    or advanced use you can drive `uniko_store::KnowledgeBase` and `uniko_memory::PipelineSystem`
+    directly — see [Engine internals](../reference/api.md#engine-internals).
 
 !!! tip "Runs fully offline by default"
     Out of the box — BGE-small embeddings, the INT8 NLP cascade, the MiniLM reranker, and **no**
@@ -206,7 +229,7 @@ nothing to install separately for the default CPU build.
 <div class="feature-grid" markdown>
 <div class="feature-card" markdown>
 ### [Quickstart](quickstart.md)
-Open a `KnowledgeBase` and record your first memory.
+Build a `Uniko` instance and record your first memory.
 </div>
 <div class="feature-card" markdown>
 ### [Architecture](../concepts/architecture.md)

@@ -43,7 +43,8 @@ flowchart TD
 
 The whole flow lives in `crate::ingest::atomic::ingest_message_atomic`, which takes a
 `&KnowledgeBase`, an `&IngestMessage`, and a `&mut SessionContext`, and returns an
-`AtomicIngestResult`.
+`AtomicIngestResult`. The facade's `session.observe(Turn::new(...))` wraps this — the
+`AtomicIngestResult` it produces is returned as `ObserveResult.message`.
 
 ```rust
 use uniko_extract::ingest::atomic::ingest_message_atomic;

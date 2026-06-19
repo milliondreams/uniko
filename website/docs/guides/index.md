@@ -18,9 +18,19 @@ inside the database, and the knobs that govern the pipelines.
 
 <div class="feature-grid" markdown>
 <div class="feature-card" markdown>
+### [Working with the Facade](facade.md)
+The full tour of the `Uniko` facade — build, observe, recall/answer, retrieve, plan, and curate —
+with the mental model that ties them together. Start here.
+</div>
+<div class="feature-card" markdown>
 ### [Agent Tools](agent-tools.md)
-The supplement to the pipelines — `record_episode`, `record_action`, `add_observation`,
-`assert_fact`, `recall`, `working_memory`, and more, for knowledge an agent alone can give.
+The supplement to the pipelines — goals and tasks via `agent.goals()`, plus `record_episode`,
+`record_action`, `add_observation`, `assert_fact`, for knowledge an agent alone can give.
+</div>
+<div class="feature-card" markdown>
+### [Recall & Retrieval](retrieval.md)
+Reading memory back — `agent.recall`/`answer`, item `kind` + `sources` provenance, cited answers,
+and dereferencing sources with `agent.data()`.
 </div>
 <div class="feature-card" markdown>
 ### [Reasoning with Locy](reasoning-with-locy.md)
@@ -73,18 +83,19 @@ consolidation triggers, and the recall coverage gates. The guide maps every knob
 === "Building an agent"
 
     1. [Agent Tools](agent-tools.md) — wire `record_episode` / `record_action` into your
-       loop and call `recall` to retrieve.
-    2. [Configuration](configuration.md) — set the consolidation and cortex cadences for
+       loop and track goals with `agent.goals()`.
+    2. [Recall & Retrieval](retrieval.md) — `agent.recall`/`answer` and dereferencing sources.
+    3. [Configuration](configuration.md) — set the consolidation and cortex cadences for
        your workload.
-    3. [Reasoning with Locy](reasoning-with-locy.md) — understand what the stdlib rules do
+    4. [Reasoning with Locy](reasoning-with-locy.md) — understand what the stdlib rules do
        with the episodes you record.
 
 === "Tuning recall quality"
 
     1. [Configuration](configuration.md) — the Phase 1 (0.75) and Phase 2 (0.65) coverage
        thresholds and what they gate.
-    2. [Agent Tools](agent-tools.md) — `recall` and `working_memory`, the two retrieval
-       entry points.
+    2. [Recall & Retrieval](retrieval.md) — `agent.recall`/`recall_in` and the `ContextBundle`
+       it returns.
 
 !!! tip
     Procedural learning is opt-in and proportional to episode richness. If

@@ -148,46 +148,33 @@ Each result maps to a line item you care about: cost, latency, and operations.
 
 ---
 
-## Three calls: open, ingest, recall
+## Three calls: build, observe, recall
 
-A `KnowledgeBase` is one in-process handle. Open it, ingest messages atomically, recall a context
-bundle. No services, no network, no separate vector index to reconcile.
+A `Uniko` instance is one in-process handle. Build it, observe messages, recall a context bundle.
+No services, no network, no separate vector index to reconcile.
 
 ```rust
-use uniko_store::KnowledgeBase;
-use uniko_store::config::UnikoConfig;
-use uniko_extract::ingest::atomic::ingest_message_atomic;
-use uniko_extract::ingest::context::SessionContext;
-use uniko_memory::recall::{recall, RecallConfig};
-use uniko_pipes::types::IngestMessage;
-use chrono::Utc;
-use std::collections::HashMap;
+use uniko_memory::{Turn, Uniko};
 
-# async fn demo() -> uniko_store::Result<()> {
-// 1. Open an embedded knowledge base — no external services.
-let kb = KnowledgeBase::open("./agent-memory", UnikoConfig::default()).await?;
+# async fn demo() -> Result<(), uniko_store::UnikoError> {
+// 1. Build an embedded instance — no external services.
+let memory = Uniko::open("./agent-memory").await?;
+let agent = memory.agent("assistant");
+let mut session = agent.session("session-1");
 
-// 2. Ingest a message. Extraction (NER + NLP cascade + observations)
-//    runs locally, then one atomic transaction writes the Message,
-//    Entities, Observations, edges, and chunks — all-or-nothing,
-//    idempotent on `message_id`.
-let mut session_ctx = SessionContext::new("session-1".to_string(), 0);
-let msg = IngestMessage {
-    message_id: "m-1".to_string(),
-    content: "Caroline researched coral reef restoration in Belize.".to_string(),
-    content_type: "text".to_string(),
-    sender_id: "melanie".to_string(),
-    session_id: "session-1".to_string(),
-    addressed_to: None,
-    timestamp: Utc::now(),
-    metadata: HashMap::new(),
-};
-ingest_message_atomic(&kb, &msg, &mut session_ctx).await?;
+// 2. Observe a message. Extraction (NER + NLP cascade + observations)
+//    runs locally; one atomic transaction writes the Message, Entities,
+//    Observations, edges, and chunks — and commits before returning,
+//    idempotent on the turn id.
+session
+    .observe(Turn::new("melanie", "Caroline researched coral reef restoration in Belize."))
+    .await?;
 
-// 3. Recall compiled knowledge for a query — no LLM in this path.
-let bundle = recall(&kb, "What did Caroline research?", &RecallConfig::default()).await?;
+// 3. Recall compiled knowledge for a query — no LLM in this path. Each
+//    item carries its `kind` and the `sources` it traces back to.
+let bundle = agent.recall("What did Caroline research?").await?;
 for item in &bundle.items {
-    println!("{}: {}", item.node_type, item.content);
+    println!("[{:?}] {}", item.kind, item.content);
 }
 # Ok(())
 # }
