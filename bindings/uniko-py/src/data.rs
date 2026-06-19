@@ -14,7 +14,7 @@ use pyo3::types::PyBytes;
 use uniko_api::tools::Agent;
 
 use crate::errors::to_pyerr;
-use crate::macros::bridge;
+use crate::macros::{bridge, bridge_sync};
 use crate::outputs::{PyArtifactView, PyMessageView};
 
 /// Addressed (by-id) retrieval over an agent's store.
@@ -67,6 +67,45 @@ impl PyData {
         artifact_id: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         bridge!(py, agent = self.inner.clone(), {
+            let bytes = agent
+                .data()
+                .artifact_bytes(&artifact_id)
+                .await
+                .map_err(to_pyerr)?;
+            Python::attach(|py| match bytes {
+                Some(b) => Ok(PyBytes::new(py, &b).into_any().unbind()),
+                None => Ok(py.None()),
+            })
+        })
+    }
+
+    // ── Blocking (`*_sync`) skins ────────────────────────────────────
+
+    /// Blocking variant of [`message`](Self::message).
+    fn message_sync(&self, py: Python<'_>, message_id: String) -> PyResult<Py<PyAny>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let view = agent.data().message(&message_id).await.map_err(to_pyerr)?;
+            Python::attach(|py| match view {
+                Some(v) => PyMessageView::from_rust(py, &v).map(|p| p.into_any()),
+                None => Ok(py.None()),
+            })
+        })
+    }
+
+    /// Blocking variant of [`artifact`](Self::artifact).
+    fn artifact_sync(&self, py: Python<'_>, artifact_id: String) -> PyResult<Py<PyAny>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let view = agent.data().artifact(&artifact_id).await.map_err(to_pyerr)?;
+            Python::attach(|py| match view {
+                Some(v) => PyArtifactView::from_rust(py, &v).map(|p| p.into_any()),
+                None => Ok(py.None()),
+            })
+        })
+    }
+
+    /// Blocking variant of [`artifact_bytes`](Self::artifact_bytes).
+    fn artifact_bytes_sync(&self, py: Python<'_>, artifact_id: String) -> PyResult<Py<PyAny>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
             let bytes = agent
                 .data()
                 .artifact_bytes(&artifact_id)

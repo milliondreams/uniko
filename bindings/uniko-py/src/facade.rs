@@ -18,7 +18,7 @@ use uniko_api::tools::{LlmSpec, Uniko, UnikoBuilder, UnikoError};
 
 use crate::agent::PyAgent;
 use crate::errors::to_pyerr;
-use crate::macros::bridge;
+use crate::macros::{bridge, bridge_sync};
 use crate::outputs::PyDeletionReport;
 
 /// The `PyErr` raised when a handle is used after `shutdown`.
@@ -64,10 +64,28 @@ impl PyUniko {
         })
     }
 
+    /// Blocking variant of [`open`](Self::open).
+    #[staticmethod]
+    fn open_sync(py: Python<'_>, path: String) -> PyResult<PyUniko> {
+        bridge_sync!(py, _g = (), {
+            let uniko = Uniko::open(path).await.map_err(to_pyerr)?;
+            Ok(PyUniko::wrap(uniko))
+        })
+    }
+
     /// Open an ephemeral in-memory instance with best defaults.
     #[staticmethod]
     fn in_memory(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         bridge!(py, _g = (), {
+            let uniko = Uniko::in_memory().await.map_err(to_pyerr)?;
+            Ok(PyUniko::wrap(uniko))
+        })
+    }
+
+    /// Blocking variant of [`in_memory`](Self::in_memory).
+    #[staticmethod]
+    fn in_memory_sync(py: Python<'_>) -> PyResult<PyUniko> {
+        bridge_sync!(py, _g = (), {
             let uniko = Uniko::in_memory().await.map_err(to_pyerr)?;
             Ok(PyUniko::wrap(uniko))
         })
@@ -109,6 +127,15 @@ impl PyUniko {
         })
     }
 
+    /// Blocking variant of [`purge`](Self::purge).
+    fn purge_sync(&self, py: Python<'_>) -> PyResult<Py<PyDeletionReport>> {
+        let uniko = self.cloned()?;
+        bridge_sync!(py, instance = uniko, {
+            let report = instance.purge().await.map_err(to_pyerr)?;
+            Python::attach(|py| PyDeletionReport::from_rust(py, &report))
+        })
+    }
+
     /// Shut down the instance and drain the pipeline.
     ///
     /// Consumes the handle: all `Agent` / `Session` objects derived from it
@@ -117,6 +144,16 @@ impl PyUniko {
     fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let taken = self.inner.lock().expect("Uniko mutex poisoned").take();
         bridge!(py, _g = (), {
+            let uniko = taken.ok_or_else(closed)?;
+            uniko.shutdown().await.map_err(to_pyerr)?;
+            Ok(())
+        })
+    }
+
+    /// Blocking variant of [`shutdown`](Self::shutdown).
+    fn shutdown_sync(&self, py: Python<'_>) -> PyResult<()> {
+        let taken = self.inner.lock().expect("Uniko mutex poisoned").take();
+        bridge_sync!(py, _g = (), {
             let uniko = taken.ok_or_else(closed)?;
             uniko.shutdown().await.map_err(to_pyerr)?;
             Ok(())
@@ -212,6 +249,22 @@ impl PyUnikoBuilder {
                 pyo3::exceptions::PyRuntimeError::new_err("UnikoBuilder already consumed by build()")
             })?;
         bridge!(py, _g = (), {
+            let uniko = builder.build().await.map_err(to_pyerr)?;
+            Ok(PyUniko::wrap(uniko))
+        })
+    }
+
+    /// Blocking variant of [`build`](Self::build).
+    fn build_sync(&self, py: Python<'_>) -> PyResult<PyUniko> {
+        let builder = self
+            .inner
+            .lock()
+            .expect("UnikoBuilder mutex poisoned")
+            .take()
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("UnikoBuilder already consumed by build()")
+            })?;
+        bridge_sync!(py, _g = (), {
             let uniko = builder.build().await.map_err(to_pyerr)?;
             Ok(PyUniko::wrap(uniko))
         })

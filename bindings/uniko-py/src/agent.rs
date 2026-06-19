@@ -12,14 +12,14 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use uniko_api::tools::Agent;
+use uniko_api::tools::{Agent, NodeId};
 
 use crate::convert::{self, params_to_rust};
 use crate::data::PyData;
 use crate::errors::to_pyerr;
 use crate::goals::PyGoals;
 use crate::logic::PyAssumeBuilder;
-use crate::macros::bridge;
+use crate::macros::{bridge, bridge_sync};
 use crate::outputs::{PyAbductionResult, PyAnswer, PyContextBundle, PyDeletionReport};
 use crate::scope::PyScope;
 use crate::session::PySession;
@@ -211,6 +211,147 @@ impl PyAgent {
         participant_id: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         bridge!(py, agent = self.inner.clone(), {
+            let report = agent
+                .forget_participant(&participant_id)
+                .await
+                .map_err(to_pyerr)?;
+            Python::attach(|py| PyDeletionReport::from_rust(py, &report))
+        })
+    }
+
+    // ── Blocking (`*_sync`) skins ────────────────────────────────────
+    //
+    // Each is its async sibling's body run to completion on the shared
+    // runtime; see `bridge_sync!`. The return type is the body's resolved
+    // value rather than an awaitable.
+
+    /// Blocking variant of [`recall`](Self::recall).
+    fn recall_sync(&self, py: Python<'_>, query: String) -> PyResult<Py<PyContextBundle>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let bundle = agent.recall(&query).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyContextBundle::from_rust(py, &bundle))
+        })
+    }
+
+    /// Blocking variant of [`answer`](Self::answer).
+    fn answer_sync(&self, py: Python<'_>, question: String) -> PyResult<Py<PyAnswer>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let answer = agent.answer(&question).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyAnswer::from_rust(py, &answer))
+        })
+    }
+
+    /// Blocking variant of [`query`](Self::query).
+    fn query_sync(&self, py: Python<'_>, cypher: String) -> PyResult<Py<PyAny>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let rows = agent.query(&cypher).await.map_err(to_pyerr)?;
+            Python::attach(|py| convert::records_to_py(py, &rows))
+        })
+    }
+
+    /// Blocking variant of [`recall_in`](Self::recall_in).
+    fn recall_in_sync(
+        &self,
+        py: Python<'_>,
+        query: String,
+        scope: &PyScope,
+    ) -> PyResult<Py<PyContextBundle>> {
+        let scope = scope.snapshot();
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let bundle = agent.recall_in(&query, scope).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyContextBundle::from_rust(py, &bundle))
+        })
+    }
+
+    /// Blocking variant of [`answer_in`](Self::answer_in).
+    fn answer_in_sync(
+        &self,
+        py: Python<'_>,
+        question: String,
+        scope: &PyScope,
+    ) -> PyResult<Py<PyAnswer>> {
+        let scope = scope.snapshot();
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let answer = agent.answer_in(&question, scope).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyAnswer::from_rust(py, &answer))
+        })
+    }
+
+    /// Blocking variant of [`query_in`](Self::query_in).
+    fn query_in_sync(
+        &self,
+        py: Python<'_>,
+        cypher: String,
+        scope: &PyScope,
+    ) -> PyResult<Py<PyAny>> {
+        let scope = scope.snapshot();
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let rows = agent.query_in(&cypher, &scope).await.map_err(to_pyerr)?;
+            Python::attach(|py| convert::records_to_py(py, &rows))
+        })
+    }
+
+    /// Blocking variant of [`define_rule`](Self::define_rule).
+    fn define_rule_sync(&self, py: Python<'_>, name: String, source: String) -> PyResult<NodeId> {
+        bridge_sync!(py, agent = self.inner.clone(), {
+            agent.define_rule(name, source).await.map_err(to_pyerr)
+        })
+    }
+
+    /// Blocking variant of [`run_rule`](Self::run_rule).
+    #[pyo3(signature = (name, return_cols, params=None))]
+    fn run_rule_sync(
+        &self,
+        py: Python<'_>,
+        name: String,
+        return_cols: Vec<String>,
+        params: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let params: HashMap<_, _> = params_to_rust(params.as_ref())?;
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let cols: Vec<&str> = return_cols.iter().map(String::as_str).collect();
+            let rows = agent
+                .run_rule(&name, &cols, params)
+                .await
+                .map_err(to_pyerr)?;
+            Python::attach(|py| convert::records_to_py(py, &rows))
+        })
+    }
+
+    /// Blocking variant of [`abduce`](Self::abduce).
+    #[pyo3(signature = (program, params=None))]
+    fn abduce_sync(
+        &self,
+        py: Python<'_>,
+        program: String,
+        params: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAbductionResult>> {
+        let params = params_to_rust(params.as_ref())?;
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let result = agent.abduce(&program, params).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyAbductionResult::from_rust(py, &result))
+        })
+    }
+
+    /// Blocking variant of [`delete_session`](Self::delete_session).
+    fn delete_session_sync(
+        &self,
+        py: Python<'_>,
+        session_id: String,
+    ) -> PyResult<Py<PyDeletionReport>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
+            let report = agent.delete_session(&session_id).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyDeletionReport::from_rust(py, &report))
+        })
+    }
+
+    /// Blocking variant of [`forget_participant`](Self::forget_participant).
+    fn forget_participant_sync(
+        &self,
+        py: Python<'_>,
+        participant_id: String,
+    ) -> PyResult<Py<PyDeletionReport>> {
+        bridge_sync!(py, agent = self.inner.clone(), {
             let report = agent
                 .forget_participant(&participant_id)
                 .await

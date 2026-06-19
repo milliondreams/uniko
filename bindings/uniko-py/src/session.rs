@@ -14,12 +14,12 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
-use uniko_api::tools::{Session, Turn};
+use uniko_api::tools::{NodeId, Session, Turn};
 
 use crate::convert;
 use crate::errors::to_pyerr;
 use crate::ingest::PyIngestSource;
-use crate::macros::bridge;
+use crate::macros::{bridge, bridge_sync};
 use crate::outputs::{PyDeletionReport, PyIngestOutcome, PyObserveResult};
 
 /// One conversation turn to feed into a [`PySession`].
@@ -253,6 +253,97 @@ impl PySession {
         artifact_id: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         bridge!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            let report = guard.delete_document(&artifact_id).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyDeletionReport::from_rust(py, &report))
+        })
+    }
+
+    // ── Blocking (`*_sync`) skins ────────────────────────────────────
+
+    /// Blocking variant of [`observe`](Self::observe).
+    fn observe_sync(&self, py: Python<'_>, turn: &PyTurn) -> PyResult<Py<PyObserveResult>> {
+        let turn = turn.snapshot()?;
+        bridge_sync!(py, session = self.inner.clone(), {
+            let mut guard = session.lock().await;
+            let result = guard.observe(turn).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyObserveResult::from_rust(py, &result))
+        })
+    }
+
+    /// Blocking variant of [`ingest`](Self::ingest).
+    fn ingest_sync(&self, py: Python<'_>, source: &PyIngestSource) -> PyResult<Py<PyIngestOutcome>> {
+        let src = source.snapshot()?;
+        bridge_sync!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            let outcome = guard.ingest(src).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyIngestOutcome::from_rust(py, &outcome))
+        })
+    }
+
+    /// Blocking variant of [`submit`](Self::submit).
+    fn submit_sync(&self, py: Python<'_>, turn: &PyTurn) -> PyResult<()> {
+        let turn = turn.snapshot()?;
+        bridge_sync!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            guard.submit(turn).await.map_err(to_pyerr)?;
+            Ok(())
+        })
+    }
+
+    /// Blocking variant of [`submit_source`](Self::submit_source).
+    fn submit_source_sync(&self, py: Python<'_>, source: &PyIngestSource) -> PyResult<()> {
+        let src = source.snapshot()?;
+        bridge_sync!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            guard.submit_source(src).await.map_err(to_pyerr)?;
+            Ok(())
+        })
+    }
+
+    /// Blocking variant of [`flush`](Self::flush).
+    fn flush_sync(&self, py: Python<'_>) -> PyResult<()> {
+        bridge_sync!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            guard.flush().await.map_err(to_pyerr)?;
+            Ok(())
+        })
+    }
+
+    /// Blocking variant of [`summarize`](Self::summarize).
+    fn summarize_sync(&self, py: Python<'_>) -> PyResult<Option<NodeId>> {
+        bridge_sync!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            let node = guard.summarize().await.map_err(to_pyerr)?;
+            Ok(node)
+        })
+    }
+
+    /// Blocking variant of [`forget_turn`](Self::forget_turn).
+    fn forget_turn_sync(&self, py: Python<'_>, message_id: String) -> PyResult<Py<PyDeletionReport>> {
+        bridge_sync!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            let report = guard.forget_turn(&message_id).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyDeletionReport::from_rust(py, &report))
+        })
+    }
+
+    /// Blocking variant of [`delete_turn`](Self::delete_turn).
+    fn delete_turn_sync(&self, py: Python<'_>, message_id: String) -> PyResult<Py<PyDeletionReport>> {
+        bridge_sync!(py, session = self.inner.clone(), {
+            let guard = session.lock().await;
+            let report = guard.delete_turn(&message_id).await.map_err(to_pyerr)?;
+            Python::attach(|py| PyDeletionReport::from_rust(py, &report))
+        })
+    }
+
+    /// Blocking variant of [`delete_document`](Self::delete_document).
+    fn delete_document_sync(
+        &self,
+        py: Python<'_>,
+        artifact_id: String,
+    ) -> PyResult<Py<PyDeletionReport>> {
+        bridge_sync!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
             let report = guard.delete_document(&artifact_id).await.map_err(to_pyerr)?;
             Python::attach(|py| PyDeletionReport::from_rust(py, &report))

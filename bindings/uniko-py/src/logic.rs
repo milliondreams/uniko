@@ -14,7 +14,7 @@ use uniko_api::tools::{Agent, Value};
 
 use crate::convert::{py_to_value, records_to_py};
 use crate::errors::to_pyerr;
-use crate::macros::bridge;
+use crate::macros::{bridge, bridge_sync};
 
 /// The mutable, accumulated state of an in-progress assume query.
 struct AssumeState {
@@ -81,6 +81,27 @@ impl PyAssumeBuilder {
             (state.query.clone(), state.params.clone())
         };
         bridge!(py, agent = agent, {
+            let mut builder = agent.assume(&block);
+            if let Some(q) = &query {
+                builder = builder.then_query(q);
+            }
+            for (k, v) in params {
+                builder = builder.param(k, v);
+            }
+            let rows = builder.run().await.map_err(to_pyerr)?;
+            Python::attach(|py| records_to_py(py, &rows))
+        })
+    }
+
+    /// Blocking variant of [`run`](Self::run).
+    fn run_sync(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let agent = self.agent.clone();
+        let block = self.assume_block.clone();
+        let (query, params) = {
+            let state = self.state.lock().expect("Assume mutex poisoned");
+            (state.query.clone(), state.params.clone())
+        };
+        bridge_sync!(py, agent = agent, {
             let mut builder = agent.assume(&block);
             if let Some(q) = &query {
                 builder = builder.then_query(q);
