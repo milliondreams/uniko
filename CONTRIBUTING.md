@@ -54,7 +54,24 @@ uniko is a Cargo workspace. The product crates are:
 - `uniko-api` — the public facade.
 
 Plus `uniko-bench` (benchmark harness, `publish = false`) and
-`bindings/uniko-py` (PyO3 skeleton, not yet functional, `publish = false`).
+`bindings/uniko-py` (async-first PyO3 Python SDK, alpha, `publish = false`).
+
+### Python bindings (optional)
+
+You only need this if you are changing the Python surface. The
+`bindings/uniko-py` crate is an async-first [PyO3](https://pyo3.rs) SDK over the
+`Uniko` facade, built with [maturin](https://www.maturin.rs/) and managed with
+[uv](https://docs.astral.sh/uv/):
+
+```sh
+cd bindings/uniko-py
+uv run maturin develop   # compile the extension into the uv venv
+uv run pytest            # run the Python test suite
+```
+
+`maturin` needs `protobuf-compiler` (`protoc`) and a C/C++ toolchain on `PATH`
+— the stack statically links ONNX Runtime. The documentation site is likewise
+uv-based: `cd website && uv sync && uv run zensical serve`.
 
 ---
 

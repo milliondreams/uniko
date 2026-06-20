@@ -12,9 +12,9 @@ cognitive memory engine, built with [PyO3](https://pyo3.rs) and
 ## Building locally
 
 ```bash
-# from bindings/uniko-py/
-maturin develop
-python -c "import uniko; print(uniko.__file__)"
+# from bindings/uniko-py/ (uv-managed)
+uv run maturin develop
+uv run python -c "import uniko; print(uniko.__file__)"
 ```
 
 A C/C++ toolchain and `protobuf-compiler` (`protoc`) must be on `PATH` — the

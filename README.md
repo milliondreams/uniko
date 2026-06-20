@@ -118,7 +118,7 @@ async fn demo() -> uniko_store::Result<()> {
     // 3. Recall compiled knowledge — no LLM in this path.
     let bundle = recall(&kb, "What did Caroline research?", &RecallConfig::default()).await?;
     for item in &bundle.items {
-        println!("{}: {}", item.node_type, item.content);
+        println!("{:?}: {}", item.kind, item.content);
     }
     Ok(())
 }
@@ -142,18 +142,25 @@ Full documentation lives at **https://rustic-ai.github.io/uniko/**:
   recall internals.
 - [Benchmarks](https://rustic-ai.github.io/uniko/benchmarks/) — full LoCoMo results and the
   head-to-head cost / latency comparison.
+- [Python SDK](https://rustic-ai.github.io/uniko/python/) — the same engine from Python:
+  async-first, with blocking `*_sync` twins.
 - [Why uniko](https://rustic-ai.github.io/uniko/why-uniko/) — differentiators in depth.
 
 ## Project status
 
-uniko is a **shipped Rust library** covering Phases 1–3: the typed schema (22 node types, 50
+uniko is a **shipped Rust library** covering Phases 1–3: the typed schema (24 node types, 53
 edge types), atomic ingest with local NLP extraction, async consolidation
 (observations -> Facts), three-phase recall, procedure promotion, topic detection, and formal
 Locy reasoning (`sequence_detector` live).
 
-**Not yet available** (do not depend on these): an HTTP / MCP server, a CLI, working Python
-bindings (the PyO3 crate is a skeleton), and Phase 4–6 features (multimodal ingest, rule
-induction, MCTS planning, cross-agent sharing). See the docs for the honest roadmap.
+**Python bindings (alpha):** an async-first PyO3 SDK over the same in-process engine ships in
+`bindings/uniko-py` — full async surface plus blocking `*_sync` twins and type stubs. Build from
+source with `maturin` (no prebuilt wheels yet); see the
+[Python SDK docs](https://rustic-ai.github.io/uniko/python/).
+
+**Not yet available** (do not depend on these): an HTTP / MCP server, a CLI, prebuilt Python
+wheels, and Phase 4–6 features (multimodal ingest, rule induction, MCTS planning, cross-agent
+sharing). See the docs for the honest roadmap.
 
 ## License
 
