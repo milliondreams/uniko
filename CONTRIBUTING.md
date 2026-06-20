@@ -13,7 +13,7 @@ agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### Prerequisites
 
-- **Rust ≥ 1.85** (edition 2024). Install via [rustup](https://rustup.rs/):
+- **Rust ≥ 1.91** (edition 2024). Install via [rustup](https://rustup.rs/):
 
   ```sh
   rustup toolchain install stable
@@ -32,7 +32,7 @@ cd uniko
 cargo build
 ```
 
-`cargo build` pulls **uni-db 2.2.1** (and **uni-xervo 0.14**) straight from
+`cargo build` pulls **uni-db 2.2.1** (and **uni-xervo 0.15.0**) straight from
 crates.io. **No access token, private repository, or special credentials are
 required** — a plain `cargo build` works out of the box.
 
