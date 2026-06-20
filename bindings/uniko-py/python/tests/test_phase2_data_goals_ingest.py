@@ -32,6 +32,7 @@ async def test_goals_lifecycle() -> None:
 
     assert isinstance(await goals.start("g1"), bool)
     started = await goals.get("g1")
+    assert started is not None
     assert started.phase == "active"
     assert any(g.goal_id == "g1" for g in await goals.active())
 
@@ -45,7 +46,9 @@ async def test_goals_lifecycle() -> None:
     assert ctx.goal.goal_id == "g1"
 
     assert await goals.complete("g1", {"done": True}) is True
-    assert (await goals.get("g1")).phase == "completed"
+    completed = await goals.get("g1")
+    assert completed is not None
+    assert completed.phase == "completed"
 
 
 async def test_data_message_and_artifact_lookup() -> None:

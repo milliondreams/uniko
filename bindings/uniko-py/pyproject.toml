@@ -24,6 +24,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Database",
 ]
+dependencies = [
+    "pydantic>=2",
+]
 
 [project.urls]
 Homepage = "https://www.rustic.ai"
@@ -36,6 +39,8 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.25.0",
     "pytest-xdist>=3.8.0",
+    "ruff>=0.10",
+    "ty>=0.0.50",
 ]
 # Tooling to run examples/uniko_memory_demo.ipynb:
 #   uv run --group notebook jupyter lab
@@ -47,6 +52,11 @@ notebook = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ty.src]
+# Type-check the library and its test-suite. The native engine's types come
+# from python/uniko/_uniko.pyi.
+include = ["python"]
 
 [tool.maturin]
 # The compiled extension lives at `uniko._uniko`; the hand-written Python

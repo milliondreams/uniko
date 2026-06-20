@@ -12,6 +12,15 @@ from typing import Any, Awaitable
 
 __version__: str
 
+# ── Internal test helpers ─────────────────────────────────────────────────
+# Exposed by the extension for the foundation test-suite; not part of the
+# public API. Underscore-prefixed to signal "internal".
+
+def _value_roundtrip(obj: Any) -> Any: ...
+def _records_roundtrip(rows: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+def _raise_error(kind: str) -> None: ...
+def _now_utc() -> datetime.datetime: ...
+
 # ── Exceptions ────────────────────────────────────────────────────────────
 
 class UnikoError(Exception):
