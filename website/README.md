@@ -7,14 +7,14 @@ Material for MkDocs).
 ## Develop
 
 ```bash
-# Install dependencies
-poetry install
+# Install dependencies (resolved from uv.lock)
+uv sync
 
 # Local preview with hot reload
-poetry run zensical serve
+uv run zensical serve
 
 # Build the static site into ./site
-poetry run zensical build
+uv run zensical build
 ```
 
 ## Structure
