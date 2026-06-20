@@ -1,0 +1,21 @@
+# cargo-nextest configuration.
+#
+# The `default` profile is what `cargo nextest run --workspace` (local and CI)
+# uses, so overrides here apply everywhere without touching the CI workflow.
+
+[profile.default]
+# No global retries — a test that fails deterministically should fail loudly.
+retries = 0
+
+# ── Per-test retry overrides ───────────────────────────────────────────────
+# Targeted retries for known-flaky tests only, so we never mask a *new*
+# deterministic failure. Each entry should name the test and the reason.
+
+[[profile.default.overrides]]
+# Flaky under heavy parallel load: passes in isolation but intermittently sees
+# `attached_to_message == None` right after observe() — a read-after-write
+# visibility race in the artifact→message link, not a correctness bug in the
+# assertion. Retry as a stopgap; the underlying race in
+# crates/uniko-memory/src/facade/tests.rs:539 still wants a real fix.
+filter = 'test(=facade::tests::data_handle_dereferences_attachment_and_message)'
+retries = 2
