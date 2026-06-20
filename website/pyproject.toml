@@ -1,18 +1,22 @@
-[tool.poetry]
+[project]
 name = "uniko-docs"
 version = "0.1.0"
 description = "Documentation site for uniko — a cognitive memory system for AI agents"
-authors = ["Dragonscale Industries Inc. <dev@dragonscale.ai>"]
 readme = "README.md"
-package-mode = false
-homepage = "https://www.rustic.ai"
-repository = "https://github.com/rustic-ai/uniko"
+requires-python = ">=3.10"
+authors = [
+    { name = "Dragonscale Industries Inc.", email = "dev@dragonscale.ai" },
+]
+dependencies = [
+    "zensical>=0.0.45,<0.1",
+    "pymdown-extensions>=10.21,<11",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-zensical = ">=0.0.45,<0.1"
-pymdown-extensions = "^10.21"
+[project.urls]
+Homepage = "https://www.rustic.ai"
+Repository = "https://github.com/rustic-ai/uniko"
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.uv]
+# Documentation environment, not an installable package (mirrors the former
+# poetry `package-mode = false`).
+package = false
