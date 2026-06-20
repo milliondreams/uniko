@@ -1,8 +1,8 @@
 #!/bin/bash
 # Run a uniko-bench binary with the GPU runtime env already set.
 #
-# uniko-bench's default features now include `gpu-cuda`, so a plain
-# `cargo run -p uniko-bench` builds with CUDA support — but the
+# This script builds uniko-bench with `--features gpu-cuda` (the crate is
+# CPU-by-default so the plain workspace build stays CUDA-free for CI). The
 # resulting binary needs three runtime pieces ORT/CUDA can't find on
 # its own:
 #
@@ -93,7 +93,7 @@ if [ "${1:-}" = "--build" ]; then
     shift
     export RUSTFLAGS="-C linker=${SCRIPT_DIR}/scripts/cc_no_usrlib.sh"
     exec cargo build --release --manifest-path "${REPO_ROOT}/Cargo.toml" \
-        -p uniko-bench --bin "${BIN}" "$@"
+        -p uniko-bench --bin "${BIN}" --features gpu-cuda "$@"
 fi
 
 # Run mode: exec the prebuilt binary directly so cargo's cache stays
@@ -103,7 +103,7 @@ if [ ! -x "${BIN_PATH}" ]; then
     echo "info: ${BIN_PATH} missing; building once..." >&2
     export RUSTFLAGS="-C linker=${SCRIPT_DIR}/scripts/cc_no_usrlib.sh"
     cargo build --release --manifest-path "${REPO_ROOT}/Cargo.toml" \
-        -p uniko-bench --bin "${BIN}"
+        -p uniko-bench --bin "${BIN}" --features gpu-cuda
 fi
 
 exec "${BIN_PATH}" "$@"

@@ -55,11 +55,14 @@ name = "nlp-parity"
 path = "src/nlp_parity_main.rs"
 
 [features]
-# GPU on by default for the bench: NLP cascade, BGE embedder, and the
-# cross-encoder reranker all see meaningful speedups under CUDA.
-# Builds on machines without the CUDA toolkit need
-# `--no-default-features` (and, for Mac, `--features gpu-metal`).
-default = ["gpu-cuda"]
+# CPU by default so the standard workspace commands — `cargo check/clippy/
+# nextest --workspace`, used by CI and contributors — build without a CUDA
+# toolkit. A `gpu-cuda` default forces `nvcc` at build time (via
+# mistralrs-quant), which CUDA-less machines (CI, Macs, most laptops) don't
+# have, so the whole `--workspace` build fails. GPU is opt-in: pass
+# `--features gpu-cuda` (the bench's `run.sh` does this) or, on Mac,
+# `--features gpu-metal`.
+default = []
 gpu-cuda = ["uniko-store/gpu-cuda"]
 gpu-metal = ["uniko-store/gpu-metal"]
 
