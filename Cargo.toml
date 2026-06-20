@@ -37,7 +37,9 @@ uniko-bench = { path = "crates/uniko-bench", version = "0.1.0" }
 # provider-onnx (embeddings + NLP + reranker), and every remote provider.
 # GPU accelerators (gpu-cuda / gpu-metal) are opt-in via uniko-store /
 # uniko-bench passthrough features.
-uni-db = { version = "2.2.1", features = ["mimalloc"] }
+# Tracks the latest 2.x release (^2 = >=2.0.0, <3.0.0); `cargo update -p uni-db`
+# refreshes the lockfile to the newest compatible version.
+uni-db = { version = "2", features = ["mimalloc"] }
 # Direct dep on uni-xervo so uniko-store can name `ModelRuntime` in
 # `KnowledgeBase::build_shared_runtime` / `open_with_runtime`. uni-db
 # uses uni-xervo internally but does not re-export the type. Version

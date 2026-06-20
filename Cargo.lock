@@ -11800,9 +11800,9 @@ checksum = "eeba86d422ce181a719445e51872fa30f1f7413b62becb52e95ec91aa262d85c"
 
 [[package]]
 name = "uni-algo"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcafb44f21c653a6db68fb3b26a50a01d82f1d93a7b83d521271f7c4fc712c27"
+checksum = "af5ff1374b90c16a19d5222583dbd509bdd9d946546dacbe4b3574cdacdc9a72"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11821,9 +11821,9 @@ dependencies = [
 
 [[package]]
 name = "uni-btic"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "286a01891c4d6210df8e07122fbd36da9f275e7b165cd6dd83b0a7c5e3ea235f"
+checksum = "cb06f2bc3290197fd5dae1a531cf68f4f5b8cf1a0714e5cf9ef6018dbc0adbab"
 dependencies = [
  "chrono",
  "serde",
@@ -11832,9 +11832,9 @@ dependencies = [
 
 [[package]]
 name = "uni-bulk"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0ff14e08de478917f21e1f5b5523358977aaa2776c1654222673eac2c1b86a8"
+checksum = "9bc45f4f8c0b8a8347d7c9171446034de31e9a1974d3795733565fda71908779"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11854,9 +11854,9 @@ dependencies = [
 
 [[package]]
 name = "uni-common"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a24ebece9daaf50c1ace5e8ff363261c327b87a4e1a48280fef305be8b88d263"
+checksum = "40f04a9e0780c46e5e3978c78fc51bb526a9c4e2de45e7bec759a8d4fbfdb62e"
 dependencies = [
  "anyhow",
  "arrow-schema",
@@ -11877,9 +11877,9 @@ dependencies = [
 
 [[package]]
 name = "uni-crdt"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d87d7c26cc23451b31c3ea26236fcd0c7ee12dfff138f3b596cfcc98875a8a0"
+checksum = "13b658e8454e529872f2f945735d9e3539670d06bc8d5597ad3b118ed34bac4f"
 dependencies = [
  "fxhash",
  "rmp-serde",
@@ -11892,9 +11892,9 @@ dependencies = [
 
 [[package]]
 name = "uni-cypher"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d73154dceff4d78672d020f293d8c18a7424a90d8f91717e37abf4678234b56b"
+checksum = "a701a03ebb6a2a695e7e86455d86f5fb9d87f6a1ef3607f38e3c2d0f68481d6b"
 dependencies = [
  "pest",
  "pest_derive",
@@ -11905,9 +11905,9 @@ dependencies = [
 
 [[package]]
 name = "uni-db"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fc83464af6edfad253a6517200c150723c7a872b1807465f2c6d133faf47bf1"
+checksum = "dda9cc06b03a95e855b02cf6757f51b8307eac3e9250f2231aeebcc705f59327"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11962,9 +11962,9 @@ dependencies = [
 
 [[package]]
 name = "uni-fork"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bd36c0b3c2ac56ef8538a13582ef7b9ffde30bb106f29cbe5dac0018f9745c1"
+checksum = "8368ae300d567ebbc4699b7aeb0318cb8c08609373fe53770d5d6e1b6b3e083d"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -11980,9 +11980,9 @@ dependencies = [
 
 [[package]]
 name = "uni-locy"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca3d2f766f0e069aa090caf42c87d3161a48b5d0cb64b6666af9535748c00654"
+checksum = "a07fc47d1e2adbc98633ee1b34e4c32ce10312cae705d97c6bbe1dd485d00cf4"
 dependencies = [
  "async-trait",
  "candle-core",
@@ -11996,9 +11996,9 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a61cb900c3611c4dea4e964b8a2506d1c16ca156a47de955ce5014634edd633"
+checksum = "d279c4f6be352daf3d5c95bd726c08b8b8e7166c621d51a756efee6e308afd7b"
 dependencies = [
  "arc-swap",
  "arrow",
@@ -12031,9 +12031,9 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-apoc-core"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3152f9d99b2fde3f48e0581a17e7d1fc86858ca3730db7e056a1e6b5ac671a96"
+checksum = "d7c24a80ba05688c320f08ac6bd6e85ffb70ffe9f2c524510d7a9c2b89915ba6"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -12052,9 +12052,9 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-builtin"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81ba5212f131b77583006fdb13223f1d8341f067d3de436541c54f4b881873f6"
+checksum = "0afeef631d842e796884556d90baf4d22546ea708164932b4a5bc96a0297a3d0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -12081,9 +12081,9 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-custom"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01d5fa0f525cc37bc2e66a8ee00f81d7f97b78efb1188fe2ae0f6caf6e2d3a9"
+checksum = "3b9264c7d7e331d960be666a92b0126c866323f55d250c04d4826c14e9a71f57"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -12104,9 +12104,9 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-host"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "768fb04e89c3112e5e97002a134d71b09d6211d7771a7efdcf7134109044e8b8"
+checksum = "cc78dede7d94ff87827084cbb7135b8c010a286292b6eaaf76daea688911ebd4"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -12140,9 +12140,9 @@ dependencies = [
 
 [[package]]
 name = "uni-plugin-rhai"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8eb1b58dfd9c2bacacf7ca320cd3b56cd3f577988b4cb34d1ac57ac667a4764"
+checksum = "7aa9659d4c2f035da1b9aa7ad6ff6ca6a108198f8795a7d5fe12b63e49b46e40"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -12162,9 +12162,9 @@ dependencies = [
 
 [[package]]
 name = "uni-query"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5aa6a592661faf2f9c9b908301e0e7517c6c9f39aeeba05d3eef935a9d226f"
+checksum = "f12f5a4850600384fd34c99814f31058eec2a83b34ee992cd5730f794843f975"
 dependencies = [
  "anyhow",
  "arrow",
@@ -12211,9 +12211,9 @@ dependencies = [
 
 [[package]]
 name = "uni-query-functions"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff5e4ef51523ef36d7694d8660b6ea77a51d30d1149b77f62b0dc9e29aa86144"
+checksum = "13dde8659475d9f67a53bc857c7c84b6764f9b3724eff8a359e8f3e50927057b"
 dependencies = [
  "anyhow",
  "arrow",
@@ -12243,9 +12243,9 @@ dependencies = [
 
 [[package]]
 name = "uni-sidecar"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb03569c2160e49f1f16ef1957ac0230a197adde1b60b365cea3ae5fb4a94ef0"
+checksum = "6ab4009cc2e35faf17920713e7900716d11f83d9687850163142e4e3834e704c"
 dependencies = [
  "serde",
  "serde_json",
@@ -12254,9 +12254,9 @@ dependencies = [
 
 [[package]]
 name = "uni-store"
-version = "2.2.1"
+version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b235d7f526db889ca746e66ccaa38f1b1fb1d84963d71a78c60a5c58b347f6bb"
+checksum = "22bd610da3351905db5005cfaa29c1fa910608a075d3709ebc05f6e8c3642941"
 dependencies = [
  "anyhow",
  "arc-swap",
