@@ -37,6 +37,13 @@ dev = [
     "pytest-asyncio>=0.25.0",
     "pytest-xdist>=3.8.0",
 ]
+# Tooling to run examples/uniko_memory_demo.ipynb:
+#   uv run --group notebook jupyter lab
+notebook = [
+    "jupyterlab>=4",
+    "ipykernel>=6",
+    "nbconvert>=7",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
