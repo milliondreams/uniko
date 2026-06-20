@@ -6,7 +6,7 @@ question answered from compiled knowledge — with no LLM in the recall path. It
 minutes, most of which is a one-time model download.
 
 uniko links into your process like SQLite. There is no service to deploy, no vector store to keep
-in sync, no network hop between your agent and its memory. You feed it `Message`s; it compiles them
+in sync, no network hop between your agent and its memory. You feed it `Turn`s; it compiles them
 into a typed knowledge graph (`Entity`, `Observation`, `Fact`, `Procedure`, `Topic`) with full
 provenance, then answers queries against that compiled knowledge.
 

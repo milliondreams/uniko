@@ -74,7 +74,7 @@ comparability.
 | Total LLM cost (answer + judge) | **$3.55** |
 | Ingest wall time | **7.5 min** for 5,882 turns (~62 ms/turn) |
 | Ingest API cost | **$0** |
-| Mean Q&A latency | **4.04s** (2.22s recall + 1.19s generation) |
+| Mean Q&A latency | **4.04s** (2.84s recall + 1.20s generation) |
 
 Published competitor judge scores on LoCoMo: Mem0 91.6%, Graphiti 75–84%, Letta 74.0%, LangMem
 58.1%.

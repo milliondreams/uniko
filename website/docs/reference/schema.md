@@ -38,6 +38,8 @@ application-computed `embedding` vector for similarity recall.
 | `Artifact` | Artifacts | A thing in the world: file, document, url, snippet, image, audio, video. |
 | `ArtifactContent` | Artifacts | Content-addressed blob metadata, deduplicated by `content_id` (SHA-256). |
 | `Chunk` | Artifacts | A segment of an `Artifact` or long `Message`, independently embedded and searchable. |
+| `Page` | Artifacts | A rendered/parsed page of a PDF artifact in the document-IR graph (`page_id`, `page_number`, `produced_by`, `plain_markdown`, `block_count`, `escalations`). No vector index — the embeddable text lives on its child `Chunk`s. |
+| `Block` | Artifacts | An atomic content block within a `Page` (`kind`, `text`, `reading_order`, `produced_by`, `confidence_kind`/`score`, `bbox_x0..y1`, `confidence_signals`). No vector index — the text rides on a child `Chunk` with `chunk_type="block"`. |
 | `Entity` | Semantic | A named thing mentioned across messages, chunks, actions, and artifacts. |
 | `Observation` | Semantic | A direct statement perceived from a message or chunk — "Caroline attended an LGBTQ support group". |
 | `Fact` | Semantic | A claim consolidated from multiple observations, with temporal validity. |
@@ -156,11 +158,14 @@ from five different node types into `Entity`). Those are noted inline.
 
 | Edge | From → To | Meaning |
 |---|---|---|
-| `HAS_CHUNK` | `Artifact`, `Message`, `Session` → `Chunk` | Splits content into independently searchable chunks (carries `index`). |
+| `HAS_CHUNK` | `Artifact`, `Message`, `Session`, `Block` → `Chunk` | Splits content into independently searchable chunks (carries `index`). A `Block` owns a child `Chunk` with `chunk_type="block"` carrying the embeddable text. |
+| `HAS_PAGE` | `Artifact` → `Page` | Attaches a PDF artifact to one of its pages (carries `index`). |
 | `HAS_CONTENT` | `Artifact` → `ArtifactContent` | Links an artifact to its deduplicated blob (carries `role`). |
 | `CREATED_BY` | `Artifact` → `Action` | Which action created the artifact. |
 | `MODIFIED_BY` | `Artifact` → `Action` | Which action modified it (carries `diff_summary`). |
 | `ATTACHED_TO` | `Artifact` → `Session`, `Message` | Where a file was dropped into a conversation, when no producing action exists (carries `attached_at`). |
+| `CONTAINS` | `Page` → `Block` | Attaches a page to one of its blocks (carries `reading_order`). |
+| `NEXT_IN_READING_ORDER` | `Block` → `Block` | Chains blocks in page reading order. |
 
 ### Semantic
 

@@ -4,10 +4,10 @@ Async-first Python SDK for the [uniko](https://github.com/rustic-ai/uniko)
 cognitive memory engine, built with [PyO3](https://pyo3.rs) and
 [maturin](https://www.maturin.rs).
 
-> **Status:** alpha, under active construction. The async surface (recall,
-> answer, query, ingest, goals/tasks, and the Locy logic surface) is being
-> built out phase by phase. Synchronous (`*_sync`) skins, full type stubs, and
-> prebuilt wheels are not yet available.
+> **Status:** alpha. The full async surface (recall, answer, query, ingest,
+> goals/tasks, and the Locy logic surface), the synchronous `*_sync` skins, and
+> a complete `py.typed` type stub all ship today. Prebuilt wheels are not yet
+> published — build from source with `maturin` (below).
 
 ## Building locally
 
@@ -39,4 +39,19 @@ async def main() -> None:
 
 
 asyncio.run(main())
+```
+
+Every verb also has a blocking `*_sync` twin for callers outside an event loop
+(scripts, notebooks, sync handlers). It blocks on the shared runtime and
+releases the GIL across the Rust work:
+
+```python
+import uniko
+
+uni = uniko.Uniko.in_memory_sync()
+agent = uni.agent("assistant")
+session = agent.session("conversation-1")
+session.observe_sync(uniko.Turn("user", "I prefer tea over coffee."))
+for item in agent.recall_sync("beverage preference").items:
+    print(item.content)
 ```

@@ -61,7 +61,7 @@ flowchart LR
 <div class="feature-grid" markdown>
 <div class="feature-card" markdown>
 ### [Architecture](architecture.md)
-The four-layer cognitive stack — Store, Processing, Cognitive, Integration — and the principle that data lives in one graph while crates depend strictly downward.
+The three-layer cognitive stack — Store, Processing, Cognitive — with uniko-api as the public facade above them, and the principle that data lives in one graph while crates depend strictly downward.
 </div>
 <div class="feature-card" markdown>
 ### [Memory Model](memory-model.md)
@@ -69,7 +69,7 @@ How the five cognitive memory types map to graph nodes, and how knowledge flows 
 </div>
 <div class="feature-card" markdown>
 ### [Data Model](data-model.md)
-The 22 node types and 50 edge types across 8 schema layers — Participants, Goals & Sessions, Episodic, Artifacts, Semantic, Procedural, Meta-Memory, and Organization.
+The 24 node types and 53 edge types across 8 schema layers — Participants, Goals & Sessions, Episodic, Artifacts, Semantic, Procedural, Meta-Memory, and Organization.
 </div>
 <div class="feature-card" markdown>
 ### [Facts & Drift](facts-and-drift.md)

@@ -47,10 +47,10 @@ A consolidation cycle (`run_cycle` / `run_cycle_with`) does five things:
    group.
 3. **Upsert** one Fact per group, reusing the first contributing Observation's
    embedding as the Fact's embedding source.
-4. **Wire** a `SUPPORTED_BY` edge from every contributing Observation to its
-   Fact, so the Fact's evidence is always traceable.
+4. **Wire** a `SUPPORTED_BY` edge from each Fact to every contributing
+   Observation, so the Fact's evidence is always traceable.
 5. **Record** a `ConsolidationCycle` audit node with `PROCESSED`, `CREATED`,
-   and `INVOLVED` edges. The `PROCESSED` edges are the idempotency anchor —
+   `REINFORCED`, and `INVALIDATED` edges. The `PROCESSED` edges are the idempotency anchor —
    future cycles skip any Observation already processed.
 
 ```rust
@@ -185,17 +185,21 @@ Two pieces of per-bound metadata travel with the interval:
   about precision.
 
 Because BTIC is one atomic property — not a split `valid_from` / `valid_until`
-pair — there is nothing to keep in sync, and Allen's interval algebra
-(`btic.overlaps()`, `btic.before()`, `btic.during()`) is available for temporal
-reasoning. Querying "what was true on a given date" is a containment check:
+pair — there is nothing to keep in sync. Recall tests a stored Fact's validity
+against a resolved query window with the `btic_overlaps(...)` scalar Cypher
+function — the same predicate the temporal recall channel issues internally to
+answer "what was true over this span":
 
 ```cypher
--- "What is true now?"
-MATCH (f:Fact) WHERE btic.contains(f.valid_at, now())
-
--- "What was true on March 15?"
-MATCH (f:Fact) WHERE btic.contains(f.valid_at, datetime('2026-03-15'))
+-- Facts whose validity interval overlaps a target window.
+-- The window is built from the query ("now", "on March 15", "last May", …).
+MATCH (f:Fact) WHERE btic_overlaps(f.valid_at, $window)
 ```
+
+On the Rust side, `uniko_store::schema::btic` exposes the pure predicate layer —
+`btic_contains` (point-in-interval), `btic_overlaps` and `btic_before` (Allen's
+interval algebra) — alongside the `btic_active` / `btic_query_window` /
+`btic_invalidate` constructors that open, query, and close those intervals.
 
 ---
 
@@ -345,7 +349,7 @@ flowchart TD
     O -->|run_cycle| G["Group by (subject, predicate)"]
     G -->|cluster @ cos 0.88| K[Canonical object]
     K -->|upsert_fact_by_triple| F[Fact<br/>valid_at = BTIC]
-    O -.SUPPORTED_BY.-> F
+    F -.SUPPORTED_BY.-> O
     F -->|disagreement > 40%| INV[Invalidate prior Fact<br/>close BTIC hi]
     INV -.INVALIDATES.-> F
     INV -->|"> 4 invalidations within 30 days"| D[Entity.unstable = true]

@@ -255,8 +255,8 @@ A single blob type drives both `Turn::attach` and `Session::ingest`.
 | `IngestSource::text(s)` / `::bytes(b)` / `::path(p)` | Build from text, bytes, or a file. |
 | `.with_mime(m)` / `.with_id(id)` / `.with_path(p)` | Override MIME, set the artifact id, set a display path. |
 
-`IngestOutcome` is `Artifact(ArtifactIngestResult)` · `Pdf(PdfIngestResult)` · `Unsupported`; the
-result types carry `artifact_id` + node ids. MIME is resolved explicit → magic-bytes → extension →
+`IngestOutcome` is `Artifact(ArtifactIngestResult)` · `Pdf(PdfIngestResult)`; the
+result types carry `artifact_id` + node ids. Unsupported modalities return `Err(UnikoError::Unsupported(...))`. MIME is resolved explicit → magic-bytes → extension →
 text, then routed (text/markdown/code/json → artifact, PDF → tiered extractor, image/audio/video →
 a registered `ModalityExtractor`).
 

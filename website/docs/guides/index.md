@@ -73,10 +73,12 @@ cycle to turn recurring action sequences into Procedures.
     [Reasoning with Locy](reasoning-with-locy.md) guide shows how to invoke them and write
     your own.
 
-**Configuration** externalises the cadences and thresholds the pipelines use — the cortex
-sweep throttles (`cortex_cycle_every_n_consolidations`, `cortex_min_interval_secs`), the
-consolidation triggers, and the recall coverage gates. The guide maps every knob on
+**Configuration** externalises the cadences and thresholds the pipelines use — the
+consolidation triggers and the recall coverage gates. The guide maps every knob on
 `UnikoConfig` and documents the lower-level retrieval constants that stay compiled-in.
+The cortex sweep throttles (`cortex_cycle_every_n_consolidations`, `cortex_min_interval_secs`)
+live on `PipelineConfig` in `uniko-pipes`; the facade builds the pipeline with
+`PipelineConfig::default()`, so those run on their built-in cadence.
 
 ## Suggested reading order
 

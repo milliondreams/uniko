@@ -9,6 +9,11 @@ runtime. No server, no daemon, no external vector store.
 This page gives you the standard install first, then the advanced knobs — feature flags, model
 selection, and GPU acceleration — that you reach for only when you need them.
 
+!!! tip "Working in Python?"
+    There's a first-class, async-first Python SDK over the same in-process engine — `import uniko`,
+    no server or IPC. See the [Python SDK](../python/index.md) overview and
+    [Python Quickstart](../python/quickstart.md).
+
 ## Add the dependency
 
 uniko lives in a Cargo workspace and is not yet published to crates.io. Add the crates you need as
@@ -87,9 +92,11 @@ crate layering, accelerate on a GPU, or swap models.
 
 ## The crates
 
-uniko is organized as a strict layer stack. Each crate depends only on the ones below it, and the
-graph database (`uni-db`) is sealed behind the bottom layer so higher crates never touch it
-directly.
+uniko is organized as a layer stack where the layer numbers rank meaning, not dependency
+direction. Most crates depend only on lower layers, with one deliberate exception: L4
+`uniko-memory` depends on L5 `uniko-cortex`, because cortex's P5/P6 sweeps subscribe to memory's
+consolidation. The graph database (`uni-db`) is sealed behind the bottom layer so higher crates
+never touch it directly.
 
 | Crate | Layer | Responsibility |
 |-------|-------|----------------|
@@ -110,9 +117,17 @@ flowchart TB
     store["uniko-store (L1)"]
     unidb["uni-db + uni-xervo"]
 
-    api --> cortex --> memory --> extract --> pipes --> store --> unidb
+    api --> cortex
+    api --> memory
+    memory --> cortex
+    memory --> extract
+    memory --> pipes
     memory --> store
+    cortex --> store
+    extract --> pipes
     extract --> store
+    pipes --> store
+    store --> unidb
 ```
 
 !!! tip "Which crate do I add?"

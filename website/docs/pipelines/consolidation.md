@@ -51,7 +51,7 @@ order:
 3. **Periodic timer** — only fires when nothing else is ready.
 
 When P3 finishes extracting Observations for a Message batch, it sends a
-`ConsolidationTask::ObservationsReady { agent_id, observation_count, .. }`. The
+`ConsolidationTask::ObservationsReady(ObservationsReady { agent_id, observation_count, .. })`. The
 worker keeps a per-agent counter and runs a cycle on **threshold-OR-timer**:
 
 | Trigger | Condition |

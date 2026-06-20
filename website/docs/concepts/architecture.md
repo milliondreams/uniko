@@ -37,6 +37,7 @@ graph TD
     MEM --> STO
     CTX --> STO
     EXT --> PIP
+    EXT --> STO
     PIP --> STO
     STO --> DB
 ```
@@ -70,7 +71,7 @@ The actual content-processing steps live one layer up, in `uniko-extract`.
 
 ### uniko-extract — content processing
 
-Layer 3, depending on `uniko-pipes` only. This is where raw content becomes structured graph data. Its modules:
+Layer 3, depending on `uniko-pipes` and `uniko-store` (plus `uni-db` and `uni-xervo` directly). This is where raw content becomes structured graph data. Its modules:
 
 - `ner` — entity extraction (local ONNX NER, tree-sitter for code, rule-based fallback).
 - `observations` — extracting factual statements from messages.
@@ -105,7 +106,7 @@ It depends on `uniko-store` only. The consolidation worker in `uniko-memory` cal
 
 ### uniko-api — public facade
 
-The agent-facing surface, containing **no logic** — only re-exports. The `Uniko` facade (`Uniko`, `Agent`, `Session`, `Turn`, `Data`, `Goals`, and the recall/answer types) is the single public entry point. Its `tools` module also re-exports the lower-level subjective-state functions from `uniko-memory` (`record_episode`, `assert_fact`, `add_observation`, `create_goal`, `create_task`, `record_action`, `generate_session_summary`, the `rules` and `policy` items, and the `nl_to_cypher` helpers). Downstream consumers depend on this crate rather than reaching into the cognitive stack directly.
+The agent-facing surface, containing **no logic** — only re-exports. The `Uniko` facade (`Uniko`, `Agent`, `Session`, `Turn`, `Data`, `Goals`, and the recall/answer types) is the single public entry point. Its `tools` module deliberately does **not** re-export the subjective-state free functions (`record_episode`, `assert_fact`, `add_observation`, `create_goal`, `create_task`, `record_action`, `generate_session_summary`) — a `compile_fail` guard pins this. Those operations are surfaced as `Agent` / `Session` methods instead, so the public surface never exposes a raw `&KnowledgeBase`. Among lower-level items, `tools` re-exports only `nl_to_cypher::is_safe_read_only` and `policy::{Viewer, visibility_admits}`, alongside the facade and intent types. The free functions remain available at the `uniko-memory` crate root. Downstream consumers depend on this crate rather than reaching into the cognitive stack directly.
 
 ### uniko-bench — benchmarks
 

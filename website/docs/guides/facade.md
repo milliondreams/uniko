@@ -125,12 +125,15 @@ To load a corpus with no conversation, use one blob verb and one blob type:
 
 ```rust
 session.ingest(IngestSource::path("handbook.md")).await?;             // MIME sniffed
-session.ingest(IngestSource::bytes(pdf).with_mime("application/pdf")).await?;
+session.ingest(IngestSource::bytes(pdf).with_mime(Mime::parse("application/pdf")?)).await?;
 ```
 
 `IngestSource::{text, bytes, path}` builds the blob; `.with_mime(...)`, `.with_id(...)`,
-`.with_path(...)` override routing. The returned `IngestOutcome` tells you what it became
-(`Artifact` / `Pdf` / `Unsupported`) and carries the `artifact_id` for later retrieval.
+`.with_path(...)` override routing. `.with_mime(...)` takes a `Mime` (re-exported from
+`uniko_memory`); build one with `Mime::parse("application/pdf")?` or `"application/pdf".parse()?`. The
+returned `IngestOutcome` tells you what it became (`Artifact` / `Pdf`) and carries the `artifact_id`
+for later retrieval. An unsupported modality surfaces as a `UnikoError::Unsupported` error, not an
+`IngestOutcome` variant.
 
 ### High throughput — streaming
 

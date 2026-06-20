@@ -21,8 +21,14 @@ these off a transcript, so the cognitive stack exposes them as explicit calls.
   `invalidate_fact`).
 
 ```rust
-use uniko_api::tools::{
-    CreateGoalParams, CreateTaskParams, RecordActionParams, RecordEpisodeParams,
+// The facade params for goals and tasks come from `uniko_api::tools`.
+use uniko_api::tools::{CreateGoalParams, CreateTaskParams};
+
+// The recording free functions and their params live on the `uniko_memory`
+// crate root — `uniko_api::tools` intentionally guards them out and only
+// re-exports the facade surface.
+use uniko_memory::{
+    RecordActionParams, RecordEpisodeParams,
     AddObservationParams, AssertFactParams, InvalidateFactParams,
     create_goal, create_task, record_action, record_episode,
     add_observation, assert_fact, invalidate_fact,

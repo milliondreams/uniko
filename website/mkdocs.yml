@@ -35,6 +35,10 @@ nav:
   - Reference:
       - API: reference/api.md
       - Schema: reference/schema.md
+  - Python SDK:
+      - Overview: python/index.md
+      - Quickstart: python/quickstart.md
+      - API Reference: python/api.md
   - Benchmarks: benchmarks/index.md
 
 theme:

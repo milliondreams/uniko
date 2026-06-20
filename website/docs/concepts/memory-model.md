@@ -22,20 +22,25 @@ see the [Data Model](data-model.md).
 ## The cognitive model
 
 uniko implements five memory types from cognitive science, plus a band of
-connective and infrastructure nodes that hold the others together.
+connective and infrastructure nodes that hold the others together. Every one of
+the schema's **24 node types** appears in exactly one family below:
 
 | Memory family | What it holds | Node types |
 |---|---|---|
 | Working | Active goal context (computed, not stored) | `Goal`, `Task` |
 | Episodic | What happened — communication, operations, experience | `Message`, `Action`, `Episode` |
-| Semantic | What we know — extracted and consolidated knowledge | `Entity`, `Observation`, `Fact`, `Topic` |
+| Semantic | What we know — extracted and consolidated knowledge | `Entity`, `Observation`, `Fact`, `Topic`, `Summary` |
 | Procedural | What works — proven patterns and formal logic | `Procedure`, `Rule` |
-| Meta | How knowledge is managed — consolidation tracking | `ConsolidationCycle`, `KnowledgeBaseStats`[^meta] |
-| Support | The connective tissue everything hangs from | `Session`, `Participant`, `Chunk`, `Summary`, `Artifact`, `Organization` |
+| Meta | How knowledge is managed — consolidation and operational tracking | `ConsolidationCycle`, `KnowledgeBaseStats`, `DeadLetter`[^infra] |
+| Support | The connective tissue everything hangs from | `Participant`, `Session`, `Artifact`, `ArtifactContent`, `Chunk`, `Page`, `Block`, `Organization`, `Team` |
 
-[^meta]: `KnowledgeBaseStats` is placed in the Meta family for its KB-management
-    role; the operational `DeadLetter` node is omitted from this table as it is
-    infrastructure plumbing rather than a cognitive-memory family member.
+[^infra]: A few nodes are included here for completeness but are bookkeeping
+    rather than cognitive families in their own right: `DeadLetter` captures
+    failed pipeline items and `KnowledgeBaseStats` is a KB-level singleton
+    counter (both grouped under Meta for their management role), while
+    `ArtifactContent`, `Page`, and `Block` are document-IR plumbing under
+    Support. `Summary` sits in Semantic to match its schema layer — it is
+    consolidated knowledge derived from messages, not connective tissue.
 
 The flow between them is a one-directional provenance chain: **who said what →
 what was observed → what was learned → what works.** Entities are extracted

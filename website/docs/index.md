@@ -212,4 +212,8 @@ The problem with bolt-on memory, and the category uniko defines.
 ### [Benchmarks](benchmarks/index.md)
 Full LoCoMo results and the head-to-head cost / latency comparison.
 </div>
+<div class="feature-card" markdown>
+### [Python SDK](python/index.md)
+The same in-process engine from Python — async-first, with blocking `*_sync` twins.
+</div>
 </div>

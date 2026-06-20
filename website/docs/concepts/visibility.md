@@ -115,7 +115,8 @@ is applied as a *filter* over that bundle, just before it is handed to the
 caller, via `filter_bundle`:
 
 ```rust
-use uniko_api::tools::{Viewer, filter_bundle};
+use uniko_api::tools::Viewer;
+use uniko_memory::policy::filter_bundle;
 
 let viewer = Viewer::new(&kb, "alice").await?;
 filter_bundle(&kb, &mut bundle, &viewer).await?;

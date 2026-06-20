@@ -114,18 +114,25 @@ target is under 200 ms (NF9).
 
 ## Abductive reasoning — `ABDUCE`
 
-`abduce` runs an abductive Locy program and collects the supporting facts behind a
-conclusion into an `AbductionResult`:
+`abduce` runs an abductive Locy program — `ABDUCE <rule> WHERE …` asks "what changes to the
+graph would satisfy this rule?" — and returns the ranked, validated modifications in an
+`AbductionResult`:
 
 ```rust
 pub struct AbductionResult {
-    pub supporting_facts: Vec<(NodeId, HashMap<String, Value>)>,
-    pub confidence: f64,
-    pub explanation: String,
+    pub modifications: Vec<AbducedModification>,
+}
+
+pub struct AbducedModification {
+    pub modification: serde_json::Value,
+    pub validated: bool,
+    pub cost: f64,
 }
 ```
 
-`supporting_facts` is the collected evidence behind the conclusion — the field to build on.
+`modifications` holds each proposed graph change in the engine's ranked order. Per modification,
+`validated` tells you whether applying it satisfies the goal, and `cost` is the ranking cost the
+engine assigned — so you build on the cheapest validated modification first.
 
 The `abduce` module also defines `DerivationTree` / `DerivationNode` types for explaining
 how a rule reached a result.
