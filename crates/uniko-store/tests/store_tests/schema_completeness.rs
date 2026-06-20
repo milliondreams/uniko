@@ -23,16 +23,17 @@ async fn test_db() -> Uni {
 
 #[test]
 fn test_label_count() {
-    assert_eq!(labels::ALL.len(), 22, "expected 22 node labels");
+    // Completeness tripwire: bump when a label is added to `labels::ALL`
+    // (the array is the source of truth). Currently 24 node labels.
+    assert_eq!(labels::ALL.len(), 24, "expected 24 node labels");
 }
 
 #[test]
 fn test_edge_count() {
-    // 50 = original 48 + REINFORCED (Cycle → Fact, prior increment) +
-    // ATTACHED_TO (Artifact → Session/Message, contextual artifact
-    // provenance, F22/F30). REINFORCED was added to `edges::ALL` without
-    // updating this count, so it was already failing before this change.
-    assert_eq!(edges::ALL.len(), 50, "expected 50 edge types");
+    // Completeness tripwire: bump when an edge is added to `edges::ALL`
+    // (the array is the source of truth). Currently 53 edge types — grown
+    // from the earlier 48 via REINFORCED, ATTACHED_TO, and later additions.
+    assert_eq!(edges::ALL.len(), 53, "expected 53 edge types");
 }
 
 #[test]
