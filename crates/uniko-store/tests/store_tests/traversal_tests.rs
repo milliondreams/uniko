@@ -171,3 +171,60 @@ async fn test_ppr_empty_seeds() {
 
     kb.shutdown().await.unwrap();
 }
+
+/// `personalized_pagerank_weighted` must consume the per-edge `weight`
+/// property (written by consolidation 1c), not just the per-type
+/// multiplier: a seed forking to two nodes via the *same* edge type but
+/// different per-edge weights should send more activation to the
+/// higher-weighted neighbour. Without the per-edge consumer both edges
+/// carry the type weight 1.0 and the scores tie.
+#[tokio::test]
+async fn test_ppr_consumes_per_edge_weight() {
+    let kb = test_kb().await;
+
+    let mk = |tag: &str| {
+        let mut props = HashMap::new();
+        props.insert("message_id".into(), Value::String(format!("ppr-w-{tag}")));
+        props.insert("content".into(), Value::String(format!("node {tag}")));
+        props.insert(
+            "timestamp".into(),
+            Value::String("2024-01-01T00:00:00Z".into()),
+        );
+        props
+    };
+    let s = kb.create_node("Message", &mk("s")).await.unwrap();
+    let a = kb.create_node("Message", &mk("a")).await.unwrap();
+    let b = kb.create_node("Message", &mk("b")).await.unwrap();
+
+    // Same edge type, different per-edge weight.
+    let mut hi = HashMap::new();
+    hi.insert("weight".to_string(), Value::Float(0.9));
+    let mut lo = HashMap::new();
+    lo.insert("weight".to_string(), Value::Float(0.1));
+    kb.create_edge("MENTIONS", s, a, &hi).await.unwrap();
+    kb.create_edge("MENTIONS", s, b, &lo).await.unwrap();
+
+    let mut edge_weights = HashMap::new();
+    edge_weights.insert("MENTIONS".to_string(), 1.0);
+
+    let result = kb
+        .personalized_pagerank_weighted(&[s], 0.85, 50, 10, Some(&edge_weights))
+        .await
+        .unwrap();
+
+    let score = |nid: i64| {
+        result
+            .scores
+            .iter()
+            .find(|(n, _)| *n == nid)
+            .map(|(_, sc)| *sc)
+            .unwrap_or(0.0)
+    };
+    let (sa, sb) = (score(a), score(b));
+    assert!(
+        sa > sb,
+        "higher per-edge weight should yield higher PPR score: a={sa} b={sb}"
+    );
+
+    kb.shutdown().await.unwrap();
+}

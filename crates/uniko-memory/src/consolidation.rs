@@ -424,7 +424,7 @@ pub async fn run_cycle_with(
     // the per-fact `upsert_fact_by_triple` loop.
     let upsert_inputs: Vec<FactUpsertInput> = plans
         .iter()
-        .zip(fact_embeddings)
+        .zip(fact_embeddings.iter().cloned())
         .map(|(plan, embedding)| FactUpsertInput {
             subject: plan.subject.clone(),
             predicate: plan.predicate.clone(),
@@ -441,11 +441,29 @@ pub async fn run_cycle_with(
     // is preserved: cycles only process observations with no inbound
     // PROCESSED edge from prior cycles, so each (fact, obs) pair is
     // wired exactly once.
+    // 1c: weight each SUPPORTED_BY edge by cosine(Fact embedding,
+    // Observation content embedding) so downstream PPR (and any consumer
+    // of per-edge support strength) can favour strongly-supporting
+    // evidence over weak paraphrase matches. Falls back to 1.0 — the prior
+    // uniform behaviour — whenever either embedding is absent (e.g. the
+    // embedding model was unavailable this cycle), so the edge is never
+    // dropped or zero-weighted by accident.
+    let contributing_ids: Vec<NodeId> = plans
+        .iter()
+        .flat_map(|p| p.contributing.iter().copied())
+        .collect();
+    let obs_embeddings = fetch_observation_embeddings(kb, &contributing_ids).await;
+
     let mut all_supported_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
-    for (plan, up) in plans.iter().zip(upserts.iter()) {
+    for (idx, (plan, up)) in plans.iter().zip(upserts.iter()).enumerate() {
+        let fact_emb = fact_embeddings.get(idx).and_then(Option::as_ref);
         for &obs_nid in &plan.contributing {
+            let weight = supported_by_weight(
+                fact_emb.map(Vec::as_slice),
+                obs_embeddings.get(&obs_nid).map(Vec::as_slice),
+            );
             let mut props = HashMap::with_capacity(1);
-            props.insert("weight".into(), Value::Float(1.0));
+            props.insert("weight".into(), Value::Float(weight));
             all_supported_edges.push((up.node_id, obs_nid, props));
         }
     }
@@ -620,6 +638,60 @@ fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
     } else {
         dot / (na.sqrt() * nb.sqrt())
     }
+}
+
+/// Support-strength weight for a `SUPPORTED_BY` edge (1c): the cosine of
+/// the Fact and Observation embeddings, clamped to `[0, 1]`. Falls back to
+/// `1.0` — the prior uniform behaviour — when either embedding is absent,
+/// so an edge is never dropped or zero-weighted by accident.
+fn supported_by_weight(fact_emb: Option<&[f32]>, obs_emb: Option<&[f32]>) -> f64 {
+    match (fact_emb, obs_emb) {
+        (Some(f), Some(o)) => f64::from(cosine_sim(f, o)).clamp(0.0, 1.0),
+        _ => 1.0,
+    }
+}
+
+/// Batched read of `Observation.embedding` for the given node ids
+/// (auto-embedded on `content` at ingest). Ids absent from the result —
+/// because the column is null or the read fails — simply don't appear in
+/// the map, so [`run_cycle_with`]'s SUPPORTED_BY weighting falls back to
+/// `1.0` for them. Read-only, runs on a plain session (no tx needed).
+async fn fetch_observation_embeddings(
+    kb: &KnowledgeBase,
+    ids: &[NodeId],
+) -> HashMap<NodeId, Vec<f32>> {
+    let mut out: HashMap<NodeId, Vec<f32>> = HashMap::new();
+    if ids.is_empty() {
+        return out;
+    }
+    let id_list = ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    // UNWIND over an inline id-literal list mirrors the proven
+    // `fetch_entities_for_upsert_in_tx` pattern (ids are i64, injection-safe).
+    let cypher = format!(
+        "UNWIND [{id_list}] AS oid \
+         MATCH (o:Observation) WHERE id(o) = oid \
+         RETURN id(o) AS id, o.embedding AS emb"
+    );
+    match kb.db().session().query_with(&cypher).fetch_all().await {
+        Ok(result) => {
+            for row in result.rows() {
+                if let (Ok(id), Ok(emb)) = (row.get::<i64>("id"), row.get::<Vec<f32>>("emb")) {
+                    out.insert(id, emb);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "fetch_observation_embeddings failed; SUPPORTED_BY weights fall back to 1.0"
+            );
+        }
+    }
+    out
 }
 
 /// Assign each normalized key to a cluster id via single-pass greedy
@@ -1042,6 +1114,26 @@ mod tests {
             s, "[March 2024] Caroline is feeling happy today",
             "fallback path should embed the freshest contributor's content prefixed with the date"
         );
+    }
+
+    #[test]
+    fn supported_by_weight_reflects_cosine_and_falls_back() {
+        let v = [1.0_f32, 0.0, 0.0];
+        // Identical embeddings → weight 1.0.
+        assert!((supported_by_weight(Some(&v), Some(&v)) - 1.0).abs() < 1e-6);
+        // Orthogonal embeddings → weight 0.0.
+        let a = [1.0_f32, 0.0];
+        let b = [0.0_f32, 1.0];
+        assert!(supported_by_weight(Some(&a), Some(&b)).abs() < 1e-6);
+        // Partial overlap (45°) → ~0.707, strictly between 0 and 1.
+        let c = [1.0_f32, 1.0];
+        let d = [1.0_f32, 0.0];
+        let w = supported_by_weight(Some(&c), Some(&d));
+        assert!(w > 0.6 && w < 0.8, "expected ~0.707, got {w}");
+        // Missing either embedding → fallback 1.0 (never drop/zero an edge).
+        assert_eq!(supported_by_weight(None, Some(&v)), 1.0);
+        assert_eq!(supported_by_weight(Some(&v), None), 1.0);
+        assert_eq!(supported_by_weight(None, None), 1.0);
     }
 
     #[test]

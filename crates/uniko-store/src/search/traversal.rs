@@ -225,7 +225,10 @@ impl KnowledgeBase {
         //    so we can apply per-type multipliers.
         let session = self.db.session();
         let result = session
-            .query("MATCH (a)-[r]->(b) RETURN id(a) AS src, id(b) AS dst, type(r) AS etype")
+            .query(
+                "MATCH (a)-[r]->(b) \
+                 RETURN id(a) AS src, id(b) AS dst, type(r) AS etype, r.weight AS ew",
+            )
             .await?;
 
         // Build weighted adjacency: src -> [(dst, weight), ...]
@@ -236,9 +239,15 @@ impl KnowledgeBase {
             let src: i64 = row.get("src")?;
             let dst: i64 = row.get("dst")?;
             let etype: String = row.get("etype").unwrap_or_default();
-            let w = edge_weights
+            let type_w = edge_weights
                 .and_then(|m| m.get(&etype).copied())
                 .unwrap_or(1.0);
+            // Per-edge weight (e.g. SUPPORTED_BY cosine support strength,
+            // written by consolidation 1c) modulates the per-type
+            // multiplier. Edges with no `weight` property return null →
+            // default 1.0, preserving the prior per-type-only behaviour.
+            let edge_w: f64 = row.get::<f64>("ew").unwrap_or(1.0);
+            let w = type_w * edge_w;
             // Drop zero-weight edges entirely — they don't contribute.
             if w == 0.0 {
                 all_nodes.insert(src);
