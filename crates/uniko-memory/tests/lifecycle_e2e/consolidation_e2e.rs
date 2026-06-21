@@ -170,6 +170,50 @@ async fn cycle_derives_one_fact_per_triple_cluster() {
     assert!((conf - (5.0 / 6.0)).abs() < 1e-6, "Laplace confidence");
 }
 
+/// 1c: every SUPPORTED_BY edge a cycle writes must carry a `weight`
+/// property in [0, 1] — the cosine(Fact, Observation) support strength,
+/// or the 1.0 fallback when embeddings are absent (the in-memory test KB
+/// has no embedding model, so this exercises the fallback path and proves
+/// the new weighting code neither panics nor drops edges).
+#[tokio::test]
+async fn cycle_writes_supported_by_weight_in_unit_range() {
+    let kb = test_kb().await;
+    for i in 0..3 {
+        seed_observation(
+            &kb,
+            "caroline",
+            Some("researches"),
+            Some("adoption agencies"),
+            &format!("Caroline researches adoption agencies (msg {i})"),
+            ts(2024, 1, 1 + i),
+        )
+        .await;
+    }
+
+    let stats = run_cycle(&kb, "agent-1", None).await.expect("cycle ok");
+    assert_eq!(stats.facts_created, 1);
+
+    let session = kb.db().session();
+    let result = session
+        .query_with("MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN r.weight AS w")
+        .fetch_all()
+        .await
+        .expect("query SUPPORTED_BY weights");
+    let weights: Vec<f64> = result
+        .rows()
+        .iter()
+        .filter_map(|row| row.get::<f64>("w").ok())
+        .collect();
+
+    assert_eq!(weights.len(), 3, "one SUPPORTED_BY edge per contributing obs");
+    for w in weights {
+        assert!(
+            (0.0..=1.0).contains(&w),
+            "SUPPORTED_BY weight must be in [0,1], got {w}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn cycle_is_idempotent_within_run() {
     let kb = test_kb().await;
