@@ -238,3 +238,13 @@ and a Rust stable toolchain with `clippy` + `rustfmt`, then runs the uni-db seal
 `cargo fmt --all --check`, and `cargo nextest run --workspace`. A separate job
 runs `cargo deny check`. Keeping the [§3 check loop](#the-local-check-loop-mirrors-ci-exactly)
 green locally is sufficient to pass CI.
+
+---
+
+## 9. Releasing
+
+Publishing the crates to crates.io and the `uniko` wheels to PyPI is driven by
+`.github/workflows/release.yml` — push a `v*` tag, then approve the gated
+`release` environment in the Actions UI. The full process, including the
+one-time Trusted Publishing setup for crates.io and PyPI, is documented in
+[`RELEASING.md`](RELEASING.md).
