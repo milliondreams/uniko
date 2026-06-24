@@ -98,6 +98,59 @@ fn is_pronoun(s: &str) -> bool {
     )
 }
 
+/// A name that looks like a temporal expression (date/time reference) —
+/// these belong on observation temporal anchors, not as `Entity` nodes.
+fn is_temporal(s: &str) -> bool {
+    let t = s.trim().trim_end_matches(['.', ',', '!', '?', ';', ':']).to_lowercase();
+    const MONTHS: [&str; 12] = [
+        "january", "february", "march", "april", "may", "june", "july", "august",
+        "september", "october", "november", "december",
+    ];
+    const DAYS: [&str; 9] = [
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "today",
+        "tomorrow",
+    ];
+    const SEASONS: [&str; 5] = ["summer", "winter", "spring", "fall", "autumn"];
+    const REL: [&str; 8] = [
+        "yesterday", "tonight", "morning", "evening", "afternoon", "noon", "midnight", "weekend",
+    ];
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let first = words.first().copied().unwrap_or("");
+    MONTHS.contains(&t.as_str())
+        || DAYS.contains(&t.as_str())
+        || SEASONS.contains(&t.as_str())
+        || REL.contains(&t.as_str())
+        || words.iter().any(|w| MONTHS.contains(w) || DAYS.contains(w) || REL.contains(w))
+        // "last X" / "next X" / "this X" / "X ago" / "last fri"
+        || matches!(first, "last" | "next" | "this")
+        || t.ends_with(" ago")
+        || t.starts_with("last fri")
+        // bare year or numeric date fragments
+        || (t.chars().all(|c| c.is_ascii_digit() || c == '/' || c == '-') && t.len() >= 2)
+}
+
+/// A name that looks like a greeting / discourse fragment, not an entity.
+fn is_greeting(s: &str) -> bool {
+    let first = s
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    matches!(
+        first.as_str(),
+        "hey" | "hi" | "hello" | "thanks" | "thank" | "bye" | "goodbye"
+            | "ok" | "okay" | "yeah" | "yep" | "yes" | "nope" | "sure" | "well"
+            | "oh" | "wow" | "hmm" | "please" | "sorry" | "congrats" | "congratulations"
+    )
+}
+
+/// Trailing punctuation that should be normalised out of a canonical name.
+fn has_trailing_punct(s: &str) -> bool {
+    s.trim().ends_with(['.', ',', '!', '?', ';', ':'])
+}
+
 fn pct(n: i64, total: i64) -> f64 {
     if total <= 0 {
         0.0
@@ -241,6 +294,54 @@ async fn main() -> anyhow::Result<()> {
              backfill first."
         );
     }
+
+    // ── Entity precision: how many "entities" are actually noise? ──
+    {
+        let rows = session
+            .query_with(&format!(
+                "MATCH (e:Entity) RETURN e.name AS name, coalesce(e.entity_type, '') AS typ \
+                 LIMIT {max_entities}"
+            ))
+            .fetch_all()
+            .await?;
+        let mut by_type: std::collections::BTreeMap<String, i64> = Default::default();
+        let (mut temporal, mut greeting, mut punct, mut clean) = (0i64, 0i64, 0i64, 0i64);
+        let mut temporal_s: Vec<String> = Vec::new();
+        let mut greeting_s: Vec<String> = Vec::new();
+        let mut punct_s: Vec<String> = Vec::new();
+        for r in rows.rows() {
+            let name: String = r.get("name").unwrap_or_default();
+            let typ: String = r.get("typ").unwrap_or_default();
+            *by_type.entry(if typ.is_empty() { "<none>".into() } else { typ }).or_insert(0) += 1;
+            if is_temporal(&name) {
+                temporal += 1;
+                if temporal_s.len() < 20 { temporal_s.push(name); }
+            } else if is_greeting(&name) {
+                greeting += 1;
+                if greeting_s.len() < 20 { greeting_s.push(name); }
+            } else if has_trailing_punct(&name) {
+                punct += 1;
+                if punct_s.len() < 20 { punct_s.push(name); }
+            } else {
+                clean += 1;
+            }
+        }
+        let noise = temporal + greeting + punct;
+        let loaded = temporal + greeting + punct + clean;
+        println!("  entity_type histogram:");
+        for (t, c) in &by_type {
+            println!("    {t:<14} {c}");
+        }
+        println!(
+            "  NOISE: temporal={temporal} greeting={greeting} trailing-punct={punct}  \
+             => {noise}/{loaded} ({:.1}%) look like non-entities; clean={clean}",
+            pct(noise, loaded)
+        );
+        if !temporal_s.is_empty() { println!("    temporal e.g.: {temporal_s:?}"); }
+        if !greeting_s.is_empty() { println!("    greeting e.g.: {greeting_s:?}"); }
+        if !punct_s.is_empty() { println!("    trailing-punct e.g.: {punct_s:?}"); }
+    }
+
     // Name-based duplication sizing (independent of embeddings): distinct-id
     // entity pairs that are normalized-equal (=> cross-type, since same
     // name+type collapses to one entity_id) or substring-contained. This

@@ -156,7 +156,7 @@ pub fn extract_entities_rule_based(text: &str) -> Vec<RawEntity> {
         {
             entities.push(raw(
                 m.as_str(),
-                &m.as_str().trim().to_lowercase(),
+                &uniko_store::text::normalize_canonical(m.as_str()),
                 EntityType::Person,
                 0.7,
                 m.start(),

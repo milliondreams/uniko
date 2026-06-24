@@ -215,6 +215,31 @@ async fn cycle_writes_supported_by_weight_in_unit_range() {
 }
 
 #[tokio::test]
+async fn cycle_groups_subject_case_and_punct_variants() {
+    // Subjects that differ only by casing/punctuation must consolidate into
+    // a single Fact (the consolidation group key is normalized). Without
+    // normalization these would fragment into three separate Facts.
+    let kb = test_kb().await;
+    for (i, subj) in ["Melanie", "melanie.", "MELANIE"].iter().enumerate() {
+        seed_observation(
+            &kb,
+            subj,
+            Some("likes"),
+            Some("rust"),
+            &format!("{subj} likes rust"),
+            ts(2024, 1, 1 + i as u32),
+        )
+        .await;
+    }
+    let stats = run_cycle(&kb, "agent-1", None).await.expect("cycle ok");
+    assert_eq!(
+        stats.facts_created, 1,
+        "subject case/punct variants must group into one Fact"
+    );
+    assert_eq!(count_facts(&kb).await, 1);
+}
+
+#[tokio::test]
 async fn cycle_is_idempotent_within_run() {
     let kb = test_kb().await;
     seed_observation(

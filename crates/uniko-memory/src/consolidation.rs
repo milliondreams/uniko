@@ -225,8 +225,15 @@ pub async fn run_cycle_with(
     // and object surface forms for canonical selection.
     let mut groups: HashMap<(String, String), GroupBuilder> = HashMap::new();
     for obs in &observations {
+        // Normalize the subject in the grouping key so case/punctuation
+        // variants ("Melanie" / "melanie" / "Melanie.") consolidate into a
+        // single Fact instead of fragmenting. Mirrors `normalize_object`
+        // for objects; idempotent on already-normalized stored subjects.
         let entry = groups
-            .entry((obs.subject.clone(), obs.predicate.clone()))
+            .entry((
+                uniko_store::text::normalize_canonical(&obs.subject),
+                obs.predicate.clone(),
+            ))
             .or_default();
         entry.contributing.push(obs.node_id);
         entry.first_observed_at = Some(min_or(entry.first_observed_at, obs.observed_at));

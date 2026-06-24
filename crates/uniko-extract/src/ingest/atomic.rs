@@ -28,7 +28,7 @@ use super::message::{
     MessageSetup, apply_message_writes_in_tx, ensure_session_and_sender, resolve_recipients,
 };
 use crate::ner::dedup::{
-    EntityUpsertPrep, apply_entity_upsert, deduplicate_raw, prepare_entity_upsert,
+    EntityUpsertPrep, admit_entities, apply_entity_upsert, deduplicate_raw, prepare_entity_upsert,
     suppress_onnx_over_structured,
 };
 use crate::ner::types::RawEntity;
@@ -419,8 +419,16 @@ async fn extract_entities_and_nlp(
     }
 
     // 4. Suppress ONNX-NER guesses overlapping a format-structured rule
-    //    entity (Email/URL), then dedup the remainder by canonical name.
+    //    entity (Email/URL), apply the entity admission policy (drop
+    //    Date/Measurement/Preference/QuotedString noise, gate Other, drop
+    //    greeting fragments), then dedup the remainder by canonical name.
     let all_raw = suppress_onnx_over_structured(all_raw);
+    let cfg = kb.config();
+    let all_raw = admit_entities(
+        all_raw,
+        cfg.entity_strict_admission,
+        cfg.entity_other_min_confidence,
+    );
     let deduped = deduplicate_raw(all_raw);
 
     EntityExtractionOutput {

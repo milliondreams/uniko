@@ -135,3 +135,39 @@ async fn test_atomic_populates_entities() {
         assert_eq!(label, "Entity");
     }
 }
+
+#[tokio::test]
+async fn test_admission_drops_date_and_greeting_keeps_real() {
+    // Default-build end-to-end check of the entity admission policy: the
+    // rules NER tags "January 15, 2024" as a Date and "Hey Caroline Smith"
+    // as a single greeting-prefixed Person; admission must drop both while
+    // keeping the URL.
+    let kb = test_kb().await;
+    let content = "Hey Caroline Smith, visit https://rust-lang.org on January 15, 2024.";
+    let msg = ingest_msg("m-admit", content, "text", "s-admit");
+    let mut session_ctx = SessionContext::new(msg.session_id.clone(), 0);
+    let result = ingest_message_atomic(&kb, &msg, &mut session_ctx)
+        .await
+        .expect("ingest");
+
+    // Assert on the surviving entities' canonical names directly (the
+    // String in `extracted_entities`), avoiding per-node fetches.
+    let names: Vec<String> = result
+        .extracted_entities
+        .iter()
+        .map(|(_, name)| name.clone())
+        .collect();
+
+    assert!(
+        names.iter().any(|n| n.contains("rust-lang.org")),
+        "the URL must survive admission; got {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.starts_with("hey ")),
+        "greeting-prefixed fragments must be dropped; got {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("january") || n.contains("2024")),
+        "date entities must be dropped by admission; got {names:?}"
+    );
+}

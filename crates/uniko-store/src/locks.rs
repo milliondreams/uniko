@@ -112,6 +112,28 @@ impl StripedLocks {
         self.stripes[idx].lock().await
     }
 
+    /// Acquire the stripes for a set of keys, **deduped by stripe index**
+    /// and acquired in ascending stripe order.
+    ///
+    /// This is the safe way to hold several keys at once. Two *distinct*
+    /// keys can hash to the same stripe; acquiring that stripe's
+    /// non-reentrant [`Mutex`] twice in one call would self-deadlock, so
+    /// keys are collapsed to their unique stripe set first. Sorting the
+    /// stripe indices also gives a consistent global acquisition order,
+    /// preventing AB/BA deadlocks between concurrent multi-key callers.
+    ///
+    /// Returns one guard per distinct stripe (may be fewer than `keys`).
+    pub async fn lock_many(&self, keys: &[Vec<u8>]) -> Vec<MutexGuard<'_, ()>> {
+        let mut idxs: Vec<usize> = keys.iter().map(|k| self.stripe_index(k)).collect();
+        idxs.sort_unstable();
+        idxs.dedup();
+        let mut guards = Vec::with_capacity(idxs.len());
+        for i in idxs {
+            guards.push(self.stripes[i].lock().await);
+        }
+        guards
+    }
+
     fn stripe_index(&self, key: &[u8]) -> usize {
         let mut h = DefaultHasher::new();
         key.hash(&mut h);
@@ -235,5 +257,36 @@ mod tests {
     #[should_panic(expected = "at least 1 stripe")]
     fn zero_stripes_panics() {
         let _ = StripedLocks::new(0);
+    }
+
+    #[tokio::test]
+    async fn lock_many_dedups_colliding_stripes_no_deadlock() {
+        // 1 stripe forces every key onto the same stripe — the worst case
+        // for the self-deadlock `lock_many` exists to prevent. Acquiring
+        // two DISTINCT keys must collapse to a single stripe guard rather
+        // than block on the same non-reentrant mutex twice.
+        let locks = StripedLocks::new(1);
+        let guards = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            locks.lock_many(&[b"session:x".to_vec(), b"participant:y".to_vec()]),
+        )
+        .await
+        .expect("lock_many must not self-deadlock on colliding stripes");
+        assert_eq!(guards.len(), 1, "colliding keys collapse to one stripe guard");
+    }
+
+    #[tokio::test]
+    async fn lock_many_distinct_stripes_returns_all() {
+        let locks = StripedLocks::new(256);
+        let guards = locks
+            .lock_many(&[b"entity:a".to_vec(), b"entity:b".to_vec(), b"entity:a".to_vec()])
+            .await;
+        // Duplicate key "entity:a" collapses; the two distinct keys
+        // *usually* land on different stripes (256 stripes).
+        assert!(
+            (1..=2).contains(&guards.len()),
+            "expected 1-2 stripe guards, got {}",
+            guards.len()
+        );
     }
 }

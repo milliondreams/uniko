@@ -46,6 +46,8 @@ fn fillers() -> &'static HashSet<&'static str> {
             "wow",
             "oh wow",
             "whoa",
+            "congrats",
+            "congratulations",
             "omg",
             "lol",
             "haha",
@@ -97,6 +99,21 @@ fn is_greeting_or_filler(text: &str) -> bool {
         .trim()
         .to_lowercase();
     fillers().contains(normalized.as_str())
+}
+
+/// True if the first whitespace token of `name` is a greeting/filler word
+/// (e.g. "Hey Melanie", "Thanks Mel", "Congrats Caroline"). Used by entity
+/// admission to reject discourse fragments the proper-noun rule wrongly
+/// captures as `Person` entities, reusing the same filler vocabulary as
+/// message-level filtering.
+pub fn starts_with_filler(name: &str) -> bool {
+    let first = name
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| c.is_ascii_punctuation())
+        .to_lowercase();
+    !first.is_empty() && fillers().contains(first.as_str())
 }
 
 fn is_pure_question(text: &str) -> bool {

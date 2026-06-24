@@ -394,7 +394,13 @@ pub async fn apply_observations(
             let mut props = HashMap::new();
             props.insert("observation_id".into(), Value::String(obs_id));
             props.insert("content".into(), Value::String(raw.content.clone()));
-            props.insert("subject".into(), Value::String(raw.subject.clone()));
+            // Normalize the subject (the grouping/ABOUT key) so it keys
+            // identically with Entity names and consolidation grouping. The
+            // human-readable form lives in `content`, left untouched.
+            props.insert(
+                "subject".into(),
+                Value::String(uniko_store::text::normalize_canonical(&raw.subject)),
+            );
             if let Some(pred) = &raw.predicate {
                 props.insert("predicate".into(), Value::String(pred.clone()));
             }
@@ -456,8 +462,8 @@ pub async fn apply_observations(
             {
                 continue;
             }
-            let subj = raw.subject.to_lowercase();
-            let ename = name.to_lowercase();
+            let subj = uniko_store::text::normalize_canonical(&raw.subject);
+            let ename = uniko_store::text::normalize_canonical(name);
             if subj == ename || subj.contains(&ename) || ename.contains(&subj) {
                 about_edges.push((obs_nid, entity_nid, HashMap::new()));
             }

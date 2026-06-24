@@ -60,6 +60,47 @@ fn spans_overlap(s1: usize, e1: usize, s2: usize, e2: usize) -> bool {
     s1 < e2 && s2 < e1
 }
 
+/// Entity admission policy — keep only genuine *named* entities.
+///
+/// Diagnosed: ~40% of extracted entities were `Date` noise and ~58% were
+/// non-entities overall (greeting fragments, punctuation variants). This
+/// drops the NER outputs that belong elsewhere in the graph:
+/// - `Date` → already captured by observation temporal anchors,
+/// - `Measurement` / `Preference` / `QuotedString` → captured in
+///   observation triples,
+/// - `Other` (the ONNX Event/Product/WorkOfArt/Group/Misc catch-all) →
+///   admitted only above `other_min_confidence`,
+/// - `Person` greeting/discourse fragments ("Hey Melanie") → dropped via
+///   the shared filler vocabulary.
+///
+/// Real named types (Person, Organization, Location, Url, Email,
+/// CodeSymbol, CodeImport) are always kept. When `strict` is `false` the
+/// input passes through unchanged (legacy admit-everything, for A/B).
+#[must_use]
+pub fn admit_entities(raw: Vec<RawEntity>, strict: bool, other_min_confidence: f64) -> Vec<RawEntity> {
+    if !strict {
+        return raw;
+    }
+    raw.into_iter()
+        .filter(|e| match e.entity_type {
+            EntityType::Date
+            | EntityType::Measurement
+            | EntityType::Preference
+            | EntityType::QuotedString => false,
+            EntityType::Other => e.confidence >= other_min_confidence,
+            EntityType::Person => {
+                !crate::observations::filter::starts_with_filler(&e.canonical_name)
+            }
+            EntityType::Organization
+            | EntityType::Location
+            | EntityType::Url
+            | EntityType::Email
+            | EntityType::CodeSymbol
+            | EntityType::CodeImport => true,
+        })
+        .collect()
+}
+
 /// Merge raw entities by canonical name within a single extraction batch.
 ///
 /// Entities with the same `canonical_name` are collapsed: the highest
@@ -327,6 +368,33 @@ mod tests {
     }
 
     #[test]
+    fn test_dedup_collapses_normalized_case_and_punct_variants() {
+        // Cross-path scenario the shared normalizer fixes: rules emits
+        // "Melanie." → "melanie"; the ONNX path emits "Melanie" (was
+        // title_case, now normalized) → "melanie". Both canonical names now
+        // match, so the rows collapse to one entity (previously they split
+        // into "melanie" vs "Melanie").
+        let mk = |surface: &str, source: ExtractionSource| RawEntity {
+            surface_form: surface.to_string(),
+            canonical_name: uniko_store::text::normalize_canonical(surface),
+            entity_type: EntityType::Person,
+            confidence: 0.8,
+            source,
+            start_byte: 0,
+            end_byte: surface.len(),
+        };
+        let raw = vec![
+            mk("Melanie.", ExtractionSource::RuleBased),
+            mk("Melanie", ExtractionSource::OnnxModel),
+            mk("melanie", ExtractionSource::RuleBased),
+        ];
+        let deduped = deduplicate_raw(raw);
+        assert_eq!(deduped.len(), 1, "all three variants must collapse to one");
+        assert_eq!(deduped[0].0.canonical_name, "melanie");
+        assert_eq!(deduped[0].1, 3, "mention count sums across variants");
+    }
+
+    #[test]
     fn test_dedup_single_entity() {
         let raw = vec![make_raw("Carol", 0.8)];
         let deduped = deduplicate_raw(raw);
@@ -429,5 +497,87 @@ mod tests {
         ];
         let kept = suppress_onnx_over_structured(raw);
         assert_eq!(kept.len(), 2);
+    }
+
+    fn raw_typed(name: &str, ty: EntityType, conf: f64) -> RawEntity {
+        RawEntity {
+            surface_form: name.to_string(),
+            canonical_name: uniko_store::text::normalize_canonical(name),
+            entity_type: ty,
+            confidence: conf,
+            source: ExtractionSource::OnnxModel,
+            start_byte: 0,
+            end_byte: name.len(),
+        }
+    }
+
+    #[test]
+    fn test_admit_entities_drops_noise_types_keeps_named() {
+        let raw = vec![
+            raw_typed("Caroline Smith", EntityType::Person, 0.9),
+            raw_typed("Google", EntityType::Organization, 0.9),
+            raw_typed("Sweden", EntityType::Location, 0.9),
+            raw_typed("https://x.com", EntityType::Url, 0.95),
+            raw_typed("a@b.com", EntityType::Email, 0.95),
+            raw_typed("yesterday", EntityType::Date, 0.9),
+            raw_typed("5 gb", EntityType::Measurement, 0.85),
+            raw_typed("vscode", EntityType::Preference, 0.7),
+            raw_typed("adoption agencies", EntityType::QuotedString, 0.6),
+        ];
+        let kept = admit_entities(raw, true, 0.9);
+        let kept_types: Vec<EntityType> = kept.iter().map(|e| e.entity_type).collect();
+        assert_eq!(kept.len(), 5, "only the 5 named-entity types survive");
+        for t in [
+            EntityType::Person,
+            EntityType::Organization,
+            EntityType::Location,
+            EntityType::Url,
+            EntityType::Email,
+        ] {
+            assert!(kept_types.contains(&t), "{t:?} should be kept");
+        }
+        for t in [
+            EntityType::Date,
+            EntityType::Measurement,
+            EntityType::Preference,
+            EntityType::QuotedString,
+        ] {
+            assert!(!kept_types.contains(&t), "{t:?} should be dropped");
+        }
+    }
+
+    #[test]
+    fn test_admit_entities_gates_other_by_confidence() {
+        let raw = vec![
+            raw_typed("Some Event", EntityType::Other, 0.95),
+            raw_typed("vague thing", EntityType::Other, 0.80),
+        ];
+        let kept = admit_entities(raw, true, 0.9);
+        assert_eq!(kept.len(), 1, "only the high-confidence Other survives");
+        assert!((kept[0].confidence - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_admit_entities_drops_greeting_person() {
+        let raw = vec![
+            raw_typed("hey melanie", EntityType::Person, 0.7),
+            raw_typed("thanks mel", EntityType::Person, 0.7),
+            raw_typed("congrats caroline", EntityType::Person, 0.7),
+            raw_typed("melanie smith", EntityType::Person, 0.7),
+        ];
+        let kept = admit_entities(raw, true, 0.9);
+        assert_eq!(kept.len(), 1, "only the real person name survives");
+        assert_eq!(kept[0].canonical_name, "melanie smith");
+    }
+
+    #[test]
+    fn test_admit_entities_passthrough_when_not_strict() {
+        let raw = vec![
+            raw_typed("yesterday", EntityType::Date, 0.9),
+            raw_typed("hey melanie", EntityType::Person, 0.7),
+        ];
+        let n = raw.len();
+        let kept = admit_entities(raw, false, 0.9);
+        assert_eq!(kept.len(), n, "non-strict admits everything unchanged");
     }
 }

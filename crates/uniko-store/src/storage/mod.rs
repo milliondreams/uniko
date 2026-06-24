@@ -428,17 +428,14 @@ impl KnowledgeBase {
         &self,
         entity_ids: &[String],
     ) -> Vec<tokio::sync::MutexGuard<'_, ()>> {
-        let mut keys: Vec<Vec<u8>> = entity_ids
+        let keys: Vec<Vec<u8>> = entity_ids
             .iter()
             .map(|id| crate::locks::entity_lock_key(id))
             .collect();
-        keys.sort_unstable();
-        keys.dedup();
-        let mut guards = Vec::with_capacity(keys.len());
-        for k in &keys {
-            guards.push(self.rmw_locks.lock(k).await);
-        }
-        guards
+        // `lock_many` dedups by stripe index (not just by key bytes):
+        // two distinct entity ids can hash to the same stripe, and
+        // acquiring that non-reentrant stripe twice would self-deadlock.
+        self.rmw_locks.lock_many(&keys).await
     }
 
     /// Acquire the per-session and per-participant RMW locks for a
@@ -461,17 +458,14 @@ impl KnowledgeBase {
         session_id: &str,
         participant_id: &str,
     ) -> Vec<tokio::sync::MutexGuard<'_, ()>> {
-        let mut keys = vec![
+        let keys = [
             crate::locks::session_lock_key(session_id),
             crate::locks::participant_lock_key(participant_id),
         ];
-        keys.sort_unstable();
-        keys.dedup();
-        let mut guards = Vec::with_capacity(keys.len());
-        for k in &keys {
-            guards.push(self.rmw_locks.lock(k).await);
-        }
-        guards
+        // `lock_many` dedups by stripe index: the session and participant
+        // keys can hash to the same stripe, and acquiring that
+        // non-reentrant stripe twice would self-deadlock.
+        self.rmw_locks.lock_many(&keys).await
     }
 
     /// Runtime configuration.

@@ -636,6 +636,21 @@ pub struct UnikoConfig {
     /// per-verb re-forward cost is unacceptable for a given workload.
     pub nlp_srl_enabled: bool,
 
+    // Entity admission (precision)
+    /// Strict entity admission: drop NER outputs that aren't genuine named
+    /// entities — `Date` (handled by observation temporal anchors),
+    /// `Measurement`/`Preference`/`QuotedString` (captured in observation
+    /// triples) — and greeting/discourse fragments wrongly grabbed as
+    /// `Person`, and gate the `Other` catch-all by confidence. Default
+    /// `true`. Set `false` to restore the legacy admit-everything behaviour
+    /// (used for A/B comparison). Diagnosed: ~40% of entities were `date`
+    /// noise; ~58% non-entities overall.
+    pub entity_strict_admission: bool,
+    /// Minimum confidence for an `EntityType::Other` span (ONNX
+    /// Event/Product/WorkOfArt/Group/Misc) to be admitted as an Entity when
+    /// `entity_strict_admission` is on.
+    pub entity_other_min_confidence: f64,
+
     // Recall parameters
     /// Maximum items returned from recall.
     pub recall_limit: usize,
@@ -768,6 +783,8 @@ impl Default for UnikoConfig {
             recall_vector_weight: 0.5,
             recall_bm25_weight: 0.5,
             nlp_srl_enabled: true,
+            entity_strict_admission: true,
+            entity_other_min_confidence: 0.9,
             query_variants: Vec::new(),
             rrf_k: 60.0,
             recall_per_variant_limit: None,

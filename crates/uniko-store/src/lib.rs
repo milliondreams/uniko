@@ -30,6 +30,7 @@ pub mod repository;
 pub mod schema;
 pub mod search;
 pub mod storage;
+pub mod text;
 pub mod types;
 
 pub use error::{Result, UnikoError};
