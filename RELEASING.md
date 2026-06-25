@@ -98,6 +98,20 @@ For **each** of the 6 publishable crates, on crates.io:
 > machine (`cargo publish -p <crate>`), then add the trusted publisher for
 > subsequent releases. Confirm this per crate before relying on the gated job.
 
+> **Bootstrap from a clean clone, not your dev tree.** `cargo publish` first runs a
+> libgit2 status walk from the repo root. A working tree with large *gitignored* dirs
+> (`data/` benchmark KBs, `target/`, `.uni_cache/`, `.venv/` — millions of files) makes
+> that walk fail with `failed to retrieve git status … Failed to update the excludes
+> stack`. `--allow-dirty` does **not** help (it suppresses the dirty *warning*, not the
+> walk). Publish from a fresh checkout instead, which contains only tracked files:
+>
+> ```sh
+> git clone --local . /tmp/uniko-publish && cd /tmp/uniko-publish
+> cargo publish -p uniko-store   # then the rest, in dependency order
+> ```
+>
+> CI is unaffected — it always checks out clean.
+
 ### 3. PyPI Trusted Publishing
 
 On PyPI: **Your projects → (or "Publishing" for a new project) → Add a pending

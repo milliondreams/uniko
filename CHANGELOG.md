@@ -31,6 +31,13 @@ infrastructure (no Neo4j, no Qdrant, no PostgreSQL).
   - observation extraction (rules, a YAML rules engine, and SRL frames);
   - recursive text chunking;
   - embedding (BGE-small-en-v1.5, 384d by default; pluggable) via uni-db auto-embed.
+- **Entity-quality admission and canonicalization.** Strict entity admission (on by
+  default) drops NER noise — temporal, measurement, and quoted-string spans already
+  captured as observations, plus greeting/discourse fragments mis-tagged as people — and
+  gates the low-confidence catch-all by confidence. Canonical text normalization collapses
+  case and punctuation variants (`"Melanie."` / `"melanie"` → `melanie`) so the same name
+  keys identically across rule-based and ONNX NER, observation `ABOUT` edges, and
+  consolidation grouping, and a cross-source dedup cascade resolves overlapping mentions.
 - **Asynchronous consolidation** that runs off the ingest hot path:
   - fact derivation from observation clusters (paraphrase collapsing);
   - contradiction detection and entity-drift flagging with bitemporal (BTIC) intervals;
