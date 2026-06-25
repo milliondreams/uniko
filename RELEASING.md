@@ -43,7 +43,7 @@ there are **no API tokens stored in the repo**.
 | --- | --- | --- |
 | `guard` | no | Fails unless the tag matches the workspace version. |
 | `validate-crates` | no | `cargo publish --dry-run` for the leaf crate; `cargo package --no-verify` for the rest. |
-| `build-wheels` | no | Builds abi3 wheels for Linux (x86_64, aarch64), macOS (x86_64, arm64), Windows (x64). |
+| `build-wheels` | no | Builds abi3 wheels for Linux (x86_64, aarch64), macOS (arm64), Windows (x64). |
 | `build-sdist` | no | Builds the source distribution. |
 | `publish-crates` | **yes** | Publishes the 6 crates to crates.io via OIDC, in dependency order. |
 | `publish-pypi` | **yes** | Publishes all wheels + sdist to PyPI via OIDC. |
@@ -147,11 +147,18 @@ Because the publishes are gated, the safest rehearsal is:
 
 ## Known risks
 
-- **aarch64 Linux wheel + ONNX Runtime:** the `ort` crate statically links ONNX
-  Runtime; cross-building it for aarch64 in the manylinux container is the most
-  fragile part of the matrix. If that cell fails, options are QEMU emulation or
-  temporarily dropping aarch64 from the matrix — decide explicitly, don't ship a
-  silently missing platform.
+- **`ort` links only from pyke's prebuilt binaries.** The `ort` crate (and
+  uni-db's `provider-onnx`) does not build ONNX Runtime from source — it
+  downloads a prebuilt binary for the exact target triple at build time, and
+  fails hard (`cargo::error`) for any triple pyke does not publish. Two
+  consequences are already baked into the matrix:
+  - **aarch64 Linux builds on a native ARM runner** (`ubuntu-24.04-arm`), not an
+    x86_64 cross-build, so pyke fetches the native aarch64 ORT bundle inside the
+    ARM manylinux container. This removes the old QEMU/cross-link fragility — if
+    this cell regresses, keep it native rather than reaching for emulation.
+  - **macOS is aarch64-only.** rc.12 ships no `x86_64-apple-darwin` binary and
+    our `onnx` feature is always-on, so an Intel-macOS wheel cannot link. Intel
+    Macs are EOL; do not re-add x86_64 macOS without building ORT from source.
 - **`ort = 2.0.0-rc.12` is a pre-release.** crates.io accepts crates that depend
   on pre-release versions, so this does not block publishing.
 

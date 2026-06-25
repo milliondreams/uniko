@@ -102,8 +102,14 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest, target: x86_64, manylinux: manylinux_2_28 }
-          - { os: ubuntu-latest, target: aarch64, manylinux: manylinux_2_28 }
-          - { os: macos-15-intel, target: x86_64 }
+          # aarch64 builds on a NATIVE ARM runner, not an x86_64 cross-build:
+          # `ort` (ONNX Runtime) only links from pyke's prebuilt binaries, which
+          # are fetched per host arch. A native runner pulls the aarch64 ORT
+          # bundle inside the ARM manylinux container — no QEMU, no cross-link.
+          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: manylinux_2_28 }
+          # macOS is aarch64-only: ort rc.12 ships no x86_64-apple-darwin binary,
+          # and our onnx feature is always-on, so an Intel-macOS wheel cannot
+          # link. Intel Macs are EOL — drop x86_64 rather than build ORT from src.
           - { os: macos-14, target: aarch64 }
           - { os: windows-latest, target: x64 }
     steps:
@@ -134,15 +140,20 @@ jobs:
           manylinux: ${{ matrix.manylinux }}
           args: --release --out dist -m bindings/uniko-py/Cargo.toml
           sccache: "true"
-          # Runs inside the manylinux container before the build. protoc runs on
-          # the build host (x86_64) even when cross-building aarch64, so the
-          # x86_64 protoc binary is correct for both Linux targets.
+          # Runs inside the manylinux container before the build. Each Linux
+          # target now builds on a native runner (x86_64 and ubuntu-24.04-arm),
+          # so protoc must match the container arch — select it from `uname -m`.
           before-script-linux: |
             set -eux
             PB_VERSION=29.3
+            case "$(uname -m)" in
+              x86_64)  PB_ARCH=x86_64 ;;
+              aarch64) PB_ARCH=aarch_64 ;;
+              *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+            esac
             dnf install -y unzip || yum install -y unzip
             curl -fsSL -o /tmp/protoc.zip \
-              "https://github.com/protocolbuffers/protobuf/releases/download/v${PB_VERSION}/protoc-${PB_VERSION}-linux-x86_64.zip"
+              "https://github.com/protocolbuffers/protobuf/releases/download/v${PB_VERSION}/protoc-${PB_VERSION}-linux-${PB_ARCH}.zip"
             unzip -o /tmp/protoc.zip -d /usr/local
             protoc --version
 
