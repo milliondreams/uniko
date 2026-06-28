@@ -1,6 +1,6 @@
 //! Schema registration for the uniko cognitive memory system.
 //!
-//! Provides [`register_schema`] which registers all 20 node types, 47 edge
+//! Provides [`register_schema`] which registers all 25 node types, 54 edge
 //! types, and all indexes with the database.  The call is idempotent: running
 //! it multiple times on the same database has no visible effect beyond the
 //! first.
@@ -24,6 +24,7 @@ mod observations;
 mod organization;
 mod pages;
 mod participants;
+mod patterns;
 mod procedures;
 mod rules;
 mod sessions;
@@ -116,6 +117,7 @@ pub async fn register_schema(db: &Uni, config: &UnikoConfig) -> crate::Result<()
     let builder = topics::register_labels(builder, config);
     let builder = summaries::register_labels(builder, config);
     let builder = procedures::register_labels(builder, config);
+    let builder = patterns::register_labels(builder);
     let builder = rules::register_labels(builder);
     let builder = consolidation::register_labels(builder);
     let builder = organization::register_labels(builder);

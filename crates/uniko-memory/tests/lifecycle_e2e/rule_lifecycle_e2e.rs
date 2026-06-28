@@ -112,7 +112,9 @@ async fn apply_decay_cycle_skips_stdlib_rules() {
         .await
         .expect("decay");
 
-    let (st, conf) = rule_status(&kb, "relevance_decay").await;
+    // sequence_detector is a registered stdlib rule (relevance_decay runs in
+    // Rust and is intentionally not registered).
+    let (st, conf) = rule_status(&kb, "sequence_detector").await;
     assert_eq!(st, "active");
     assert!((conf - 1.0).abs() < 1e-9, "stdlib confidence stays 1.0");
 }
@@ -177,10 +179,10 @@ async fn record_rule_match_does_not_change_stdlib() {
     let kb = kb().await;
     register_stdlib_rules(&kb).await.expect("stdlib");
     let cfg = RuleLifecycleConfig::default();
-    record_rule_match(&kb, "relevance_decay", cfg)
+    record_rule_match(&kb, "sequence_detector", cfg)
         .await
         .expect("match");
-    let (st, conf) = rule_status(&kb, "relevance_decay").await;
+    let (st, conf) = rule_status(&kb, "sequence_detector").await;
     assert_eq!(st, "active");
     assert!((conf - 1.0).abs() < 1e-9);
 }

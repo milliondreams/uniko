@@ -24,16 +24,18 @@ async fn test_db() -> Uni {
 #[test]
 fn test_label_count() {
     // Completeness tripwire: bump when a label is added to `labels::ALL`
-    // (the array is the source of truth). Currently 24 node labels.
-    assert_eq!(labels::ALL.len(), 24, "expected 24 node labels");
+    // (the array is the source of truth). Currently 25 node labels (added
+    // PATTERN for the episode_pattern_detector consumer).
+    assert_eq!(labels::ALL.len(), 25, "expected 25 node labels");
 }
 
 #[test]
 fn test_edge_count() {
     // Completeness tripwire: bump when an edge is added to `edges::ALL`
-    // (the array is the source of truth). Currently 53 edge types — grown
-    // from the earlier 48 via REINFORCED, ATTACHED_TO, and later additions.
-    assert_eq!(edges::ALL.len(), 53, "expected 53 edge types");
+    // (the array is the source of truth). Currently 54 edge types — grown
+    // from the earlier 48 via REINFORCED, ATTACHED_TO, CONTRADICTED_BY, and
+    // later additions.
+    assert_eq!(edges::ALL.len(), 54, "expected 54 edge types");
 }
 
 #[test]

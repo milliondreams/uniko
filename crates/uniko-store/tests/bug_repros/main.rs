@@ -8,5 +8,6 @@
 
 mod label_disjunction_repro;
 mod label_disjunction_union_schema_panic;
+mod locy_key_null_without_fold_repro;
 mod schema_apply_duplicate_index_repro;
 mod unwind_edge_repro;

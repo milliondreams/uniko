@@ -43,6 +43,12 @@ pub const STATUS_DEPRECATED: &str = "deprecated";
 /// The `sequence_detector` Locy rule, invoked by name via
 /// [`KnowledgeBase::query_rule`].
 ///
+/// This is the **canonical source** for the rule. uniko-memory's
+/// `register_stdlib_rules` references this same constant (uniko-memory depends
+/// on uniko-cortex), so the rule is defined in exactly one place and registered
+/// both at startup and (idempotently) by [`promote_procedures_once`] for
+/// standalone use.
+///
 /// Detects every recurring `(action_a → action_b)` pair where both
 /// episodes succeeded; `success_count` is the occurrence count.
 /// [`upsert_procedure`] classifies candidate-vs-active against
@@ -55,7 +61,7 @@ pub const STATUS_DEPRECATED: &str = "deprecated";
 /// post-`FOLD` HAVING clause does not resolve — all three were latent
 /// bugs in the prior rule, which is why it never registered and a Cypher
 /// fallback was load-bearing (RC12, now resolved).
-const SEQUENCE_DETECTOR_RULE: &str = "CREATE RULE sequence_detector AS \
+pub const SEQUENCE_DETECTOR_RULE: &str = "CREATE RULE sequence_detector AS \
      MATCH (e1:Episode)-[:FOLLOWED_BY]->(e2:Episode), \
            (e1)-[:RECORDED_BY]->(p:Participant {participant_id: $agent_id}) \
      WHERE e1.outcome = 'success' AND e2.outcome = 'success' \

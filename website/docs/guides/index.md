@@ -34,7 +34,7 @@ and dereferencing sources with `agent.data()`.
 </div>
 <div class="feature-card" markdown>
 ### [Reasoning with Locy](reasoning-with-locy.md)
-The four stdlib rules and database-native logic that turn repeated experience into
+The stdlib rules and database-native logic that turn repeated experience into
 Procedures — plus how to write and invoke your own Locy rules.
 </div>
 <div class="feature-card" markdown>
@@ -62,14 +62,15 @@ the agent decides what is worth recording — and procedural memory only accumul
 agents call `record_episode`. The richer the episode stream, the more the system improves
 over time.
 
-**Locy reasoning** is what makes consolidation more than aggregation. Four stdlib rules ship
-registered and callable (`relevance_decay`, `episode_pattern_detector`, `sequence_detector`,
-`contradiction_detector`); procedure promotion invokes `sequence_detector` each consolidation
-cycle to turn recurring action sequences into Procedures.
+**Locy reasoning** is what makes consolidation more than aggregation. Three stdlib rules
+ship registered and run each cortex sweep (`sequence_detector`, `episode_pattern_detector`,
+`contradiction_detector`); a fourth, `relevance_decay`, runs in Rust. Procedure promotion
+invokes `sequence_detector` each consolidation cycle to turn recurring action sequences into
+Procedures.
 
 !!! note
     Procedure promotion invokes the `sequence_detector` Locy rule by name via a `QUERY`
-    goal-query. All four stdlib rules are registered and callable; the
+    goal-query. The three registered stdlib rules run automatically each cortex sweep; the
     [Reasoning with Locy](reasoning-with-locy.md) guide shows how to invoke them and write
     your own.
 

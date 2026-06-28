@@ -9,4 +9,5 @@
 
 mod consolidation_e2e;
 mod policy_e2e;
+mod rule_execution_e2e;
 mod rule_lifecycle_e2e;

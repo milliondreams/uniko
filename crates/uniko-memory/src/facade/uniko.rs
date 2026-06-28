@@ -68,6 +68,7 @@ impl Uniko {
     /// store open).
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, UnikoError> {
         let kb = KnowledgeBase::open(path, UnikoConfig::default()).await?;
+        crate::rules::register_stdlib_rules(&kb).await?;
         Ok(Self::from_parts(
             kb,
             None,
@@ -84,6 +85,7 @@ impl Uniko {
     /// Propagates [`KnowledgeBase::in_memory`] failures.
     pub async fn in_memory() -> Result<Self, UnikoError> {
         let kb = KnowledgeBase::in_memory(UnikoConfig::default()).await?;
+        crate::rules::register_stdlib_rules(&kb).await?;
         Ok(Self::from_parts(
             kb,
             None,
@@ -324,6 +326,7 @@ impl UnikoBuilder {
                 KnowledgeBase::open_with_xervo(path, config, extra_catalog).await?
             }
         };
+        crate::rules::register_stdlib_rules(&kb).await?;
 
         let streaming = if self.streaming {
             let steps: Vec<Box<dyn uniko_pipes::Step>> =

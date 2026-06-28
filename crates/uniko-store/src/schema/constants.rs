@@ -40,6 +40,9 @@ pub mod labels {
     // Layer 5 — Procedural Memory
     pub const PROCEDURE: &str = "Procedure";
     pub const RULE: &str = "Rule";
+    /// A recurring episode pattern surfaced by the `episode_pattern_detector`
+    /// stdlib Locy rule (grouped by action type + outcome).
+    pub const PATTERN: &str = "Pattern";
 
     // Layer 6 — Meta-Memory
     pub const CONSOLIDATION_CYCLE: &str = "ConsolidationCycle";
@@ -73,6 +76,7 @@ pub mod labels {
         SUMMARY,
         PROCEDURE,
         RULE,
+        PATTERN,
         CONSOLIDATION_CYCLE,
         DEAD_LETTER,
         ORGANIZATION,
@@ -124,6 +128,9 @@ pub mod edges {
     pub const ATTACHED_TO: &str = "ATTACHED_TO";
 
     // Layer 4 edges
+    /// Marks a `:Fact` as contradicted by a specific `:Episode` whose outcome
+    /// differs from the fact (drawn by the `contradiction_detector` consumer).
+    pub const CONTRADICTED_BY: &str = "CONTRADICTED_BY";
     pub const OBSERVED_IN: &str = "OBSERVED_IN";
     pub const OBSERVED_DURING: &str = "OBSERVED_DURING";
     pub const ABOUT: &str = "ABOUT";
@@ -192,6 +199,7 @@ pub mod edges {
         SUPPORTED_BY,
         DERIVED_BY,
         DERIVED_FROM,
+        CONTRADICTED_BY,
         INVALIDATES,
         SHARED_FROM,
         BELONGS_TO,

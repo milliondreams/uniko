@@ -72,4 +72,10 @@ pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {
         .property_nullable("shared_by", DataType::String)
         .property_nullable("shared_at", DataType::DateTime)
         .done()
+        // CONTRADICTED_BY: Fact → Episode — provenance for a contradiction
+        // surfaced by the `contradiction_detector` rule (the fact is also
+        // BTIC-invalidated by the consumer).
+        .edge_type(edges::CONTRADICTED_BY, &[labels::FACT], &[labels::EPISODE])
+        .property_nullable("detected_at", DataType::DateTime)
+        .done()
 }

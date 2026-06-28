@@ -274,9 +274,11 @@ that must all be present.
     via `query_rule` — a real goal-query (`QUERY sequence_detector RETURN ...`)
     evaluated by Locy, with no Cypher shim in the path. See
     [Reasoning with Locy](../guides/reasoning-with-locy.md) for the full picture.
-    The other three stdlib rules (`relevance_decay`, `episode_pattern_detector`,
-    `contradiction_detector`) are registered and callable by name. The precondition
-    matcher is a `key=value` evaluator, not a full Locy WHERE engine.
+    `episode_pattern_detector` and `contradiction_detector` are also registered and
+    run automatically each cortex sweep via `run_active_rules` (each backed by a Rust
+    consumer). `relevance_decay` runs in Rust (`prune_decayed_episodes`), not as a
+    Locy rule — uni-db can't yet plan its `duration.inDays(...)` arithmetic. The
+    precondition matcher is a `key=value` evaluator, not a full Locy WHERE engine.
 
 ---
 

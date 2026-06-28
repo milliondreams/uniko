@@ -139,44 +139,37 @@ how a rule reached a result.
 
 ## The stdlib rules
 
-uniko registers **four** stdlib Locy rules. `register_stdlib_rules(&kb)` is idempotent: it
-merges a `Rule` node into the graph for each (deterministic `rule_id`, `source_type =
-"stdlib"`, `confidence = 1.0`, `status = "active"`) **and** best-effort registers the rule
-source in uni-db's Locy runtime. Stdlib rules are protected — `is_stdlib_rule("stdlib")`
-returns `true`, and the lifecycle machinery exempts them from decay, demotion, and pruning.
+uniko ships four stdlib memory-maintenance rules. **Three are registered as Locy rules**
+(`sequence_detector`, `episode_pattern_detector`, `contradiction_detector`);
+`register_stdlib_rules(&kb)` is called at startup and is idempotent — it merges a `Rule`
+node into the graph for each (`source_type = "stdlib"`, `confidence = 1.0`, `status =
+"active"`) and registers the source in uni-db's Locy runtime. Stdlib rules are protected:
+`is_stdlib_rule("stdlib")` returns `true`, and the lifecycle exempts them from decay,
+demotion, and pruning.
 
-| Rule | Purpose |
-|---|---|
-| `relevance_decay` | Decay episode relevance with age: `importance * exp(-decay_rate * age_days)`, surfacing episodes still above a threshold. |
-| `episode_pattern_detector` | Count episodes by `action_type` + `outcome`; surface patterns with `n >= 3` and mean importance `> 0.3`. |
-| `sequence_detector` | Find recurring `(action_a → action_b)` pairs where both episodes succeeded; yield a `success_count`. |
-| `contradiction_detector` | Find episodes whose `outcome` contradicts an established `Fact` (`predicate = 'outcome_pattern'`) for fact revision. |
+The fourth, **`relevance_decay`, currently runs in Rust** (`KnowledgeBase::prune_decayed_episodes`)
+rather than as a registered Locy rule — see the note below.
 
-### `relevance_decay`
+| Rule | Runs as | Purpose |
+|---|---|---|
+| `sequence_detector` | Locy (via procedure sweep) | Find recurring `(action_a → action_b)` pairs where both episodes succeeded; yield a `success_count`. |
+| `episode_pattern_detector` | Locy + Rust consumer | Group episodes by `action_type` + `outcome`; surface patterns with `n >= 3`. Mean-importance (`> 0.3`) is computed by the Rust consumer (see below). |
+| `contradiction_detector` | Locy + Rust consumer | Find episodes whose `outcome` contradicts a currently-valid `Fact` (`predicate = 'outcome_pattern'`); the consumer invalidates the fact and draws a `CONTRADICTED_BY` marker edge. |
+| `relevance_decay` | **Rust** | Prune episodes whose age-decayed importance (`importance * exp(-rate * age_days)`) falls below a threshold. |
 
-```text
-CREATE RULE relevance_decay AS
-MATCH (e:Episode)-[:RECORDED_BY]->(p:Participant {participant_id: $agent_id})
-WITH e, duration.inDays(e.timestamp, datetime()) AS age_days,
-        e.importance AS base_importance
-WITH e, base_importance * exp(-$decay_rate * age_days) AS decayed
-WHERE decayed > $decay_threshold
-YIELD KEY e, VALUE decayed AS relevance
-```
+Each Locy rule is a **detector** (`YIELD` only); a **Rust consumer** performs the side
+effect — `DERIVE` is additive-only (it can `CREATE` edges/nodes and `MERGE`, but cannot
+`DELETE` or `SET` on an existing node), so deletes and BTIC invalidations live in Rust.
 
-The decay rate comes from a configurable half-life rather than being hand-tuned. Use
-`relevance_decay_params(agent_id, half_life_days, decay_threshold)` to build the parameter
-map; it converts the half-life with `decay_rate = ln(2) / half_life_days` and packages
-`agent_id`, `decay_rate`, and `decay_threshold`. (It panics on a non-positive half-life;
-`UnikoConfig::validate` already rejects those upstream.)
+### `relevance_decay` runs in Rust
 
-```rust
-use uniko_memory::rules::relevance_decay_params;
-
-// 14-day half-life: a 14-day-old episode retains half its importance.
-let params = relevance_decay_params("agent-1", 14.0, 0.05);
-// Pass `params` to `KnowledgeBase::execute_rule`.
-```
+The decay formula is `importance * exp(-ln(2)/half_life_days * age_days)`, computed from the
+immutable stored `importance`. It lives in `KnowledgeBase::prune_decayed_episodes`, invoked
+each cortex sweep. The equivalent Locy rule is **not registered**: expressing it needs
+`duration.inDays(...)` arithmetic, which uni-db currently rejects with `Unsupported CAST
+from LargeBinary to Float64` — and because uni-db evaluates all registered rules together,
+registering it would poison every rule query. Once that's fixed upstream the rule can move
+back to Locy.
 
 ## How rules participate in consolidation
 
@@ -187,24 +180,37 @@ timer. Two rule-driven activities hang off that cycle.
 ```mermaid
 flowchart TD
     OBS[Observations accumulate] --> WORK[Consolidation worker fires]
-    WORK --> PROC["promote_procedures_once()"]
-    PROC --> SEQ["query_rule('sequence_detector')"]
-    SEQ --> UPSERT["upsert_procedure() applies promote_threshold"]
+    WORK --> PROC["procedure sweep → query_rule('sequence_detector')"]
+    PROC --> UPSERT["upsert_procedure() applies promote_threshold"]
     UPSERT --> PNODES[Procedure nodes created / reinforced]
 
-    WORK -. separate cadence .-> DECAY["apply_decay_cycle()"]
-    DECAY --> LIFECYCLE[Rule lifecycle: decay / demote / prune]
+    WORK --> RULES["rule-execution sweep → run_active_rules()"]
+    RULES --> PAT["episode_pattern_detector → :Pattern nodes"]
+    RULES --> CON["contradiction_detector → invalidate Fact + CONTRADICTED_BY"]
+    RULES --> USER["any active user-defined rule → record_rule_match()"]
+
+    WORK --> RDECAY["F50 decay → prune_decayed_episodes() (Rust)"]
+    WORK -. separate cadence .-> DECAY["apply_decay_cycle() — rule confidence"]
 ```
 
 ### Procedure promotion runs `sequence_detector`
 
 The consolidation worker calls `promote_procedures_once(&kb, agent_id, cfg)` in
-`uniko-cortex`. That function registers `sequence_detector` (idempotent), invokes it via
-`query_rule("sequence_detector", &["action_a", "action_b", "success_count"], …)`, and
-turns each recurring success pair into a `Procedure` node named `"{a} → {b}"`. The rule
+`uniko-cortex`. It invokes the registered rule via
+`query_rule("sequence_detector", &["action_a", "action_b", "success_count"], …)` and turns
+each recurring success pair into a `Procedure` node named `"{a} → {b}"`. The rule
 deliberately surfaces **all** pairs with no `HAVING` filter; `upsert_procedure` applies the
-`LifecycleConfig::promote_threshold` (default `3`) to decide candidate-vs-active. This is
-the one stdlib rule that genuinely drives execution through a real Locy `QUERY` invocation.
+`LifecycleConfig::promote_threshold` (default `3`) to decide candidate-vs-active.
+
+### The rule-execution sweep runs every other active rule
+
+`run_active_rules(&kb, agent_id, cfg)` (the rule-execution sweep, gated by
+`PipelineConfig::run_rules_in_sweep`) runs every `active`/`candidate` `:Rule` that isn't
+handled by a dedicated sweep. For the stdlib rules it dispatches to a Rust consumer
+(`episode_pattern_detector` → upsert `:Pattern`; `contradiction_detector` → invalidate the
+fact + draw `CONTRADICTED_BY`); for any **user-defined** rule it runs the rule and calls
+`record_rule_match` on a hit. This is what makes the lifecycle bidirectional — a candidate
+authored rule that binds a match is promoted, not just decayed.
 
 ### The rule lifecycle decays authored & induced rules
 
@@ -256,14 +262,26 @@ but keeps the `Rule` node for provenance.
 
 ## How the stdlib rules are wired
 
-uniko registers all four stdlib rules in the Locy runtime, so you can invoke any of them by
-name with `query_rule` — or run your own with `create_rule` / `execute_rule`. Procedure
-promotion wires `sequence_detector` into every consolidation cycle automatically: it runs as a
-registered Locy rule via `query_rule` (`QUERY sequence_detector RETURN …`) inside
-`promote_procedures_once`, entirely through the Locy `QUERY` path. `relevance_decay`,
-`episode_pattern_detector`, and `contradiction_detector` are registered and callable on demand;
-entity drift and Rule confidence decay also run through the inline consolidation paths described
-in [Facts & Drift](../concepts/facts-and-drift.md).
+uniko registers the three Locy stdlib rules at startup, so you can invoke any of them by
+name with `query_rule` — or run your own with `create_rule` / `execute_rule`. All three run
+automatically each cortex sweep: `sequence_detector` via `promote_procedures_once`,
+`episode_pattern_detector` and `contradiction_detector` via `run_active_rules`. The fourth,
+`relevance_decay`, runs in Rust (`prune_decayed_episodes`). Entity drift and Rule confidence
+decay run through the inline consolidation paths described in
+[Facts & Drift](../concepts/facts-and-drift.md).
+
+> **uni-db Locy notes (as of uni-db 2.4.1).** Registered rules share one evaluation, so every
+> `query_rule` passes the union of all rules' parameters. A few Locy idioms to know:
+> `duration.inDays(a, b)` returns a Temporal — use `.days` to get the integer day count
+> (`relevance_decay` uses `duration.inDays(datetime(), e.timestamp).days`, which is a
+> *negative* age for past episodes, so the formula is `exp(+rate · days)`); the reverse arg
+> order yields `Null` inside arithmetic, so stick with `(datetime(), e.timestamp)`. Validity
+> is checked with `f.invalidated_at IS NULL` (`btic.contains` is interval-vs-interval — it
+> can't take a `datetime()` point). The one genuine bug we hit — `KEY` columns projecting
+> `Null` without a `FOLD` ([#112](https://github.com/rustic-ai/uni-db/issues/112)) — was
+> **fixed in 2.4.1**. The remaining Rust-side helper is `episode_pattern_detector`'s
+> mean-importance, because `AVG(...)` in a post-`FOLD` HAVING filters out every group in the
+> full-schema rule.
 
 The runtime surface (`create_rule` / `query_rule` / `execute_rule` / `assume` / `abduce`) and
 the rule lifecycle are fully implemented and tested.

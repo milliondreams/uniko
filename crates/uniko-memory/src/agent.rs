@@ -199,8 +199,13 @@ impl Agent {
     ///
     /// `source` is Locy code (e.g. `CREATE RULE <name> AS MATCH … YIELD …`).
     /// The rule is registered with the logic runtime and recorded as a
-    /// `candidate` `:Rule`; the confidence lifecycle (decay / promotion /
-    /// pruning) is then driven automatically by consolidation.
+    /// `candidate` `:Rule`. From then on the cortex sweep **executes** the rule
+    /// each pass: a bound match rewards confidence (promoting candidate →
+    /// active), while passes with no match decay it (demotion / pruning). You
+    /// can also run it on demand with [`Agent::run_rule`]. The rule's `YIELD`
+    /// rows feed the lifecycle; to act on them with side effects, run it
+    /// explicitly and consume the rows, or wire a consumer (see the stdlib
+    /// rules).
     ///
     /// # Errors
     ///

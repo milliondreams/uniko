@@ -44,13 +44,13 @@ uni-db = { version = "2", features = ["mimalloc"] }
 # `KnowledgeBase::build_shared_runtime` / `open_with_runtime`. uni-db
 # uses uni-xervo internally but does not re-export the type. Version
 # pinned to whatever uni-db currently depends on (see
-# `../uni/Cargo.toml`).
-uni-xervo = { version = "0.15.0", default-features = false }
+# `../uni/Cargo.toml`). uni-db 2.4.1 depends on uni-xervo 0.17.0.
+uni-xervo = { version = "0.17.0", default-features = false }
 # Tiered PDF extraction (native text -> OCR -> doc-VLM). Pulls only traits +
 # the pure-Rust native (lopdf) + rasterizer (hayro) tiers; the inference
 # providers ride on `uni-xervo` itself. Built against the same crates.io
-# uni-xervo 0.15.0, so the `OcrModel` / `ModelRuntime` types unify.
-uni-xervo-pdf = { version = "0.15.0", default-features = false, features = [
+# uni-xervo 0.17.0, so the `OcrModel` / `ModelRuntime` types unify.
+uni-xervo-pdf = { version = "0.17.0", default-features = false, features = [
     "pdf-input",
     "hayro",
 ] }

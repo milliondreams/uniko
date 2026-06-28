@@ -1,8 +1,10 @@
 //! Rule management: stdlib Locy rules and lifecycle.
 
+pub mod execution;
 pub mod lifecycle;
 pub mod stdlib;
 
+pub use execution::{RuleExecutionReport, consume_relevance_decay, run_active_rules};
 pub use lifecycle::{
     AddRuleParams, DecayReport, RuleLifecycleConfig, add_rule, apply_decay_cycle, record_rule_match,
 };

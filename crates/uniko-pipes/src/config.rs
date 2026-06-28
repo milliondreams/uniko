@@ -33,6 +33,12 @@ pub struct PipelineConfig {
     /// consolidation cycles fire rapidly.  Applied independently per
     /// agent for procedures and globally for topics.
     pub cortex_min_interval_secs: u64,
+    /// Execute active Locy rules during the cortex sweep
+    /// (`episode_pattern_detector`, `contradiction_detector`, and any
+    /// user-defined rules), recording matches into the confidence lifecycle.
+    ///
+    /// Enabled by default; set `false` to skip rule execution entirely.
+    pub run_rules_in_sweep: bool,
     /// Consecutive LLM failures before the circuit breaker opens.
     pub circuit_failure_threshold: u32,
     /// Milliseconds the circuit breaker stays open before probing.
@@ -54,6 +60,7 @@ impl Default for PipelineConfig {
             consolidation_batch_size: 500,
             cortex_cycle_every_n_consolidations: 4,
             cortex_min_interval_secs: 600,
+            run_rules_in_sweep: true,
             circuit_failure_threshold: 5,
             circuit_recovery_ms: 60_000,
             dead_letter_max_retries: 3,

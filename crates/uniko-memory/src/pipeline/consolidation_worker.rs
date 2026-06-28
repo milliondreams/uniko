@@ -53,6 +53,14 @@ pub(crate) struct ConsolidationWorker {
     /// `:Rule` lifecycle is agent-agnostic (it scans every non-stdlib
     /// rule), so it is throttled once across all agents.
     last_rule_decay_at: Option<Instant>,
+    /// Whether to execute active Locy rules during the cortex sweep
+    /// (`episode_pattern_detector`, `contradiction_detector`, and any
+    /// user-defined rules). From `PipelineConfig::run_rules_in_sweep`.
+    run_rules_in_sweep: bool,
+    /// Last time the rule-execution sweep ran for each agent — rules are
+    /// agent-scoped (they filter by `participant_id`), so this throttles
+    /// per-agent like the procedure sweep.
+    agent_last_rule_exec_at: HashMap<String, Instant>,
 }
 
 impl ConsolidationWorker {
@@ -79,6 +87,8 @@ impl ConsolidationWorker {
             last_topic_sweep_at: None,
             last_session_sweep_at: None,
             last_rule_decay_at: None,
+            run_rules_in_sweep: config.run_rules_in_sweep,
+            agent_last_rule_exec_at: HashMap::new(),
         }
     }
 
@@ -233,8 +243,59 @@ impl ConsolidationWorker {
         self.run_procedure_sweep(agent_id, now).await;
         self.run_topic_sweep(agent_id, now).await;
         self.run_decay_sweep(agent_id).await;
+        // Execute active rules BEFORE decay so a rule that bound matches this
+        // pass records its match and resets `missed_cycles` before the decay
+        // sweep penalizes unmatched rules.
+        self.run_rule_execution_sweep(agent_id, now).await;
         self.run_rule_decay_sweep(now).await;
         self.run_session_maintenance_sweep(agent_id, now).await;
+    }
+
+    /// Execute every active Locy rule for `agent_id` and record matches into
+    /// the confidence lifecycle (P-rules). Handles the consumer-backed stdlib
+    /// rules `episode_pattern_detector` and `contradiction_detector` plus any
+    /// user-defined rules; `relevance_decay` and `sequence_detector` are run by
+    /// their own dedicated sweeps and skipped here.
+    ///
+    /// Per-agent throttle (rules are agent-scoped). Gated by
+    /// `run_rules_in_sweep`. Failures are logged and dropped — rule execution
+    /// must never destabilize consolidation.
+    async fn run_rule_execution_sweep(&mut self, agent_id: &str, now: Instant) {
+        if !self.run_rules_in_sweep {
+            return;
+        }
+        if let Some(last) = self.agent_last_rule_exec_at.get(agent_id)
+            && now.duration_since(*last) < self.cortex_min_interval
+        {
+            return;
+        }
+        self.agent_last_rule_exec_at
+            .insert(agent_id.to_string(), now);
+
+        match crate::rules::run_active_rules(
+            &self.kb,
+            agent_id,
+            crate::rules::RuleLifecycleConfig::default(),
+        )
+        .await
+        {
+            Ok(report) => {
+                if report.rules_matched > 0 {
+                    tracing::info!(
+                        agent = %agent_id,
+                        rules_run = report.rules_run,
+                        rules_matched = report.rules_matched,
+                        effects = report.effects,
+                        "rule execution sweep applied effects",
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                agent = %agent_id,
+                error = %e,
+                "rule execution sweep failed — continuing",
+            ),
+        }
     }
 
     /// Apply one Rule confidence-decay pass (decay / demote / promote /
@@ -340,10 +401,9 @@ impl ConsolidationWorker {
         let cfg = self.kb.config();
         let half_life_days = cfg.half_life_days;
         let prune_below = cfg.prune_below;
-        let now = chrono::Utc::now();
-        match self
-            .kb
-            .prune_decayed_episodes(agent_id, half_life_days, prune_below, now)
+        // Consumer for the `relevance_decay` stdlib rule: runs the rule (single
+        // decay formula) and deletes the Episodes it yields.
+        match crate::rules::consume_relevance_decay(&self.kb, agent_id, half_life_days, prune_below)
             .await
         {
             Ok(pruned) => {
