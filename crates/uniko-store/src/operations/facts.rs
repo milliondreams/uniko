@@ -327,13 +327,15 @@ impl KnowledgeBase {
         // Aligns with the single-call path
         // [`KnowledgeBase::upsert_fact_by_triple`], which locks in the
         // same namespace.
-        let mut lock_keys: Vec<Vec<u8>> =
-            unique_fids.iter().map(|fid| fact_lock_key(fid)).collect();
-        lock_keys.sort();
-        let mut _rmw_guards = Vec::with_capacity(lock_keys.len());
-        for k in &lock_keys {
-            _rmw_guards.push(self.rmw_locks.lock(k).await);
-        }
+        let lock_keys: Vec<Vec<u8>> = unique_fids.iter().map(|fid| fact_lock_key(fid)).collect();
+        // Acquire via `lock_many`, which maps keys to stripe indices and
+        // de-duplicates them before locking. The previous hand-rolled loop
+        // locked one guard per distinct `fact_id` without de-duplicating
+        // stripe indices, so as soon as two fact_ids hashed to the same
+        // stripe (near-certain past ~50 facts with 256 stripes) it re-locked
+        // a stripe it already held — a non-reentrant `tokio::sync::Mutex`
+        // self-deadlock that parked the whole consolidation cycle.
+        let _rmw_guards = self.rmw_locks.lock_many(&lock_keys).await;
 
         // Phase 1: batched MATCH to discover which (deduped) fact_ids
         // exist. Returns one row per match; absent fact_ids simply

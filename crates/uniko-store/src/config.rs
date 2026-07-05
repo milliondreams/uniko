@@ -63,6 +63,23 @@ pub struct EmbeddingConfig {
     /// (e.g. `{"base_url": "http://litellm-cloud:4000/v1"}`).
     #[serde(default)]
     pub provider_options: Option<serde_json::Value>,
+    /// Learned-sparse head dimension (vocabulary size), or `None` for
+    /// dense-only models.
+    ///
+    /// `Some(n)` opts the embed alias into single-pass hybrid mode: the
+    /// `local/onnx` provider runs an `EmbedHybrid` forward pass that fills
+    /// a `SPARSE_VECTOR(n)` column alongside the dense `embedding` (see
+    /// [`embed_catalog`](crate::storage::embed_catalog)). Only BGE-M3
+    /// (`aapot/bge-m3-onnx`, vocab 250002) currently exposes this head.
+    #[serde(default)]
+    pub sparse_dimensions: Option<usize>,
+    /// ColBERT / late-interaction per-token dimension, or `None`.
+    ///
+    /// `Some(d)` adds a `List(Vector(d))` multi-vector column filled by the
+    /// same `EmbedHybrid` pass, used for MaxSim reranking. BGE-M3 emits
+    /// 1024-d per-token vectors.
+    #[serde(default)]
+    pub multivector_dimensions: Option<usize>,
 }
 
 fn default_embed_provider() -> String {
@@ -74,6 +91,8 @@ impl EmbeddingConfig {
     pub fn nomic_v15() -> Self {
         Self {
             model_id: "NomicEmbedTextV15".into(),
+            sparse_dimensions: None,
+            multivector_dimensions: None,
             dimensions: 768,
             batch_size: 32,
             document_prefix: Some("search_document: ".into()),
@@ -88,6 +107,8 @@ impl EmbeddingConfig {
     pub fn nomic_v15_quantized() -> Self {
         Self {
             model_id: "NomicEmbedTextV15Q".into(),
+            sparse_dimensions: None,
+            multivector_dimensions: None,
             dimensions: 768,
             batch_size: 32,
             document_prefix: Some("search_document: ".into()),
@@ -102,6 +123,8 @@ impl EmbeddingConfig {
     pub fn minilm_l6_v2() -> Self {
         Self {
             model_id: "AllMiniLML6V2".into(),
+            sparse_dimensions: None,
+            multivector_dimensions: None,
             dimensions: 384,
             batch_size: 32,
             document_prefix: None,
@@ -117,6 +140,8 @@ impl EmbeddingConfig {
     pub fn bge_small_en_v15() -> Self {
         Self {
             model_id: "BGESmallENV15".into(),
+            sparse_dimensions: None,
+            multivector_dimensions: None,
             dimensions: 384,
             batch_size: 32,
             document_prefix: None,
@@ -134,6 +159,8 @@ impl EmbeddingConfig {
     pub fn bge_large_en_v15() -> Self {
         Self {
             model_id: "BGELargeENV15".into(),
+            sparse_dimensions: None,
+            multivector_dimensions: None,
             dimensions: 1024,
             batch_size: 16,
             document_prefix: None,
@@ -169,6 +196,8 @@ impl EmbeddingConfig {
     pub fn embedding_gemma_300m() -> Self {
         Self {
             model_id: "onnx-community/embeddinggemma-300m-ONNX".into(),
+            sparse_dimensions: None,
+            multivector_dimensions: None,
             dimensions: 768,
             batch_size: 16,
             document_prefix: Some("title: none | text: ".into()),
@@ -207,6 +236,8 @@ impl EmbeddingConfig {
     pub fn embedding_gemma_300m_mistralrs() -> Self {
         Self {
             model_id: "google/embeddinggemma-300m".into(),
+            sparse_dimensions: None,
+            multivector_dimensions: None,
             dimensions: 768,
             batch_size: 16,
             document_prefix: Some("title: none | text: ".into()),
@@ -216,6 +247,36 @@ impl EmbeddingConfig {
             provider_options: Some(serde_json::json!({
                 "dtype": "f32",
             })),
+        }
+    }
+
+    /// BAAI/bge-m3 (`aapot/bge-m3-onnx`) — single-pass hybrid: 1024-d
+    /// dense + 250002-d learned-sparse + 1024-d ColBERT.
+    ///
+    /// Opts the embed alias into `EmbedHybrid`: one ONNX forward pass
+    /// fills the dense `embedding`, the `sparse_embedding`
+    /// (`SPARSE_VECTOR(250002)`), and the `colbert_embedding`
+    /// (`List(Vector(1024))`) columns wherever a node declares them with
+    /// the shared embed alias. Sparse adds a learned-lexical retrieval
+    /// channel; ColBERT enables MaxSim reranking. BGE-M3 takes raw text
+    /// (no task prefixes). The sparse vocabulary is XLM-RoBERTa's 250002
+    /// tokens.
+    #[must_use]
+    pub fn bge_m3() -> Self {
+        Self {
+            model_id: "aapot/bge-m3-onnx".into(),
+            // 250002 = XLM-RoBERTa vocabulary; BGE-M3's sparse head emits
+            // one weight per vocab token. Must match the xervo preset.
+            sparse_dimensions: Some(250002),
+            // 1024-d per-token ColBERT vectors, same width as the dense head.
+            multivector_dimensions: Some(1024),
+            dimensions: 1024,
+            batch_size: 16,
+            document_prefix: None,
+            query_prefix: None,
+            execution_providers: None,
+            provider: default_embed_provider(),
+            provider_options: None,
         }
     }
 
@@ -233,6 +294,7 @@ impl EmbeddingConfig {
             "minilm" => Self::minilm_l6_v2(),
             "bge-small" => Self::bge_small_en_v15(),
             "bge-large" => Self::bge_large_en_v15(),
+            "bge-m3" => Self::bge_m3(),
             "embeddinggemma" | "gemma" => Self::embedding_gemma_300m(),
             "embeddinggemma-mistralrs" | "gemma-mistralrs" => {
                 Self::embedding_gemma_300m_mistralrs()
@@ -314,13 +376,18 @@ pub struct RerankerConfig {
     /// equivalent on [`EmbeddingConfig`]. `None` → feature-aware default.
     #[serde(default)]
     pub execution_providers: Option<Vec<String>>,
-    /// xervo `local/onnx` reranker code path. `"cross-encoder"` (default)
-    /// loads BERT-family encoders that emit a relevance logit per
-    /// `(query, doc)` pair (e.g. `BAAI/bge-reranker-base`,
-    /// `cross-encoder/ms-marco-MiniLM-L-6-v2`). `"generative"` loads a
-    /// decoder-LM reranker that scores yes/no via next-token logits
-    /// (e.g. `onnx-community/Qwen3-Reranker-0.6B-ONNX`). Any other
-    /// value triggers a runtime error from xervo.
+    /// Reranker code path. `"cross-encoder"` (default) loads BERT-family
+    /// encoders that emit a relevance logit per `(query, doc)` pair (e.g.
+    /// `BAAI/bge-reranker-base`, `cross-encoder/ms-marco-MiniLM-L-6-v2`).
+    /// `"generative"` loads a decoder-LM reranker that scores yes/no via
+    /// next-token logits (e.g. `onnx-community/Qwen3-Reranker-0.6B-ONNX`).
+    /// Both route through xervo's `local/onnx` reranker.
+    ///
+    /// `"colbert"` is handled entirely in uniko: instead of a reranker
+    /// model it re-scores the top candidates by ColBERT MaxSim against
+    /// the query's multi-vector embedding (requires a hybrid embedder
+    /// with [`EmbeddingConfig::multivector_dimensions`] set). It registers
+    /// no rerank alias. Any other value triggers a runtime error from xervo.
     #[serde(default = "default_reranker_style")]
     pub style: String,
 }
@@ -662,6 +729,15 @@ pub struct UnikoConfig {
     pub recall_vector_weight: f64,
     /// BM25 fulltext weight in hybrid fusion \[0.0–1.0\].
     pub recall_bm25_weight: f64,
+    /// Add a learned-sparse retrieval channel for Chunk and Observation.
+    ///
+    /// When `true` (and the embedder is hybrid, i.e.
+    /// [`EmbeddingConfig::sparse_dimensions`] is set), recall fans out an
+    /// extra `uni.sparse.query` channel per variant whose results join the
+    /// existing RRF fusion. Default `false` so the dense + BM25 baseline is
+    /// unchanged. Requires a KB ingested with a hybrid embedder.
+    #[serde(default)]
+    pub recall_sparse_enabled: bool,
     /// Variant labels for multi-query reformulation. Empty = use the
     /// default 4-variant set (`keywords`, `original`, `declarative`,
     /// `type_anchored`). Pass `vec!["keywords".into()]` to reproduce
@@ -782,6 +858,7 @@ impl Default for UnikoConfig {
             recall_min_score: 0.001,
             recall_vector_weight: 0.5,
             recall_bm25_weight: 0.5,
+            recall_sparse_enabled: false,
             nlp_srl_enabled: true,
             entity_strict_admission: true,
             entity_other_min_confidence: 0.9,
@@ -875,6 +952,25 @@ impl UnikoConfig {
                 "reranker.top_n ({}) must be >= recall_limit ({}) when enabled",
                 self.reranker.top_n, self.recall_limit,
             )));
+        }
+
+        if self.recall_sparse_enabled && self.embedding.sparse_dimensions.is_none() {
+            return Err(UnikoError::Config(
+                "recall_sparse_enabled requires a hybrid embedder with sparse_dimensions \
+                 set (e.g. the bge-m3 preset)"
+                    .into(),
+            ));
+        }
+
+        if self.reranker.enabled
+            && self.reranker.style == "colbert"
+            && self.embedding.multivector_dimensions.is_none()
+        {
+            return Err(UnikoError::Config(
+                "reranker.style = \"colbert\" requires a hybrid embedder with \
+                 multivector_dimensions set (e.g. the bge-m3 preset)"
+                    .into(),
+            ));
         }
 
         if self.retry_initial_delay_ms > self.retry_max_delay_ms {

@@ -119,8 +119,8 @@ pub struct PromotionReport {
 ///
 /// # Errors
 ///
-/// - [`UnikoError::Locy`] when the rule cannot be executed and the
-///   Cypher fallback also fails.
+/// - [`UnikoError::Locy`] when the `sequence_detector` rule cannot be
+///   executed.
 /// - [`UnikoError::Storage`] when graph writes fail.
 pub async fn promote_procedures_once(
     kb: &KnowledgeBase,

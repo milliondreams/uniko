@@ -62,8 +62,9 @@ impl KnowledgeBase {
     /// group. Absent `importance` defaults to `0.5`; an empty group returns
     /// `0.0`.
     ///
-    /// Computed in Rust because uni-db's Locy `AVG` returns 0.0 (filed
-    /// upstream) — used by the `episode_pattern_detector` consumer.
+    /// Computed in Rust because a FOLD `AVG` returns 0.0 when the rule's YIELD
+    /// renames the aggregate to a different alias (uni-db #145) — used by the
+    /// `episode_pattern_detector` consumer.
     ///
     /// # Errors
     ///
@@ -89,7 +90,10 @@ impl KnowledgeBase {
         if rows.is_empty() {
             return Ok(0.0);
         }
-        let sum: f64 = rows.iter().map(|r| r.get::<f64>("imp").unwrap_or(0.5)).sum();
+        let sum: f64 = rows
+            .iter()
+            .map(|r| r.get::<f64>("imp").unwrap_or(0.5))
+            .sum();
         Ok(sum / rows.len() as f64)
     }
 }

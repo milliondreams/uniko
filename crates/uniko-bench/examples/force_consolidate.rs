@@ -13,9 +13,17 @@ use uniko_store::config::UnikoConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let kb_dir: PathBuf = std::env::args().nth(1).expect("usage: <kb_dir> <bench_config> [agent]").into();
-    let bc: PathBuf = std::env::args().nth(2).expect("usage: <kb_dir> <bench_config> [agent]").into();
-    let agent = std::env::args().nth(3).unwrap_or_else(|| "force".to_string());
+    let kb_dir: PathBuf = std::env::args()
+        .nth(1)
+        .expect("usage: <kb_dir> <bench_config> [agent]")
+        .into();
+    let bc: PathBuf = std::env::args()
+        .nth(2)
+        .expect("usage: <kb_dir> <bench_config> [agent]")
+        .into();
+    let agent = std::env::args()
+        .nth(3)
+        .unwrap_or_else(|| "force".to_string());
 
     let mut config = UnikoConfig::default();
     BenchConfig::load(&bc)

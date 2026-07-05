@@ -106,7 +106,7 @@ mod tests {
     /// The key seam: `entities_from_nlp_result` is pure, so the ONNX-side
     /// temporal/numeric filter is testable WITHOUT running the model. A
     /// synthetic NER result with Date/Numeric/low-conf-Other spans must map
-    /// + normalize correctly, then be dropped by admission, leaving only the
+    /// and normalize correctly, then be dropped by admission, leaving only the
     /// real Person.
     #[test]
     fn onnx_date_numeric_other_mapped_then_dropped_by_admission() {
@@ -127,8 +127,7 @@ mod tests {
             "Date span mapped + normalized"
         );
         assert!(
-            raw.iter()
-                .any(|e| e.entity_type == EntityType::Measurement),
+            raw.iter().any(|e| e.entity_type == EntityType::Measurement),
             "Numeric -> Measurement"
         );
 
@@ -140,4 +139,3 @@ mod tests {
         assert_eq!(kept[0].canonical_name, "caroline");
     }
 }
-

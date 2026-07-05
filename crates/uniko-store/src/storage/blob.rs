@@ -86,15 +86,16 @@ impl KnowledgeBase {
     ///
     /// Returns [`UnikoError::Storage`] on database failure.
     pub async fn merge_artifact_content(&self, spec: MergeContent) -> Result<crate::types::NodeId> {
-        // We can't use `MERGE (c:ArtifactContent {content_id: $cid}) ON
-        // CREATE SET ...` here: uni-db evaluates NOT NULL constraints
-        // on the initial MERGE create (before ON CREATE SET runs), so
-        // required columns (mime, created_at) blow up. Instead do a
-        // host-side MATCH-or-CREATE: cheap because content_id is Hash-
-        // indexed, and idempotent because the second leg short-circuits
-        // on an existing row.
+        // Host-side MATCH-or-CREATE instead of `MERGE (c:ArtifactContent
+        // {content_id: $cid}) ON CREATE SET ...`: cheap because content_id
+        // is Hash-indexed, and idempotent because the second leg short-
+        // circuits on an existing row. (uni-db <= 2.4 also evaluated NOT
+        // NULL on the MERGE create before ON CREATE SET ran, blowing up on
+        // required columns like mime/created_at; 2.5.0 folds ON CREATE SET
+        // into the seed props, so that is no longer why we avoid MERGE.)
         //
-        // The check-and-create must be atomic per content_id: without a
+        // The real reason to keep the host-side split: the check-and-create
+        // must be atomic per content_id. Without a
         // guard, two concurrent ingests of the same content both read
         // "absent" and both CREATE a duplicate row (this method is called
         // per-item under the spawn-per-message ingest worker). Hold the

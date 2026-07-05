@@ -19,7 +19,7 @@ infrastructure (no Neo4j, no Qdrant, no PostgreSQL).
 - **Embedded cognitive memory store on uni-db.** A single in-process graph database
   (graph + vector + full-text + Locy logic programming) backs the entire system. The
   `uniko-store` crate is the sole boundary to uni-db; all higher layers go through it.
-- **Typed knowledge-graph schema** with 22 node types and 50 edge types, organized around
+- **Typed knowledge-graph schema** with 24 node types and 53 edge types, organized around
   communication: messages between participants are the atomic unit, and entities,
   observations, facts, procedures, and topics derive from them with full provenance.
 - **Atomic ingest pipeline** that compiles each message into the graph in one
@@ -72,8 +72,9 @@ infrastructure (no Neo4j, no Qdrant, no PostgreSQL).
 - **No HTTP or MCP API.** uniko ships as a Rust library only; there is no network surface
   or agent-facing tool server yet.
 - **No CLI.** There is no command-line interface.
-- **Python bindings are a non-functional skeleton.** The `uniko-py` crate exists as a PyO3
-  scaffold and is not yet usable.
+- **Python bindings are alpha.** The `uniko` PyO3 SDK ships the full async surface (recall,
+  answer, query, ingest, goals/tasks, Locy logic) with synchronous `*_sync` twins and a
+  complete `py.typed` stub, but the API surface may still change before 1.0.
 - **Some recall paths are still improving.** Date-anchored / temporal questions are the
   largest known failure category, and retrieval tuning is ongoing.
 

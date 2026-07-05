@@ -55,6 +55,34 @@ impl KnowledgeBase {
             .map_err(|e| UnikoError::Embedding(e.to_string()))
     }
 
+    /// Embed `texts` into per-token multi-vectors (ColBERT) under `alias`,
+    /// one `Vec<Vec<f32>>` per input (order preserved).
+    ///
+    /// Produces the query side of ColBERT MaxSim reranking; document-side
+    /// token vectors are auto-embedded into the `colbert_embedding` column
+    /// by the same hybrid alias. Applies no prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Embedding`] if the runtime is unavailable or
+    /// the model fails (e.g. the alias has no multi-vector head).
+    pub async fn embed_multivector(
+        &self,
+        alias: &str,
+        texts: &[&str],
+    ) -> Result<Vec<Vec<Vec<f32>>>> {
+        let xervo = self.db.xervo();
+        if !xervo.is_available() {
+            return Err(UnikoError::Embedding(
+                "Xervo embedding runtime not available".into(),
+            ));
+        }
+        xervo
+            .embed_multivector(alias, texts)
+            .await
+            .map_err(|e| UnikoError::Embedding(e.to_string()))
+    }
+
     /// Generate a completion for `messages` under model `alias`, returning
     /// the raw response text.
     ///

@@ -77,7 +77,11 @@ fn spans_overlap(s1: usize, e1: usize, s2: usize, e2: usize) -> bool {
 /// CodeSymbol, CodeImport) are always kept. When `strict` is `false` the
 /// input passes through unchanged (legacy admit-everything, for A/B).
 #[must_use]
-pub fn admit_entities(raw: Vec<RawEntity>, strict: bool, other_min_confidence: f64) -> Vec<RawEntity> {
+pub fn admit_entities(
+    raw: Vec<RawEntity>,
+    strict: bool,
+    other_min_confidence: f64,
+) -> Vec<RawEntity> {
     if !strict {
         return raw;
     }

@@ -52,7 +52,9 @@ fn apply_perf_knobs_from_env() -> Option<UniConfig> {
 use crate::config::UnikoConfig;
 use crate::error::{Result, UnikoError};
 use crate::schema::constants::{edges as edge_consts, labels};
-use crate::schema::{EMBED_ALIAS, NLP_ALIAS, OCR_ALIAS, RERANK_ALIAS, register_schema};
+use crate::schema::{
+    EMBED_ALIAS, HYBRID_EMBED_ALIAS, NLP_ALIAS, OCR_ALIAS, RERANK_ALIAS, register_schema,
+};
 pub use edges::{Direction, EdgeRecord};
 pub use filter::Filter;
 
@@ -277,10 +279,14 @@ impl KnowledgeBase {
         runtime: Arc<uni_xervo::runtime::ModelRuntime>,
     ) -> Result<Self> {
         config.validate()?;
-        let db = Uni::open(path.as_ref().to_string_lossy())
-            .xervo_runtime(runtime)
-            .build()
-            .await?;
+        let mut builder = Uni::open(path.as_ref().to_string_lossy()).xervo_runtime(runtime);
+        // Apply the same env-driven storage perf knobs (WAL / autoflush) the
+        // catalog-open path applies — otherwise opening via a shared runtime
+        // silently ignores them.
+        if let Some(uni_cfg) = apply_perf_knobs_from_env() {
+            builder = builder.config(uni_cfg);
+        }
+        let db = builder.build().await?;
         apply_schema(&db, &config).await?;
         Self {
             db: Arc::new(db),
@@ -582,6 +588,12 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
     };
     let ocr_eps = resolve_eps(config.ocr.execution_providers.as_deref());
 
+    // The dense alias always serves every lone-dense auto-embed column
+    // (Message, Summary, …), all computed embeddings (`kb.embed`), and query
+    // embedding via `ModelTask::Embed`. A hybrid embedder additionally gets a
+    // separate `EmbedHybrid` alias below — one model cannot back both, since
+    // uni-db routes lone-dense columns through the `EmbeddingModel` trait,
+    // which the hybrid model does not implement.
     let mut catalog = vec![
         ModelAliasSpec {
             alias: EMBED_ALIAS.to_string(),
@@ -623,7 +635,33 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
         },
     ];
 
-    if config.reranker.enabled {
+    // Hybrid embedder: a second alias backed by the SAME model, registered
+    // as `EmbedHybrid`, fills the dense + sparse + ColBERT group on Chunk /
+    // Observation in one forward pass. It must be separate from EMBED_ALIAS
+    // (see the comment there). The model loads twice (the runtime cache keys
+    // on task), so expect ~2× the embedder's VRAM when hybrid is on.
+    if config.embedding.sparse_dimensions.is_some()
+        || config.embedding.multivector_dimensions.is_some()
+    {
+        catalog.push(ModelAliasSpec {
+            alias: HYBRID_EMBED_ALIAS.to_string(),
+            task: ModelTask::EmbedHybrid,
+            provider_id: config.embedding.provider.clone(),
+            model_id: config.embedding.model_id.clone(),
+            revision: None,
+            warmup: WarmupPolicy::Lazy,
+            required: false,
+            timeout: None,
+            load_timeout: None,
+            retry: None,
+            options: build_embed_options(&config.embedding, &embed_eps),
+        });
+    }
+
+    // The ColBERT reranker style needs no model alias: it re-scores via
+    // the embed alias's multi-vector head (MaxSim) inside recall, so only
+    // register a `rerank/default` model for the xervo reranker styles.
+    if config.reranker.enabled && config.reranker.style != "colbert" {
         catalog.push(ModelAliasSpec {
             alias: RERANK_ALIAS.to_string(),
             task: ModelTask::Rerank,

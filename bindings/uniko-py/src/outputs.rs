@@ -700,7 +700,11 @@ impl PyGoalContext {
 #[pymethods]
 impl PyGoalContext {
     fn __repr__(&self) -> String {
-        format!("GoalContext(tasks={}, facts={})", self.tasks.len(), self.facts.len())
+        format!(
+            "GoalContext(tasks={}, facts={})",
+            self.tasks.len(),
+            self.facts.len()
+        )
     }
 }
 

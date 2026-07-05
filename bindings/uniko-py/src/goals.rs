@@ -263,7 +263,11 @@ impl PyGoals {
     /// Complete a task.
     fn complete_task<'py>(&self, py: Python<'py>, task_id: String) -> PyResult<Bound<'py, PyAny>> {
         bridge!(py, agent = self.inner.clone(), {
-            agent.goals().complete_task(&task_id).await.map_err(to_pyerr)
+            agent
+                .goals()
+                .complete_task(&task_id)
+                .await
+                .map_err(to_pyerr)
         })
     }
 
@@ -550,7 +554,11 @@ impl PyGoals {
     /// Blocking variant of [`complete_task`](Self::complete_task).
     fn complete_task_sync(&self, py: Python<'_>, task_id: String) -> PyResult<bool> {
         bridge_sync!(py, agent = self.inner.clone(), {
-            agent.goals().complete_task(&task_id).await.map_err(to_pyerr)
+            agent
+                .goals()
+                .complete_task(&task_id)
+                .await
+                .map_err(to_pyerr)
         })
     }
 

@@ -167,7 +167,9 @@ async fn test_admission_drops_date_and_greeting_keeps_real() {
         "greeting-prefixed fragments must be dropped; got {names:?}"
     );
     assert!(
-        !names.iter().any(|n| n.contains("january") || n.contains("2024")),
+        !names
+            .iter()
+            .any(|n| n.contains("january") || n.contains("2024")),
         "date entities must be dropped by admission; got {names:?}"
     );
 }

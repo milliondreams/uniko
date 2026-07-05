@@ -272,14 +272,22 @@ mod tests {
         )
         .await
         .expect("lock_many must not self-deadlock on colliding stripes");
-        assert_eq!(guards.len(), 1, "colliding keys collapse to one stripe guard");
+        assert_eq!(
+            guards.len(),
+            1,
+            "colliding keys collapse to one stripe guard"
+        );
     }
 
     #[tokio::test]
     async fn lock_many_distinct_stripes_returns_all() {
         let locks = StripedLocks::new(256);
         let guards = locks
-            .lock_many(&[b"entity:a".to_vec(), b"entity:b".to_vec(), b"entity:a".to_vec()])
+            .lock_many(&[
+                b"entity:a".to_vec(),
+                b"entity:b".to_vec(),
+                b"entity:a".to_vec(),
+            ])
             .await;
         // Duplicate key "entity:a" collapses; the two distinct keys
         // *usually* land on different stripes (256 stripes).

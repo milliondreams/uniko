@@ -161,11 +161,7 @@ impl PyUniko {
     }
 
     fn __repr__(&self) -> String {
-        let live = self
-            .inner
-            .lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+        let live = self.inner.lock().map(|g| g.is_some()).unwrap_or(false);
         if live {
             "Uniko(open)".to_string()
         } else {
@@ -246,7 +242,9 @@ impl PyUnikoBuilder {
             .expect("UnikoBuilder mutex poisoned")
             .take()
             .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("UnikoBuilder already consumed by build()")
+                pyo3::exceptions::PyRuntimeError::new_err(
+                    "UnikoBuilder already consumed by build()",
+                )
             })?;
         bridge!(py, _g = (), {
             let uniko = builder.build().await.map_err(to_pyerr)?;
@@ -262,7 +260,9 @@ impl PyUnikoBuilder {
             .expect("UnikoBuilder mutex poisoned")
             .take()
             .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("UnikoBuilder already consumed by build()")
+                pyo3::exceptions::PyRuntimeError::new_err(
+                    "UnikoBuilder already consumed by build()",
+                )
             })?;
         bridge_sync!(py, _g = (), {
             let uniko = builder.build().await.map_err(to_pyerr)?;

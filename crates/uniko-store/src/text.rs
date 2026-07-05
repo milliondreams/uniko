@@ -27,9 +27,7 @@
 /// ```
 #[must_use]
 pub fn normalize_canonical(s: &str) -> String {
-    let trimmed = s
-        .trim()
-        .trim_matches(|c: char| c.is_ascii_punctuation());
+    let trimmed = s.trim().trim_matches(|c: char| c.is_ascii_punctuation());
     let mut out = String::with_capacity(trimmed.len());
     let mut pending_space = false;
     for ch in trimmed.chars() {

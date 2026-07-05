@@ -49,7 +49,11 @@ impl PyData {
     /// Fetch an artifact by its external id, or `None`.
     fn artifact<'py>(&self, py: Python<'py>, artifact_id: String) -> PyResult<Bound<'py, PyAny>> {
         bridge!(py, agent = self.inner.clone(), {
-            let view = agent.data().artifact(&artifact_id).await.map_err(to_pyerr)?;
+            let view = agent
+                .data()
+                .artifact(&artifact_id)
+                .await
+                .map_err(to_pyerr)?;
             Python::attach(|py| match view {
                 Some(v) => PyArtifactView::from_rust(py, &v).map(|p| p.into_any()),
                 None => Ok(py.None()),
@@ -95,7 +99,11 @@ impl PyData {
     /// Blocking variant of [`artifact`](Self::artifact).
     fn artifact_sync(&self, py: Python<'_>, artifact_id: String) -> PyResult<Py<PyAny>> {
         bridge_sync!(py, agent = self.inner.clone(), {
-            let view = agent.data().artifact(&artifact_id).await.map_err(to_pyerr)?;
+            let view = agent
+                .data()
+                .artifact(&artifact_id)
+                .await
+                .map_err(to_pyerr)?;
             Python::attach(|py| match view {
                 Some(v) => PyArtifactView::from_rust(py, &v).map(|p| p.into_any()),
                 None => Ok(py.None()),

@@ -368,6 +368,15 @@ pub struct RecallConfig {
     pub reranker_top_n: usize,
     /// Apply sigmoid to raw cross-encoder logits.
     pub reranker_apply_sigmoid: bool,
+    /// Reranker code path: `"cross-encoder"` / `"generative"` (xervo model
+    /// at `rerank/default`) or `"colbert"` (in-process MaxSim over the
+    /// `colbert_embedding` column — no model alias). Mirrors
+    /// [`RerankerConfig::style`](uniko_store::config::RerankerConfig::style).
+    pub reranker_style: String,
+    /// Add a learned-sparse retrieval channel for Chunk and Observation,
+    /// fused into the RRF pool. Requires a hybrid embedder (the
+    /// `sparse_embedding` column). Default `false`.
+    pub recall_sparse_enabled: bool,
     /// When > 1.0, multiplies the score of any RecallItem whose
     /// connected entities include one of `IntentProfile.expected_answer_type`.
     /// `1.0` is a no-op. Only triggers when `predict_answer_type` returns
@@ -479,6 +488,8 @@ impl Default for RecallConfig {
             reranker_enabled: false,
             reranker_top_n: 50,
             reranker_apply_sigmoid: true,
+            reranker_style: "cross-encoder".to_string(),
+            recall_sparse_enabled: false,
             // Off by default. The naive "any connected entity matches
             // predicted type → boost" rule swamps top-K with off-target
             // hits when the predicted type is common in the corpus
@@ -574,6 +585,8 @@ impl RecallConfig {
             reranker_enabled: cfg.reranker.enabled,
             reranker_top_n: cfg.reranker.top_n,
             reranker_apply_sigmoid: cfg.reranker.apply_sigmoid,
+            reranker_style: cfg.reranker.style.clone(),
+            recall_sparse_enabled: cfg.recall_sparse_enabled,
             // Rationale for the 1.0 default: see `Default for RecallConfig`.
             answer_type_boost: 1.0,
             answer_type_top_n: 50,
@@ -1059,10 +1072,38 @@ async fn recall_unfiltered(
         tracing::info!(variant = label, hits = hits.len(), "variant complete");
     }
 
-    // RRF fusion across variants. Pure function so it can be unit
-    // tested with synthetic ranked lists.
+    // Optional learned-sparse Chunk channel: one auto-embedded
+    // `uni.sparse.query` per variant, fused as extra ranked lists in the
+    // same RRF pool (a chunk matched by both dense and sparse accumulates
+    // score). Observation's sparse channel rides in Phase 2. Gated on a
+    // hybrid embedder via `recall_sparse_enabled`.
+    let sparse_results: Vec<Vec<RankedHit>> = if config.recall_sparse_enabled {
+        let sparse_futures: Vec<_> = intent
+            .variants
+            .iter()
+            .map(|variant| {
+                run_sparse_source(
+                    kb,
+                    "Chunk",
+                    "text",
+                    variant.text.clone(),
+                    config.per_variant_limit as i64,
+                    config.dimensions_allow.as_deref(),
+                )
+            })
+            .collect();
+        join_all(sparse_futures).await
+    } else {
+        Vec::new()
+    };
+
+    // RRF fusion across variants (+ sparse channels). Pure function so it
+    // can be unit tested with synthetic ranked lists.
     let scored = rrf_fuse(
-        variant_results.iter().map(|(_, hits)| hits.as_slice()),
+        variant_results
+            .iter()
+            .map(|(_, hits)| hits.as_slice())
+            .chain(sparse_results.iter().map(Vec::as_slice)),
         config.rrf_k,
     );
 
@@ -1111,11 +1152,14 @@ async fn recall_unfiltered(
 
     crate::sort_by_score_desc(&mut items, |x| x.score);
 
-    // ── Optional cross-encoder reranker stage ──────────────────────
-    // Re-score the top RRF candidates with a cross-encoder before
-    // truncating to the recall limit.  Disabled by default — when off,
-    // this is a no-op.
-    if config.reranker_enabled && !items.is_empty() {
+    // ── Optional reranker stage ────────────────────────────────────
+    // Re-score the top RRF candidates before truncating to the recall
+    // limit. Disabled by default — when off, this is a no-op. The
+    // `"colbert"` style re-scores via late-interaction MaxSim in-process
+    // (no reranker model); all other styles call the xervo cross-encoder.
+    if config.reranker_enabled && !items.is_empty() && config.reranker_style == "colbert" {
+        colbert_rerank(kb, query, &mut items, config).await;
+    } else if config.reranker_enabled && !items.is_empty() {
         let top_n = config.reranker_top_n.min(items.len());
         let docs: Vec<&str> = items[..top_n].iter().map(|i| i.content.as_str()).collect();
         match kb
@@ -1241,6 +1285,93 @@ async fn recall_unfiltered(
         phase2_only: false,
         coverage,
     })
+}
+
+/// Re-rank the top candidates by ColBERT late-interaction MaxSim.
+///
+/// Only Chunk and Observation carry a `colbert_embedding` column, so this
+/// re-scores those candidates within the top `reranker_top_n` window and
+/// leaves the rest at their fused score (partial rerank). MaxSim scores are
+/// rescaled into the window's existing score band so the re-scored and
+/// untouched candidates interleave without a scale jump. Best-effort: on any
+/// embed/query failure it logs and leaves RRF order intact.
+async fn colbert_rerank(
+    kb: &KnowledgeBase,
+    query: &str,
+    items: &mut [RecallItem],
+    config: &RecallConfig,
+) {
+    let top = config.reranker_top_n.min(items.len());
+    if top == 0 {
+        return;
+    }
+    // Query-side per-token embedding; document-side vectors are auto-embedded
+    // into `colbert_embedding`.
+    let qmulti = match uniko_extract::embedding::embed_multivector_query(kb, query).await {
+        Ok(q) if !q.is_empty() => q,
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!(error = %e, "colbert query embed failed, keeping RRF order");
+            return;
+        }
+    };
+
+    // Candidate ids per colbert-bearing label, taken from the rerank window.
+    let ids_of = |kind: RecallKind| -> Vec<NodeId> {
+        items[..top]
+            .iter()
+            .filter(|i| i.kind == kind)
+            .map(|i| i.node_id)
+            .collect()
+    };
+    let chunk_ids = ids_of(RecallKind::Chunk);
+    let obs_ids = ids_of(RecallKind::Observation);
+    if chunk_ids.is_empty() && obs_ids.is_empty() {
+        return;
+    }
+
+    let mut maxsim: HashMap<NodeId, f64> = HashMap::new();
+    for (label, content_field, ids) in [
+        ("Chunk", "text", &chunk_ids),
+        ("Observation", "content", &obs_ids),
+    ] {
+        if ids.is_empty() {
+            continue;
+        }
+        match kb
+            .recall_colbert_maxsim(label, "colbert_embedding", content_field, &qmulti, ids)
+            .await
+        {
+            Ok(rows) => {
+                for r in rows {
+                    maxsim.insert(r.node_id, r.score);
+                }
+            }
+            Err(e) => tracing::warn!(label, error = %e, "colbert maxsim query failed"),
+        }
+    }
+    if maxsim.is_empty() {
+        return;
+    }
+
+    // Rescale MaxSim into the current top-window band so re-scored items
+    // interleave with the untouched (non-colbert) candidates instead of
+    // jumping to a different score scale.
+    let band_ceiling = items[..top]
+        .iter()
+        .map(|i| i.score)
+        .fold(f64::MIN, f64::max)
+        .max(f64::MIN_POSITIVE);
+    let max_ms = maxsim.values().copied().fold(f64::MIN, f64::max);
+    if max_ms <= 0.0 {
+        return;
+    }
+    for item in items[..top].iter_mut() {
+        if let Some(&ms) = maxsim.get(&item.node_id) {
+            item.score = ms / max_ms * band_ceiling;
+        }
+    }
+    crate::sort_by_score_desc(items, |x| x.score);
 }
 
 /// Phase 1 (Compact) coverage threshold from spec §IX.
@@ -1389,6 +1520,22 @@ pub async fn phase2_expand(
             qvec_ref,
             qtxt_owned,
             "embedding",
+            config.dimensions_allow.as_deref(),
+        )));
+    }
+    // Learned-sparse Observation channel, fused into the same Phase 2 RRF
+    // pool. Gated on a hybrid embedder; auto-embeds the query text.
+    eprintln!(
+        "RECALL_PROF gate recall_sparse_enabled={}",
+        config.recall_sparse_enabled
+    );
+    if config.recall_sparse_enabled {
+        futs.push(Box::pin(run_sparse_source(
+            kb,
+            "Observation",
+            "content",
+            qtxt.to_string(),
+            20,
             config.dimensions_allow.as_deref(),
         )));
     }
@@ -1565,6 +1712,62 @@ fn fuse_and_score_phase2(
     items
 }
 
+/// Run a learned-sparse channel for one label, returning RRF-ready hits.
+///
+/// `qtxt` is auto-embedded into a sparse query vector by the hybrid embed
+/// alias (no precomputed vector needed). Returns `Vec::new()` on failure so
+/// the fan-out tolerates per-source errors. The sparse companion to
+/// [`run_phase2_source`]; used by both Phase 2 (Observation) and the Phase 3
+/// variant fan-out (Chunk).
+async fn run_sparse_source(
+    kb: &KnowledgeBase,
+    label: &str,
+    content_field: &str,
+    qtxt: String,
+    top_k: i64,
+    allow: Option<&[NodeId]>,
+) -> Vec<RankedHit> {
+    let start = std::time::Instant::now();
+    let rows = match kb
+        .recall_sparse_search(
+            label,
+            "sparse_embedding",
+            content_field,
+            &qtxt,
+            top_k,
+            allow,
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(label, error = %e, "sparse query failed");
+            return Vec::new();
+        }
+    };
+    eprintln!(
+        "RECALL_PROF sparse_source label={label} rows={} elapsed_ms={}",
+        rows.len(),
+        start.elapsed().as_millis() as u64
+    );
+    let mut hits: Vec<RankedHit> = rows
+        .into_iter()
+        .filter(|r| !r.content.is_empty())
+        .map(|r| RankedHit {
+            node_id: r.node_id,
+            label: if r.label.is_empty() {
+                label.to_string()
+            } else {
+                r.label
+            },
+            content: r.content,
+            raw_score: r.score,
+        })
+        .collect();
+    crate::sort_by_score_desc(&mut hits, |x| x.raw_score);
+    hits
+}
+
 /// Run a single Phase 2 vector-or-fulltext source.
 ///
 /// Returns `Vec::new()` on internal failure so the calling fan-out can
@@ -1625,12 +1828,10 @@ async fn run_phase2_source(
         });
     }
     normalize_scores_in_place(&mut ranked);
-    tracing::debug!(
-        label,
-        mode,
-        hits = ranked.len(),
-        elapsed_ms = start.elapsed().as_millis() as u64,
-        "phase2 source complete"
+    eprintln!(
+        "RECALL_PROF phase2_source label={label} mode={mode} hits={} elapsed_ms={}",
+        ranked.len(),
+        start.elapsed().as_millis() as u64
     );
     ranked
 }

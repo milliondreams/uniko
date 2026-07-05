@@ -28,7 +28,6 @@ use uniko_bench::{
 };
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -226,6 +225,16 @@ async fn main() -> Result<()> {
         );
     }
 
+    // One Xervo runtime shared across every KB opened in this run. Built from a
+    // bootstrap in-memory DB (each model loads once) and passed via
+    // `open_with_runtime`. The prebuilt-runtime open path is also what lets a
+    // hybrid (bge-m3) KB reopen at all: the catalog-open path rejects a vector
+    // index whose embedding alias is a non-`Embed` task (rustic-ai/uni-db#130),
+    // while the prebuilt-runtime path skips that validation.
+    let shared_runtime = uniko_store::KnowledgeBase::build_shared_runtime(&config, &extra_catalog)
+        .await
+        .context("building shared Xervo runtime")?;
+
     let llm_alias: Option<&str> = if bench_cfg.retrieval_only {
         None
     } else {
@@ -306,9 +315,14 @@ async fn main() -> Result<()> {
         );
 
         let kb_dir = cli.ingest_dir.join(&sample.sample_id);
-        let kb = if cli.reuse && kb_dir.exists() {
+        // Decide reuse-vs-ingest before opening: `open_with_runtime` creates
+        // the dir, so `exists()` must be checked first. Both branches open via
+        // the shared prebuilt runtime (see #130 note above).
+        let reuse_existing = cli.reuse && kb_dir.exists();
+        let kb = uniko_bench::open_kb_with_runtime(&kb_dir, config.clone(), shared_runtime.clone())
+            .await?;
+        if reuse_existing {
             tracing::info!(path = %kb_dir.display(), "reusing existing KB");
-            uniko_bench::open_kb(&kb_dir, config.clone(), &extra_catalog).await?
         } else {
             let ingest_start = Instant::now();
             let observer = IngestObserver {
@@ -316,21 +330,12 @@ async fn main() -> Result<()> {
                 pricing: Some(&pricing),
                 embedding_model: Some(embedding_model_id.clone()),
             };
-            let kb = ingest::ingest_conversation_with_observer(
-                sample,
-                &sessions,
-                &kb_dir,
-                config.clone(),
-                &extra_catalog,
-                &observer,
-            )
-            .await?;
+            ingest::ingest_into_kb_with_observer(&kb, sample, &sessions, &observer).await?;
             tracing::info!(
                 elapsed_ms = ingest_start.elapsed().as_millis(),
                 "ingestion complete"
             );
-            kb
-        };
+        }
 
         // P4 + P5 + P6 sweep — identical to the legacy run flow.
         let triple_source = match bench_cfg.models.extract_triples.as_ref() {
@@ -340,12 +345,10 @@ async fn main() -> Result<()> {
             None => uniko_memory::consolidation::TripleSource::SrlDep,
         };
         uniko_bench::run_post_ingest_sweep(&kb, &sample.sample_id, &triple_source).await;
-        verify_label_visible(&kb, "ConsolidationCycle", "agent_id", &sample.sample_id).await;
 
         let evidence_lookup = build_evidence_lookup(&sessions);
 
         let bench_agent_id = uniko_bench::ensure_bench_agent(&kb, &sample.sample_id).await;
-        verify_label_visible(&kb, "Participant", "participant_id", &bench_agent_id).await;
 
         let questions: Vec<_> = sample
             .qa
@@ -487,11 +490,8 @@ async fn main() -> Result<()> {
                 action_type: Some("retrieve"),
                 extra_state: Some(extra_state),
             };
-            match uniko_memory::record_query_episode(&kb, &bench_agent_id, params).await {
-                Ok(episode_nid) => {
-                    verify_node_visible_by_label(&kb, "Episode", episode_nid).await;
-                }
-                Err(e) => tracing::debug!(error = %e, "episode recording failed"),
+            if let Err(e) = uniko_memory::record_query_episode(&kb, &bench_agent_id, params).await {
+                tracing::debug!(error = %e, "episode recording failed");
             }
 
             all_results.push((qr, f1, judge_score));
@@ -524,76 +524,4 @@ async fn main() -> Result<()> {
     tracing::info!(path = %cli.output.display(), "results written");
 
     Ok(())
-}
-
-/// Verify a node is visible to a label-anchored MATCH after writing.
-///
-/// Watches for a uni-db symptom seen on conv-26 where vertices written
-/// during the bench run are visible to unconstrained `MATCH (n)` (via
-/// edge traversal or `id(n)=$vid`) but invisible to `MATCH (n:Label)`.
-async fn verify_label_visible(
-    kb: &Arc<uniko_store::KnowledgeBase>,
-    label: &str,
-    ext_id_field: &str,
-    ext_id: &str,
-) {
-    let cypher = format!("MATCH (n:{label}) WHERE n.{ext_id_field} = $eid RETURN count(n) AS c");
-    match kb
-        .db()
-        .session()
-        .query_with(&cypher)
-        .param("eid", ext_id)
-        .fetch_all()
-        .await
-    {
-        Ok(r) => {
-            let n: i64 = r
-                .rows()
-                .first()
-                .and_then(|row| row.get("c").ok())
-                .unwrap_or(-1);
-            if n == 0 {
-                tracing::warn!(
-                    label,
-                    ext_id_field,
-                    ext_id,
-                    "verify_label_visible: label-anchored MATCH returned 0 — vertex written but invisible to label-scan"
-                );
-            }
-        }
-        Err(e) => tracing::warn!(error = %e, label, "verify_label_visible query failed"),
-    }
-}
-
-/// Verify a node id is visible to a label-anchored MATCH after writing.
-async fn verify_node_visible_by_label(
-    kb: &Arc<uniko_store::KnowledgeBase>,
-    label: &str,
-    node_id: uniko_store::NodeId,
-) {
-    let cypher = format!("MATCH (n:{label}) WHERE id(n) = $v RETURN count(n) AS c");
-    match kb
-        .db()
-        .session()
-        .query_with(&cypher)
-        .param("v", node_id)
-        .fetch_all()
-        .await
-    {
-        Ok(r) => {
-            let n: i64 = r
-                .rows()
-                .first()
-                .and_then(|row| row.get("c").ok())
-                .unwrap_or(-1);
-            if n == 0 {
-                tracing::warn!(
-                    label,
-                    node_id,
-                    "verify_node_visible_by_label: label-anchored MATCH returned 0 for known vid"
-                );
-            }
-        }
-        Err(e) => tracing::warn!(error = %e, label, "verify_node_visible_by_label query failed"),
-    }
 }

@@ -115,14 +115,14 @@ impl KnowledgeBase {
     /// ingest path folds Message + edges + chunks under a single
     /// commit using this).
     ///
-    /// Internally groups input edges by `edge_type` and issues one
-    /// UNWIND-batched statement per type via
-    /// [`KnowledgeBase::batch_create_edges_fast_in_tx`], passing
-    /// (src_label, dst_label) hints from a schema-driven table so the
-    /// planner can narrow the `MATCH ... WHERE id() = $src` scan to a
-    /// single label rather than scanning every node table. The hints
-    /// are the main perf lever here — for message ingest the typical
-    /// per-type count is N=1, so UNWIND-grouping alone is marginal.
+    /// Internally groups input edges by `edge_type` and issues one bulk
+    /// write per type via [`KnowledgeBase::batch_create_edges_fast_in_tx`].
+    /// That path routes to uni-db's `bulk_insert_edges` — a direct columnar
+    /// append with no Cypher parse/plan and no per-row `MATCH` — so the perf
+    /// lever is bypassing the Cypher executor entirely (endpoint VIDs are
+    /// already known). The (src_label, dst_label) hints threaded through from
+    /// the schema table are only consulted on the `return_ids` Cypher arm,
+    /// which this path never takes; on the bulk path they are inert.
     ///
     /// # Errors
     ///

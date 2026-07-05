@@ -205,7 +205,11 @@ async fn cycle_writes_supported_by_weight_in_unit_range() {
         .filter_map(|row| row.get::<f64>("w").ok())
         .collect();
 
-    assert_eq!(weights.len(), 3, "one SUPPORTED_BY edge per contributing obs");
+    assert_eq!(
+        weights.len(),
+        3,
+        "one SUPPORTED_BY edge per contributing obs"
+    );
     for w in weights {
         assert!(
             (0.0..=1.0).contains(&w),

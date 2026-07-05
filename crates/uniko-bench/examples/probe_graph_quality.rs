@@ -101,18 +101,45 @@ fn is_pronoun(s: &str) -> bool {
 /// A name that looks like a temporal expression (date/time reference) —
 /// these belong on observation temporal anchors, not as `Entity` nodes.
 fn is_temporal(s: &str) -> bool {
-    let t = s.trim().trim_end_matches(['.', ',', '!', '?', ';', ':']).to_lowercase();
+    let t = s
+        .trim()
+        .trim_end_matches(['.', ',', '!', '?', ';', ':'])
+        .to_lowercase();
     const MONTHS: [&str; 12] = [
-        "january", "february", "march", "april", "may", "june", "july", "august",
-        "september", "october", "november", "december",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
     ];
     const DAYS: [&str; 9] = [
-        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "today",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "today",
         "tomorrow",
     ];
     const SEASONS: [&str; 5] = ["summer", "winter", "spring", "fall", "autumn"];
     const REL: [&str; 8] = [
-        "yesterday", "tonight", "morning", "evening", "afternoon", "noon", "midnight", "weekend",
+        "yesterday",
+        "tonight",
+        "morning",
+        "evening",
+        "afternoon",
+        "noon",
+        "midnight",
+        "weekend",
     ];
     let words: Vec<&str> = t.split_whitespace().collect();
     let first = words.first().copied().unwrap_or("");
@@ -140,9 +167,28 @@ fn is_greeting(s: &str) -> bool {
         .to_string();
     matches!(
         first.as_str(),
-        "hey" | "hi" | "hello" | "thanks" | "thank" | "bye" | "goodbye"
-            | "ok" | "okay" | "yeah" | "yep" | "yes" | "nope" | "sure" | "well"
-            | "oh" | "wow" | "hmm" | "please" | "sorry" | "congrats" | "congratulations"
+        "hey"
+            | "hi"
+            | "hello"
+            | "thanks"
+            | "thank"
+            | "bye"
+            | "goodbye"
+            | "ok"
+            | "okay"
+            | "yeah"
+            | "yep"
+            | "yes"
+            | "nope"
+            | "sure"
+            | "well"
+            | "oh"
+            | "wow"
+            | "hmm"
+            | "please"
+            | "sorry"
+            | "congrats"
+            | "congratulations"
     )
 }
 
@@ -261,8 +307,7 @@ async fn main() -> anyhow::Result<()> {
     println!("\n== Consolidation artifacts ==");
     let facts = scalar!("MATCH (f:Fact) RETURN count(f) AS n");
     let cycles = scalar!("MATCH (c:ConsolidationCycle) RETURN count(c) AS n");
-    let supported =
-        scalar!("MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN count(r) AS n");
+    let supported = scalar!("MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN count(r) AS n");
     let obs_triple =
         scalar!("MATCH (o:Observation) WHERE o.predicate IS NOT NULL RETURN count(o) AS n");
     println!(
@@ -270,8 +315,10 @@ async fn main() -> anyhow::Result<()> {
          Observations-with-triple={obs_triple}"
     );
     if supported == 0 {
-        println!("  (no SUPPORTED_BY edges -> consolidation hasn't produced Facts here; \
-                  1c needs a consolidated KB)");
+        println!(
+            "  (no SUPPORTED_BY edges -> consolidation hasn't produced Facts here; \
+                  1c needs a consolidated KB)"
+        );
     }
     if !other_samples.is_empty() {
         println!("  sample non-pronoun 0-ABOUT subjects:");
@@ -312,16 +359,24 @@ async fn main() -> anyhow::Result<()> {
         for r in rows.rows() {
             let name: String = r.get("name").unwrap_or_default();
             let typ: String = r.get("typ").unwrap_or_default();
-            *by_type.entry(if typ.is_empty() { "<none>".into() } else { typ }).or_insert(0) += 1;
+            *by_type
+                .entry(if typ.is_empty() { "<none>".into() } else { typ })
+                .or_insert(0) += 1;
             if is_temporal(&name) {
                 temporal += 1;
-                if temporal_s.len() < 20 { temporal_s.push(name); }
+                if temporal_s.len() < 20 {
+                    temporal_s.push(name);
+                }
             } else if is_greeting(&name) {
                 greeting += 1;
-                if greeting_s.len() < 20 { greeting_s.push(name); }
+                if greeting_s.len() < 20 {
+                    greeting_s.push(name);
+                }
             } else if has_trailing_punct(&name) {
                 punct += 1;
-                if punct_s.len() < 20 { punct_s.push(name); }
+                if punct_s.len() < 20 {
+                    punct_s.push(name);
+                }
             } else {
                 clean += 1;
             }
@@ -337,9 +392,15 @@ async fn main() -> anyhow::Result<()> {
              => {noise}/{loaded} ({:.1}%) look like non-entities; clean={clean}",
             pct(noise, loaded)
         );
-        if !temporal_s.is_empty() { println!("    temporal e.g.: {temporal_s:?}"); }
-        if !greeting_s.is_empty() { println!("    greeting e.g.: {greeting_s:?}"); }
-        if !punct_s.is_empty() { println!("    trailing-punct e.g.: {punct_s:?}"); }
+        if !temporal_s.is_empty() {
+            println!("    temporal e.g.: {temporal_s:?}");
+        }
+        if !greeting_s.is_empty() {
+            println!("    greeting e.g.: {greeting_s:?}");
+        }
+        if !punct_s.is_empty() {
+            println!("    trailing-punct e.g.: {punct_s:?}");
+        }
     }
 
     // Name-based duplication sizing (independent of embeddings): distinct-id
@@ -466,17 +527,25 @@ async fn main() -> anyhow::Result<()> {
         println!("    cosine 0.85-0.92: {mid}");
         println!("  --- sample >=0.92 pairs (manual precision read; CROSS = different type) ---");
         for (a, b, c, st) in &samples_high {
-            println!("    {c:.3} [{}]  {a}  <>  {b}", if *st { "same" } else { "CROSS" });
+            println!(
+                "    {c:.3} [{}]  {a}  <>  {b}",
+                if *st { "same" } else { "CROSS" }
+            );
         }
         println!("  --- sample 0.85-0.92 pairs ---");
         for (a, b, c, st) in &samples_mid {
-            println!("    {c:.3} [{}]  {a}  <>  {b}", if *st { "same" } else { "CROSS" });
+            println!(
+                "    {c:.3} [{}]  {a}  <>  {b}",
+                if *st { "same" } else { "CROSS" }
+            );
         }
     }
 
     println!("\n== SUPPORTED_BY weights ==");
     let rows = session
-        .query_with("MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN r.weight AS w LIMIT 100000")
+        .query_with(
+            "MATCH (:Fact)-[r:SUPPORTED_BY]->(:Observation) RETURN r.weight AS w LIMIT 100000",
+        )
         .fetch_all()
         .await?;
     let ws: Vec<f64> = rows

@@ -14,6 +14,7 @@
 mod blob_store_roundtrip;
 mod btic_tests;
 mod deletion_tests;
+mod hybrid_schema_tests;
 mod locy_tests;
 mod migration_artifact_content;
 mod schema_artifact_content;

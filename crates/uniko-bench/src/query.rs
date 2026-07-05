@@ -303,11 +303,9 @@ pub async fn generate_answer_with_usage(
 
 /// Read a row column as a `YYYY-MM-DD` date string.
 ///
-/// uni-db 2.1.0 returns DateTime properties as `Value::Temporal` (uni
-/// `4583ee870`); older / string-typed rows still arrive as an RFC-3339
-/// `Value::String`. Handle both: format the temporal epoch, else split
-/// the string on `'T'`. The model only needs the date for relative-date
-/// resolution.
+/// uni-db (>= 2.1.0) returns DateTime properties as `Value::Temporal` (uni
+/// `4583ee870`), so we format the temporal epoch. The model only needs the
+/// date for relative-date resolution.
 fn row_date(row: &uni_db::Row, column: &str) -> Option<String> {
     use uni_db::Value;
     let idx = row.columns().iter().position(|c| c == column)?;
@@ -317,7 +315,6 @@ fn row_date(row: &uni_db::Row, column: &str) -> Option<String> {
             chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
                 .map(|d| d.format("%Y-%m-%d").to_string())
         }
-        Value::String(s) if !s.is_empty() => Some(s.split('T').next().unwrap_or(s).to_string()),
         _ => None,
     }
 }

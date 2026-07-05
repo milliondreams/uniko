@@ -1,0 +1,20 @@
+{
+  "models": {
+    "gen": { "alias": "llm/gen", "model_id": "google/gemma-3-4b-it", "provider": "local/mistralrs" },
+    "judge": { "alias": "llm/judge", "model_id": "google/gemma-3-4b-it", "provider": "local/mistralrs" },
+    "embedder": { "preset": "bge-m3" },
+    "reranker": { "enabled": true, "model_id": "cross-encoder/ms-marco-MiniLM-L-6-v2", "style": "cross-encoder", "top_n": 50, "apply_sigmoid": false }
+  },
+  "recall": {
+    "sparse_enabled": false,
+    "phase1_strategy": "boost",
+    "phase1_boost_alpha": 0.6,
+    "phase2_graph_enabled": true,
+    "phase2_temporal_enabled": true,
+    "consolidation_cluster_objects": true,
+    "consolidation_date_augment_embedding": true
+  },
+  "judge_enabled": true,
+  "retrieval_only": false,
+  "lme": { "question_concurrency": 8, "session_concurrency": 8, "token_budget": 8192 }
+}

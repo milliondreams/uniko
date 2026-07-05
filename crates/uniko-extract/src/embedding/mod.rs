@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use uniko_store::Value;
-use uniko_store::schema::EMBED_ALIAS;
+use uniko_store::schema::{EMBED_ALIAS, HYBRID_EMBED_ALIAS};
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 /// Embed a single text for a **document** (indexing/storage).
@@ -46,6 +46,32 @@ pub async fn embed_document(kb: &KnowledgeBase, text: &str) -> Result<Vec<f32>, 
 pub async fn embed_query(kb: &KnowledgeBase, text: &str) -> Result<Vec<f32>, UnikoError> {
     let prefixed = apply_prefix(text, kb.config().embedding.query_prefix.as_deref());
     embed_raw(kb, &prefixed).await
+}
+
+/// Embed a query into ColBERT per-token vectors for MaxSim reranking.
+///
+/// Returns the query's multi-vector (`Vec<Vec<f32>>`). Applies the model's
+/// `query_prefix` like [`embed_query`] (BGE-M3 uses none). Requires a
+/// hybrid embedder whose embed alias exposes a multi-vector head.
+///
+/// # Errors
+///
+/// Returns [`UnikoError::Embedding`] if the runtime is unavailable, the
+/// alias has no multi-vector head, or the result is empty.
+pub async fn embed_multivector_query(
+    kb: &KnowledgeBase,
+    text: &str,
+) -> Result<Vec<Vec<f32>>, UnikoError> {
+    let prefixed = apply_prefix(text, kb.config().embedding.query_prefix.as_deref());
+    // ColBERT lives on the hybrid alias (EmbedHybrid); the dense EMBED_ALIAS
+    // has no multi-vector head.
+    let results = kb
+        .embed_multivector(HYBRID_EMBED_ALIAS, &[prefixed.as_str()])
+        .await?;
+    results
+        .into_iter()
+        .next()
+        .ok_or_else(|| UnikoError::Embedding("empty multivector embedding result".into()))
 }
 
 /// Embed a single text string without any prefix.

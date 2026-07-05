@@ -195,9 +195,10 @@ const PATTERN_MIN_MEAN_IMPORTANCE: f64 = 0.3;
 /// upserted.
 ///
 /// The rule only supplies `support` (`COUNT`); `mean_importance` is computed
-/// here in Rust because uni-db's Locy `AVG` returns 0.0 (filed upstream). Groups
-/// whose mean importance is at or below [`PATTERN_MIN_MEAN_IMPORTANCE`] are
-/// skipped, preserving the rule's original intent.
+/// here in Rust because a FOLD `AVG` comes back 0.0 when the rule's YIELD
+/// renames the aggregate to a different alias (uni-db #145). Groups whose mean
+/// importance is at or below [`PATTERN_MIN_MEAN_IMPORTANCE`] are skipped,
+/// preserving the rule's original intent.
 async fn consume_episode_patterns(
     kb: &KnowledgeBase,
     agent_id: &str,

@@ -63,9 +63,11 @@
 //! ```
 //!
 //! The `embedder` field accepts either `{"preset": "<name>"}` for one
-//! of the hardcoded presets (`bge-small`, `bge-large`, `nomic`,
+//! of the hardcoded presets (`bge-small`, `bge-large`, `bge-m3`, `nomic`,
 //! `minilm`, `embeddinggemma`, `embeddinggemma-mistralrs`) or
-//! `{"inline": <EmbeddingConfig>}` for a fully specified config.
+//! `{"inline": <EmbeddingConfig>}` for a fully specified config. The
+//! `bge-m3` preset enables single-pass hybrid (dense + sparse + ColBERT);
+//! pair it with `recall.sparse_enabled` and/or `reranker.style = "colbert"`.
 
 use std::path::{Path, PathBuf};
 
@@ -151,8 +153,9 @@ pub struct LlmAlias {
 pub enum EmbedderChoice {
     /// `{"preset": "<name>"}` — resolves to a hardcoded preset.
     Preset { preset: String },
-    /// `{"inline": <EmbeddingConfig>}` — full custom config.
-    Inline { inline: EmbeddingConfig },
+    /// `{"inline": <EmbeddingConfig>}` — full custom config. Boxed
+    /// because `EmbeddingConfig` is much larger than the `Preset` variant.
+    Inline { inline: Box<EmbeddingConfig> },
 }
 
 /// Recall-pipeline settings.  Defaults match the bench's historical
@@ -163,6 +166,17 @@ pub struct RecallSettings {
     /// Override `UnikoConfig.recall_limit`.  `None` → keep default.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Override the dense-vector weight in hybrid fusion. `None` → keep
+    /// the `UnikoConfig` default (0.5).
+    #[serde(default)]
+    pub vector_weight: Option<f64>,
+    /// Override the BM25 weight in hybrid fusion. `None` → keep default.
+    #[serde(default)]
+    pub bm25_weight: Option<f64>,
+    /// Enable the learned-sparse retrieval channel (Chunk + Observation).
+    /// Requires a hybrid embedder (e.g. the `bge-m3` preset). Default off.
+    #[serde(default)]
+    pub sparse_enabled: bool,
     #[serde(default = "default_phase1_strategy")]
     pub phase1_strategy: String,
     #[serde(default = "default_phase1_boost_alpha")]
@@ -185,6 +199,9 @@ impl Default for RecallSettings {
     fn default() -> Self {
         Self {
             limit: None,
+            vector_weight: None,
+            bm25_weight: None,
+            sparse_enabled: false,
             phase1_strategy: default_phase1_strategy(),
             phase1_boost_alpha: default_phase1_boost_alpha(),
             phase2_graph_enabled: true,
@@ -321,11 +338,11 @@ impl BenchConfig {
     /// preset that the bench doesn't recognise.
     pub fn resolve_embedder(&self) -> Result<EmbeddingConfig> {
         match &self.models.embedder {
-            EmbedderChoice::Inline { inline } => Ok(inline.clone()),
+            EmbedderChoice::Inline { inline } => Ok((**inline).clone()),
             EmbedderChoice::Preset { preset } => EmbeddingConfig::preset(preset).ok_or_else(|| {
                 anyhow::anyhow!(
                     "unknown embedder preset {preset:?}; expected one of: nomic, minilm, \
-                     bge-small, bge-large, embeddinggemma, embeddinggemma-mistralrs"
+                     bge-small, bge-large, bge-m3, embeddinggemma, embeddinggemma-mistralrs"
                 )
             }),
         }
@@ -350,6 +367,13 @@ impl BenchConfig {
                 config.reranker.top_n = limit;
             }
         }
+        if let Some(w) = self.recall.vector_weight {
+            config.recall_vector_weight = w;
+        }
+        if let Some(w) = self.recall.bm25_weight {
+            config.recall_bm25_weight = w;
+        }
+        config.recall_sparse_enabled = self.recall.sparse_enabled;
         config.phase1_strategy = self.recall.phase1_strategy.clone();
         config.phase1_boost_alpha = self.recall.phase1_boost_alpha;
         config.phase2_graph_enabled = self.recall.phase2_graph_enabled;

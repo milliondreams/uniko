@@ -160,7 +160,21 @@ pub async fn run_cycle_with(
     let started_at = Utc::now();
     let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE).max(1);
 
+    // P4 phase profiling: cumulative elapsed since just before the first read,
+    // logged at each phase boundary under target "p4_prof". Diff consecutive
+    // marks to get per-phase time.
+    let _prof = std::time::Instant::now();
+    let phase = |name: &str| {
+        tracing::debug!(
+            target: "p4_prof",
+            phase = name,
+            total_ms = _prof.elapsed().as_millis() as u64,
+            "P4 phase mark"
+        );
+    };
+
     let mut observations = kb.fetch_unprocessed_observations(batch_size).await?;
+    phase("fetch_observations");
 
     // Optionally refine each Observation's triple via the LLM.  Done
     // before grouping so the LLM's cleaner predicates collapse near-
@@ -258,6 +272,7 @@ pub async fn run_cycle_with(
     // We do this before clustering so prior objects participate in
     // the cluster assignment alongside the votes — F38 must compare
     // in cluster-space, not raw-string space.
+    phase("group_observations");
     let group_keys: Vec<(String, String)> = groups.keys().cloned().collect();
     let mut group_priors: HashMap<(String, String), Vec<PriorFact>> =
         match kb.find_stale_open_facts_batched(&group_keys).await {
@@ -309,6 +324,7 @@ pub async fn run_cycle_with(
     }
     let unique_vec: Vec<String> = unique_objects.into_iter().collect();
     let cluster_objects = kb.config().consolidation_cluster_objects;
+    phase("find_priors_and_collect");
     let object_embeddings: HashMap<String, Vec<f32>> = if unique_vec.is_empty() || !cluster_objects
     {
         // Disabled clustering: skip the batch embed entirely.
@@ -323,6 +339,7 @@ pub async fn run_cycle_with(
             .map(|embs| unique_vec.iter().cloned().zip(embs).collect())
             .unwrap_or_default()
     };
+    phase("object_embed");
 
     let mut created_facts: Vec<NodeId> = Vec::new();
     let mut reinforced_facts: Vec<NodeId> = Vec::new();
@@ -420,11 +437,13 @@ pub async fn run_cycle_with(
     // cycle (replaces 2 874+ sequential `embed_document` calls).  A
     // partial / failed batch degrades to storing Facts without an
     // embedding — same fallback the per-group path used.
+    phase("build_plans_clusters");
     let embed_texts: Vec<&str> = plans.iter().map(|p| p.embed_text.as_str()).collect();
     let fact_embeddings: Vec<Option<Vec<f32>>> = embed_or_warn(kb, &embed_texts, "fact")
         .await
         .map(|embs| embs.into_iter().map(Some).collect())
         .unwrap_or_else(|| vec![None; plans.len()]);
+    phase("fact_embed");
 
     // Batched fact upsert: one batched MATCH, one batched CREATE for
     // new facts, one batched UPDATE for reinforced facts. Replaces
@@ -442,6 +461,7 @@ pub async fn run_cycle_with(
         })
         .collect();
     let upserts = kb.batch_upsert_facts(upsert_inputs).await?;
+    phase("fact_upsert");
 
     // Collect every SUPPORTED_BY edge across the entire cycle into one
     // batched call. Idempotency invariant from `attach_supported_by`
@@ -460,6 +480,7 @@ pub async fn run_cycle_with(
         .flat_map(|p| p.contributing.iter().copied())
         .collect();
     let obs_embeddings = fetch_observation_embeddings(kb, &contributing_ids).await;
+    phase("obs_embed_read");
 
     let mut all_supported_edges: Vec<(NodeId, NodeId, HashMap<String, Value>)> = Vec::new();
     for (idx, (plan, up)) in plans.iter().zip(upserts.iter()).enumerate() {
@@ -483,6 +504,7 @@ pub async fn run_cycle_with(
         )
         .await?;
     }
+    phase("supported_by_edges");
 
     // Classify upserts and drive invalidations. Invalidations are
     // still per-stale (the contradiction path is rare and each one
@@ -544,6 +566,7 @@ pub async fn run_cycle_with(
         }
     }
 
+    phase("invalidations");
     let processed_ids: Vec<NodeId> = observations.iter().map(|o| o.node_id).collect();
     let completed_at = Utc::now();
     kb.write_consolidation_cycle(
@@ -558,6 +581,7 @@ pub async fn run_cycle_with(
         &[],
     )
     .await?;
+    phase("write_cycle_audit");
 
     Ok(CycleStats {
         observations_processed: processed_ids.len(),

@@ -14,8 +14,11 @@
 //!   newlines, escaped quotes (`""`), Windows `\r\n` line endings.
 //! - JSON whole-doc array first; if that fails or isn't an array of
 //!   objects, fall back to line-by-line NDJSON parse. Header is the
-//!   union of keys across all objects (source order from first
-//!   appearance), so heterogeneous schemas don't silently drop columns.
+//!   union of keys across all objects, unioned by first appearance. Each
+//!   object's keys come out in serde_json's default sorted (`BTreeMap`)
+//!   order — the build does not enable `preserve_order` — so heterogeneous
+//!   schemas don't silently drop columns, but column order is lexicographic,
+//!   not source order.
 //!
 //! Markdown cells with `|` or `\n` are escaped so the emitted table is
 //! always well-formed.
@@ -108,7 +111,8 @@ fn sniff_delimiter(content: &str) -> Option<u8> {
 }
 
 /// Parse a JSON array of objects, or NDJSON (one object per line).
-/// Header is the **union** of keys across all objects in source order.
+/// Header is the **union** of keys across all objects, in lexicographic
+/// (serde_json default `BTreeMap`) order — see [`build_rows_from_objects`].
 fn parse_json(content: &str) -> Option<Rows> {
     let trimmed = content.trim_start();
 
@@ -134,9 +138,12 @@ fn parse_json(content: &str) -> Option<Rows> {
 }
 
 /// Build a `Rows` view from an iterator of JSON values, keeping only
-/// the objects. Header is the union of keys in first-seen order;
-/// missing values become empty strings, non-string scalars get
-/// `to_string`'d, nested values are stringified as compact JSON.
+/// the objects. Header is the union of keys, unioned by first appearance
+/// across objects; within each object serde_json yields keys in sorted
+/// (`BTreeMap`) order since the build does not enable `preserve_order`, so
+/// the effective column order is lexicographic. Missing values become empty
+/// strings, non-string scalars get `to_string`'d, nested values are
+/// stringified as compact JSON.
 fn build_rows_from_objects<'a, I: Iterator<Item = &'a Value> + Clone>(values: I) -> Option<Rows> {
     let mut header: Vec<String> = Vec::new();
     let mut seen: BTreeMap<String, ()> = BTreeMap::new();
@@ -433,7 +440,10 @@ mod tests {
         let ndjson = "{\"name\":\"alice\",\"age\":30}\n{\"name\":\"bob\",\"age\":25}";
         let chunks = StructuredChunker.chunk(ndjson, &ChunkConfig::default());
         assert_eq!(chunks[0].chunk_type, "table_row_group");
-        assert_eq!(chunks[0].heading.as_deref(), Some("[\"name\",\"age\"]"));
+        // serde_json's default `Map` is a `BTreeMap` (no `preserve_order`
+        // feature in this workspace), so object keys come out lexicographically
+        // sorted: `age` before `name`, not source order.
+        assert_eq!(chunks[0].heading.as_deref(), Some("[\"age\",\"name\"]"));
         assert!(chunks[0].text.contains("alice"));
         assert!(chunks[0].text.contains("bob"));
     }

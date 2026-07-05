@@ -17,9 +17,9 @@ use uniko_memory::rules::{
     run_active_rules,
 };
 use uniko_memory::{AssertFactParams, RecordEpisodeParams, assert_fact, record_episode};
+use uniko_store::KnowledgeBase;
 use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::labels;
-use uniko_store::KnowledgeBase;
 
 async fn kb() -> KnowledgeBase {
     KnowledgeBase::in_memory(UnikoConfig::default())
@@ -87,7 +87,10 @@ async fn relevance_decay_prunes_decayed_episodes() {
     .await
     .expect("record fresh episode");
 
-    assert_eq!(count(&kb, "MATCH (e:Episode) RETURN count(e) AS c").await, 2);
+    assert_eq!(
+        count(&kb, "MATCH (e:Episode) RETURN count(e) AS c").await,
+        2
+    );
 
     let pruned = consume_relevance_decay(&kb, "a1", 30.0, 0.05)
         .await

@@ -19,6 +19,8 @@ data/nlp_obs_test_diagnostics.txt
 # Per-run event streams and logs (regeneratable from bench-configs +
 # the source data file).  Same policy as the *.json result files.
 data/*.log
+data/logs/
+data/*.json
 data/*_events.jsonl
 data/lme_*.json
 data/abl_*.json

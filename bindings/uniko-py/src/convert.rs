@@ -299,9 +299,7 @@ pub fn py_to_datetime(obj: &Bound<'_, PyAny>) -> PyResult<DateTime<Utc>> {
 /// # Errors
 ///
 /// Returns a `PyErr` if any value cannot be converted to a [`Value`].
-pub fn params_to_rust(
-    params: Option<&Bound<'_, PyDict>>,
-) -> PyResult<HashMap<String, Value>> {
+pub fn params_to_rust(params: Option<&Bound<'_, PyDict>>) -> PyResult<HashMap<String, Value>> {
     let mut out = HashMap::new();
     if let Some(dict) = params {
         for (k, v) in dict.iter() {

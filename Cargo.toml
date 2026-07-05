@@ -39,12 +39,36 @@ uniko-bench = { path = "crates/uniko-bench", version = "0.1.0" }
 # uniko-bench passthrough features.
 # Tracks the latest 2.x release (^2 = >=2.0.0, <3.0.0); `cargo update -p uni-db`
 # refreshes the lockfile to the newest compatible version.
-uni-db = { version = "2", features = ["mimalloc"] }
+#
+# NOTE (2026-06-28): default-features disabled to drop `provider-candle` /
+# `provider-mistralrs`. Those pull candle-cuda kernels that nvcc (CUDA 13)
+# cannot compile against this host's glibc/gcc-16 — and uniko only names
+# `local/mistralrs` as a config string, never via API, so dropping them is
+# compile-safe. Trade-off: the local mistralrs LLM provider (LME `gemma-3-4b`
+# configs) is unavailable at runtime; LoCoMo uses remote `gpt-4o-mini`, so the
+# bge-m3 GPU campaign is unaffected. To restore local LLMs, re-add
+# "provider-candle"/"provider-mistralrs" (needs a CUDA-compatible gcc<=15 +
+# matching glibc for a GPU build).
+uni-db = { version = "2", default-features = false, features = [
+    "mimalloc",
+    "lance-backend",
+    "apoc-core",
+    "rhai-plugins",
+    "provider-onnx",
+    "provider-openai",
+    "provider-gemini",
+    "provider-vertexai",
+    "provider-mistral",
+    "provider-anthropic",
+    "provider-voyageai",
+    "provider-cohere",
+    "provider-azure-openai",
+] }
 # Direct dep on uni-xervo so uniko-store can name `ModelRuntime` in
 # `KnowledgeBase::build_shared_runtime` / `open_with_runtime`. uni-db
 # uses uni-xervo internally but does not re-export the type. Version
 # pinned to whatever uni-db currently depends on (see
-# `../uni/Cargo.toml`). uni-db 2.4.1 depends on uni-xervo 0.17.0.
+# `../uni/Cargo.toml`). uni-db 2.5.0 depends on uni-xervo 0.17.0.
 uni-xervo = { version = "0.17.0", default-features = false }
 # Tiered PDF extraction (native text -> OCR -> doc-VLM). Pulls only traits +
 # the pure-Rust native (lopdf) + rasterizer (hayro) tiers; the inference

@@ -14,7 +14,7 @@ pub(crate) fn register_labels<'a>(
     // clarinet") gets its own auto-embedded vector + fulltext index.
     // Recall benefits because observations are already in the
     // claim-form a question's gold answer is closest to.
-    builder
+    let mut b = builder
         .label(labels::OBSERVATION)
         .property("observation_id", DataType::String)
         .property("content", DataType::String)
@@ -47,7 +47,32 @@ pub(crate) fn register_labels<'a>(
             DataType::Vector {
                 dimensions: config.embedding.dimensions,
             },
-        )
+        );
+    // Hybrid embedders (e.g. bge-m3) add a learned-sparse and a ColBERT
+    // column filled by the same single-pass `EmbedHybrid` inference as the
+    // dense `embedding`. Dense-only embedders skip them.
+    if let Some(sparse_dim) = config.embedding.sparse_dimensions {
+        b = b.property_nullable(
+            "sparse_embedding",
+            DataType::SparseVector {
+                dimensions: sparse_dim,
+            },
+        );
+    }
+    if let Some(mv_dim) = config.embedding.multivector_dimensions {
+        b = b.property_nullable(
+            "colbert_embedding",
+            DataType::List(Box::new(DataType::Vector { dimensions: mv_dim })),
+        );
+    }
+    let dense_idx = if config.embedding.sparse_dimensions.is_some()
+        || config.embedding.multivector_dimensions.is_some()
+    {
+        super::auto_embed_hybrid_vector_index("content", config)
+    } else {
+        super::auto_embed_vector_index("content", config)
+    };
+    b = b
         .index("observation_id", IndexType::Scalar(ScalarType::Hash))
         .index("subject", IndexType::Scalar(ScalarType::Hash))
         .index("predicate", IndexType::Scalar(ScalarType::Hash))
@@ -56,11 +81,20 @@ pub(crate) fn register_labels<'a>(
         // temporal-aware recall once Phase C lands.
         .index("temporal_anchor", IndexType::Scalar(ScalarType::BTree))
         .index("content", IndexType::FullText)
-        .index(
-            "embedding",
-            IndexType::Vector(super::auto_embed_vector_index("content", config)),
-        )
-        .done()
+        .index("embedding", IndexType::Vector(dense_idx));
+    if config.embedding.sparse_dimensions.is_some() {
+        b = b.index(
+            "sparse_embedding",
+            super::auto_embed_sparse_index("content", config),
+        );
+    }
+    if config.embedding.multivector_dimensions.is_some() {
+        b = b.index(
+            "colbert_embedding",
+            IndexType::Vector(super::auto_embed_multivector_index("content", config)),
+        );
+    }
+    b.done()
 }
 
 pub(crate) fn register_edges(builder: SchemaBuilder<'_>) -> SchemaBuilder<'_> {

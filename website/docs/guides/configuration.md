@@ -252,6 +252,18 @@ the query. Coverage gates and the Phase 1 strategy live here:
     `phase1_strategy` is stored as a string (not an enum) so configs
     deserialised across feature flags stay compatible.
 
+### Entity admission
+
+Strict admission keeps NER noise out of the `:Entity` graph at ingest time —
+temporal, measurement, and quoted-string spans (already captured as
+observations) and greeting/discourse fragments mis-tagged as people are
+dropped, and the low-confidence catch-all is gated:
+
+| Field                          | Default | Meaning |
+|--------------------------------|---------|---------|
+| `entity_strict_admission`      | `true`  | Drop NER noise and greeting fragments. Set `false` to restore legacy admit-everything behavior (for A/B comparison). |
+| `entity_other_min_confidence`  | `0.9`   | Minimum confidence for an `Other` catch-all span (Event/Product/WorkOfArt/Group/Misc) to be admitted when strict admission is on. |
+
 ### Consolidation
 
 Consolidation (P4) collapses near-duplicate Facts and refreshes their

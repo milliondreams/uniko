@@ -41,10 +41,15 @@ const STDLIB_RULES: &[(&str, &str, &str, &str)] = &[
          action type and outcome. Patterns with at least 3 occurrences and \
          average importance above 0.3 are surfaced.",
         // Locy (not Cypher): single FOLD, post-FOLD WHERE is HAVING, literal
-        // thresholds, `expr AS name` (no `VALUE`). Only `COUNT(*)` is used —
-        // `AVG(e.importance)` returns 0.0 under uni-db's Locy FOLD (filed
-        // upstream), so the mean-importance filter/value is computed in the Rust
-        // consumer (`consume_episode_patterns`) instead.
+        // thresholds, `expr AS name` (no `VALUE`). Only `COUNT(*)` is used: a
+        // FOLD value-aggregate (SUM/AVG) comes back 0.0 when YIELD projects it
+        // under a different alias than the FOLD variable — so
+        // `avg_imp = AVG(e.importance) ... YIELD ... avg_imp AS mean_importance`
+        // yields 0.0 (uni-db #145, verified by minimal repro; COUNT is
+        // unaffected). The mean-importance value/filter is computed in the Rust
+        // consumer (`consume_episode_patterns`) instead. A same-name FOLD var
+        // (`mean_importance = AVG(...) YIELD ... mean_importance AS mean_importance`)
+        // dodges #145 but is fragile to a future rename; revisit once #145 lands.
         "CREATE RULE episode_pattern_detector AS \
          MATCH (e:Episode)-[:RECORDED_BY]->(p:Participant {participant_id: $agent_id}) \
          FOLD n = COUNT(*) \

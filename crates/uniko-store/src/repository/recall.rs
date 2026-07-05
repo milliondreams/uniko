@@ -90,6 +90,20 @@ fn allow_param(allow: Option<&[NodeId]>) -> Option<Value> {
     allow.map(|ids| Value::List(ids.iter().map(|&n| Value::Int(n)).collect()))
 }
 
+/// Build the SQL filter string `_vid IN (id, …)` that restricts a vector /
+/// sparse procedure to a candidate node-id set.
+///
+/// `_vid` is the Lance vector-store id, which equals the Cypher `id(n)` /
+/// [`NodeId`] (a verified 1:1 mapping), so candidate ids drop straight in.
+fn vid_in_string(ids: &[NodeId]) -> String {
+    let list = ids
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("_vid IN ({list})")
+}
+
 impl KnowledgeBase {
     /// Vector search over `label.embed_field`, projecting `content_field`.
     ///
@@ -333,6 +347,105 @@ impl KnowledgeBase {
             builder = builder.param("allow", v);
         }
         let result = builder.fetch_all().await?;
+        Ok(decode_scored_rows(result.rows()))
+    }
+
+    /// Learned-sparse search over `label.sparse_field` via `uni.sparse.query`.
+    ///
+    /// `qtxt` is auto-embedded into a sparse query vector by the hybrid embed
+    /// alias, so no precomputed sparse vector is needed. Scores are sparse
+    /// dot products (higher = more similar). When `allow` is set, the
+    /// candidate set is restricted at the index level via the procedure's
+    /// `_vid IN (…)` SQL filter.
+    ///
+    /// `label`/`sparse_field`/`content_field` are trusted identifiers from
+    /// the caller's fixed target table; `qtxt` and `limit` are bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn recall_sparse_search(
+        &self,
+        label: &str,
+        sparse_field: &str,
+        content_field: &str,
+        qtxt: &str,
+        limit: i64,
+        allow: Option<&[NodeId]>,
+    ) -> Result<Vec<ScoredRow>> {
+        let session = self.db.session();
+        // The proc's 5th arg is a SQL filter; pass `_vid IN (…)` for an
+        // allow-set (applied during retrieval), else the literal `null`.
+        let filter_allow = allow.filter(|ids| !ids.is_empty());
+        let filter_arg = if filter_allow.is_some() {
+            "$filter"
+        } else {
+            "null"
+        };
+        let cypher = format!(
+            "CALL uni.sparse.query('{label}', '{sparse_field}', $qtxt, $lim, {filter_arg}, null, {{}}) \
+             YIELD node, score \
+             RETURN id(node) AS nid, labels(node)[0] AS lbl, \
+                    coalesce(node.{content_field}, '') AS content, score"
+        );
+        let mut builder = session
+            .query_with(&cypher)
+            .param("qtxt", qtxt)
+            .param("lim", limit);
+        if let Some(ids) = filter_allow {
+            builder = builder.param("filter", vid_in_string(ids));
+        }
+        let result = builder.fetch_all().await?;
+        Ok(decode_scored_rows(result.rows()))
+    }
+
+    /// ColBERT MaxSim re-scoring of a candidate node-id set.
+    ///
+    /// Runs `uni.vector.query` over the multi-vector `colbert_field`,
+    /// restricting the exact-MaxSim scan to `node_ids` via the `_vid IN (…)`
+    /// filter — so it re-scores exactly the supplied candidates rather than
+    /// retrieving globally. `query_multivector` is the query's per-token
+    /// embedding; scores are MaxSim (`Σ_q max_d cos`). Returns an empty vec
+    /// when either input is empty.
+    ///
+    /// `label`/`colbert_field`/`content_field` are trusted identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn recall_colbert_maxsim(
+        &self,
+        label: &str,
+        colbert_field: &str,
+        content_field: &str,
+        query_multivector: &[Vec<f32>],
+        node_ids: &[NodeId],
+    ) -> Result<Vec<ScoredRow>> {
+        if node_ids.is_empty() || query_multivector.is_empty() {
+            return Ok(Vec::new());
+        }
+        let session = self.db.session();
+        let cypher = format!(
+            "CALL uni.vector.query('{label}', '{colbert_field}', $q, $k, $filter, null, {{}}) \
+             YIELD node, score \
+             RETURN id(node) AS nid, labels(node)[0] AS lbl, \
+                    coalesce(node.{content_field}, '') AS content, score"
+        );
+        let qval = Value::List(
+            query_multivector
+                .iter()
+                .map(|t| Value::Vector(t.clone()))
+                .collect(),
+        );
+        let result = session
+            .query_with(&cypher)
+            .param("q", qval)
+            .param("k", node_ids.len() as i64)
+            .param("filter", vid_in_string(node_ids))
+            .fetch_all()
+            .await?;
         Ok(decode_scored_rows(result.rows()))
     }
 
@@ -611,6 +724,7 @@ impl KnowledgeBase {
         let session = self.db.session();
         let mut scored: HashMap<NodeId, (String, String, f64)> = HashMap::new();
         let has_vec = !qvec.is_empty();
+        let t_start = std::time::Instant::now();
 
         // Hybrid (vector + BM25) over chunk types — same query shape, only
         // the chunk_type filter differs.
@@ -654,6 +768,7 @@ impl KnowledgeBase {
                 Err(e) => tracing::debug!(chunk_type, error = %e, "hybrid similar_to failed"),
             }
         }
+        let chunk_ms = t_start.elapsed().as_millis() as u64;
 
         // Entity-scoped fan-out. The cypher per target depends only on
         // `has_vec` + the per-target tuple, not on `entity_name`, so build
@@ -739,6 +854,13 @@ impl KnowledgeBase {
                 }
             }
         }
+        eprintln!(
+            "RECALL_PROF chunk_and_entity_scoped entities={} chunk_search_ms={} entity_scoped_ms={} total_ms={}",
+            entity_refs.len(),
+            chunk_ms,
+            (t_start.elapsed().as_millis() as u64).saturating_sub(chunk_ms),
+            t_start.elapsed().as_millis() as u64
+        );
 
         scored
             .into_iter()

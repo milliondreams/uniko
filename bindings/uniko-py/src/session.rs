@@ -100,10 +100,7 @@ impl PyTurn {
     }
 
     /// Attach a document/file shared in this turn.
-    fn attach<'py>(
-        slf: PyRef<'py, Self>,
-        source: &PyIngestSource,
-    ) -> PyResult<PyRef<'py, Self>> {
+    fn attach<'py>(slf: PyRef<'py, Self>, source: &PyIngestSource) -> PyResult<PyRef<'py, Self>> {
         let src = source.snapshot()?;
         slf.map(|t| t.attach(src));
         Ok(slf)
@@ -254,7 +251,10 @@ impl PySession {
     ) -> PyResult<Bound<'py, PyAny>> {
         bridge!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
-            let report = guard.delete_document(&artifact_id).await.map_err(to_pyerr)?;
+            let report = guard
+                .delete_document(&artifact_id)
+                .await
+                .map_err(to_pyerr)?;
             Python::attach(|py| PyDeletionReport::from_rust(py, &report))
         })
     }
@@ -272,7 +272,11 @@ impl PySession {
     }
 
     /// Blocking variant of [`ingest`](Self::ingest).
-    fn ingest_sync(&self, py: Python<'_>, source: &PyIngestSource) -> PyResult<Py<PyIngestOutcome>> {
+    fn ingest_sync(
+        &self,
+        py: Python<'_>,
+        source: &PyIngestSource,
+    ) -> PyResult<Py<PyIngestOutcome>> {
         let src = source.snapshot()?;
         bridge_sync!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
@@ -320,7 +324,11 @@ impl PySession {
     }
 
     /// Blocking variant of [`forget_turn`](Self::forget_turn).
-    fn forget_turn_sync(&self, py: Python<'_>, message_id: String) -> PyResult<Py<PyDeletionReport>> {
+    fn forget_turn_sync(
+        &self,
+        py: Python<'_>,
+        message_id: String,
+    ) -> PyResult<Py<PyDeletionReport>> {
         bridge_sync!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
             let report = guard.forget_turn(&message_id).await.map_err(to_pyerr)?;
@@ -329,7 +337,11 @@ impl PySession {
     }
 
     /// Blocking variant of [`delete_turn`](Self::delete_turn).
-    fn delete_turn_sync(&self, py: Python<'_>, message_id: String) -> PyResult<Py<PyDeletionReport>> {
+    fn delete_turn_sync(
+        &self,
+        py: Python<'_>,
+        message_id: String,
+    ) -> PyResult<Py<PyDeletionReport>> {
         bridge_sync!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
             let report = guard.delete_turn(&message_id).await.map_err(to_pyerr)?;
@@ -345,7 +357,10 @@ impl PySession {
     ) -> PyResult<Py<PyDeletionReport>> {
         bridge_sync!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
-            let report = guard.delete_document(&artifact_id).await.map_err(to_pyerr)?;
+            let report = guard
+                .delete_document(&artifact_id)
+                .await
+                .map_err(to_pyerr)?;
             Python::attach(|py| PyDeletionReport::from_rust(py, &report))
         })
     }

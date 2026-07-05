@@ -32,15 +32,30 @@ mod summaries;
 mod topics;
 
 use uni_db::api::schema::EmbeddingCfg;
-use uni_db::{Uni, VectorIndexCfg};
+use uni_db::{IndexType, Uni, VectorAlgo, VectorIndexCfg};
 
 use crate::config::UnikoConfig;
 use crate::error::UnikoError;
 
 pub use constants::{edges, labels};
 
-/// Embedding model alias used by uni-db's Xervo runtime (ONNX `local/onnx`).
+/// Dense embedding model alias used by uni-db's Xervo runtime (`local/onnx`).
+///
+/// Serves every lone-dense auto-embed column (Message, Summary, …), all
+/// computed embeddings (`kb.embed`), and query embedding. Registered with
+/// `ModelTask::Embed`.
 pub const EMBED_ALIAS: &str = "embed/default";
+
+/// Single-pass hybrid alias (dense + sparse + ColBERT), registered with
+/// `ModelTask::EmbedHybrid` only when the embedder exposes the heads.
+///
+/// Used exclusively by Chunk/Observation, whose dense, `sparse_embedding`,
+/// and `colbert_embedding` columns share it so one `EmbedHybrid` pass fills
+/// all three. A hybrid model implements only `HybridEmbeddingModel`, so it
+/// CANNOT also back the lone-dense columns on [`EMBED_ALIAS`] — they must be
+/// separate aliases (uni-db routes lone-dense groups through `EmbeddingModel`,
+/// which the hybrid model does not implement).
+pub const HYBRID_EMBED_ALIAS: &str = "embed/hybrid";
 
 /// NLP ONNX model alias for multi-task inference (NER, POS, dep, CLS).
 pub const NLP_ALIAS: &str = "nlp/default";
@@ -65,11 +80,30 @@ pub(crate) fn vector_index(config: &UnikoConfig) -> VectorIndexCfg {
     }
 }
 
-/// Build a vector index with auto-embed from a source property.
+/// Build an `EmbeddingCfg` for `alias` over `source_property`.
+fn embedding_cfg(alias: &str, source_property: &str, config: &UnikoConfig) -> EmbeddingCfg {
+    EmbeddingCfg {
+        alias: alias.to_string(),
+        source_properties: vec![source_property.to_string()],
+        batch_size: config.embedding.batch_size,
+        document_prefix: config.embedding.document_prefix.clone(),
+        query_prefix: config.embedding.query_prefix.clone(),
+    }
+}
+
+/// The embed-alias config shared by the hybrid index group ([`HYBRID_EMBED_ALIAS`]).
 ///
-/// uni-db automatically computes and stores the embedding when a node
-/// is created or the source property is updated.  Uses the ONNX
-/// embedding provider configured in [`UnikoConfig::embedding`].
+/// The dense, sparse, and multi-vector indexes on Chunk/Observation must
+/// point at the SAME alias and source property for uni-db to fuse them into
+/// one single-pass `EmbedHybrid` inference; this builder keeps them identical.
+fn hybrid_embedding_cfg(source_property: &str, config: &UnikoConfig) -> EmbeddingCfg {
+    embedding_cfg(HYBRID_EMBED_ALIAS, source_property, config)
+}
+
+/// Build a dense auto-embed vector index on the plain [`EMBED_ALIAS`].
+///
+/// For lone-dense auto-embed nodes (Message, Summary, …). uni-db computes
+/// and stores the embedding on create/update via the `Embed`-task model.
 pub(crate) fn auto_embed_vector_index(
     source_property: &str,
     config: &UnikoConfig,
@@ -77,13 +111,60 @@ pub(crate) fn auto_embed_vector_index(
     VectorIndexCfg {
         algorithm: config.vector_algorithm.to_uni_algo(),
         metric: config.vector_metric.to_uni_metric(),
-        embedding: Some(EmbeddingCfg {
-            alias: EMBED_ALIAS.to_string(),
-            source_properties: vec![source_property.to_string()],
-            batch_size: config.embedding.batch_size,
-            document_prefix: config.embedding.document_prefix.clone(),
-            query_prefix: config.embedding.query_prefix.clone(),
-        }),
+        embedding: Some(embedding_cfg(EMBED_ALIAS, source_property, config)),
+    }
+}
+
+/// Build the dense auto-embed index for a hybrid node on [`HYBRID_EMBED_ALIAS`].
+///
+/// Same ANN config as [`auto_embed_vector_index`] but on the hybrid alias, so
+/// the dense column joins the sparse + ColBERT columns in one `EmbedHybrid`
+/// group. Used by Chunk/Observation when the embedder is hybrid.
+pub(crate) fn auto_embed_hybrid_vector_index(
+    source_property: &str,
+    config: &UnikoConfig,
+) -> VectorIndexCfg {
+    VectorIndexCfg {
+        algorithm: config.vector_algorithm.to_uni_algo(),
+        metric: config.vector_metric.to_uni_metric(),
+        embedding: Some(hybrid_embedding_cfg(source_property, config)),
+    }
+}
+
+/// Build a learned-sparse auto-embed index sharing the embed alias.
+///
+/// Declared with the same alias and source as [`auto_embed_vector_index`]
+/// so uni-db treats the dense and sparse columns as one single-pass
+/// `EmbedHybrid` group. Sparse similarity is always dot product, so the
+/// index carries no algorithm or metric.
+///
+/// # Panics
+///
+/// Panics if [`crate::config::EmbeddingConfig::sparse_dimensions`] is
+/// `None`. Callers gate on it — the schema only adds the column for hybrid
+/// embedders, so reaching this with a dense-only config is a bug.
+pub(crate) fn auto_embed_sparse_index(source_property: &str, config: &UnikoConfig) -> IndexType {
+    let dimensions = config
+        .embedding
+        .sparse_dimensions
+        .expect("auto_embed_sparse_index requires embedding.sparse_dimensions");
+    IndexType::sparse_with_embedding(dimensions, hybrid_embedding_cfg(source_property, config))
+}
+
+/// Build an exact multi-vector (ColBERT) auto-embed index for MaxSim rerank.
+///
+/// Uses `VectorAlgo::Flat` — the per-token vectors feed only the top-k
+/// MaxSim rerank, never first-stage retrieval, so a MUVERA ANN index would
+/// add build cost for no benefit. Shares the embed alias to join the hybrid
+/// group.
+pub(crate) fn auto_embed_multivector_index(
+    source_property: &str,
+    config: &UnikoConfig,
+) -> VectorIndexCfg {
+    VectorIndexCfg {
+        algorithm: VectorAlgo::Flat,
+        metric: config.vector_metric.to_uni_metric(),
+        embedding: Some(hybrid_embedding_cfg(source_property, config)),
     }
 }
 

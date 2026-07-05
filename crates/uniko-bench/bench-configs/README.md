@@ -23,6 +23,27 @@ in the JSON.
 | `locomo-bge-gemini31.json` | gemini-3.1-flash-lite | gemini-3.1-pro-preview | bge-small | All-Gemini run via Vertex global endpoint.  Requires `VERTEXAI_PROJECT`/`VERTEXAI_LOCATION` env. |
 | `locomo-embeddinggemma-openai.json` | gpt-4o-mini | gpt-4o-mini | embeddinggemma-300m (ONNX-CUDA) | A/B vs bge-small for the embedder swap.  768d vectors — fresh ingest required. |
 
+## Sparse + ColBERT hybrid sweep
+
+Four arms isolate one variable each so gains are read as deltas — see
+`docs/design/sparse-multivector-integration-plan.md`. Tune retrieval-only
+on LongMemEval `--phase1`, cross-check on LoCoMo evidence_hit, then run the
+winning arm judged. **Arms A–C need a fresh ingest** (dense dim 384→1024 +
+new sparse/colbert columns); KBs are reusable within an arm, never across
+the bge-small→bge-m3 boundary.
+
+| File (LoCoMo / LME twin) | Embedder | Sparse | Reranker | Isolates |
+|---|---|---|---|---|
+| `locomo-arm0-bge-small-baseline` / `lme-arm0-bge-small-baseline` | bge-small | off | cross-encoder | current main |
+| `locomo-arm-a-bge-m3-dense` / `lme-arm-a-bge-m3-dense` | bge-m3 | off | cross-encoder | dense-model upgrade (A−0) |
+| `locomo-arm-b-bge-m3-sparse` / `lme-arm-b-bge-m3-sparse` | bge-m3 | on | cross-encoder | learned-sparse (B−A) |
+| `locomo-arm-c-bge-m3-colbert` / `lme-arm-c-bge-m3-colbert` | bge-m3 | on | colbert (MaxSim) | late-interaction (C−B) |
+
+`reranker.style = "colbert"` re-scores the top candidates in-process by
+ColBERT MaxSim over the `colbert_embedding` column — it registers no
+reranker model (the `model_id` is a label only). Always report
+`avg_recall_latency_ms` and index storage alongside the quality deltas.
+
 ## Schema reference
 
 See the module-level doc comment on
@@ -31,7 +52,8 @@ serde schema.  Key fields:
 
 - `models.gen` / `models.judge` — required `LlmAlias` objects: `alias`, `model_id`, `provider`, optional `base_url`, optional `use_default_options`.
 - `models.extract_triples` — optional; set to an `LlmAlias` to use LLM triple extraction during P4 consolidation.
-- `models.embedder` — either `{ "preset": "<name>" }` or `{ "inline": <EmbeddingConfig> }`.  Presets: `bge-small`, `bge-large`, `nomic`, `minilm`, `embeddinggemma`, `embeddinggemma-mistralrs`.
+- `models.embedder` — either `{ "preset": "<name>" }` or `{ "inline": <EmbeddingConfig> }`.  Presets: `bge-small`, `bge-large`, `bge-m3`, `nomic`, `minilm`, `embeddinggemma`, `embeddinggemma-mistralrs`.  `bge-m3` is single-pass hybrid (dense + sparse + ColBERT); pair with `recall.sparse_enabled` and/or `reranker.style = "colbert"`.
+- `recall.sparse_enabled` — add the learned-sparse channel (needs `bge-m3`).  `recall.vector_weight` / `recall.bm25_weight` — override hybrid fusion weights (`null` keeps the 0.5/0.5 default).
 - `models.reranker` — full `RerankerConfig` shape (`enabled`, `model_id`, `style`, `top_n`, `apply_sigmoid`, optional `execution_providers`).
 - `models.nlp` — `model_id`, `artifact`, `max_batch_size`, optional `execution_providers`.  Defaults to the xsmall deberta INT8 cascade.
 - `recall.*` — phase strategies, recall_limit, variants, consolidation toggles.

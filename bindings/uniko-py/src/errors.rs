@@ -33,12 +33,7 @@ create_exception!(
     UnikoError,
     "Configuration was invalid or incomplete (e.g. answer() with no LLM alias)."
 );
-create_exception!(
-    _uniko,
-    LlmError,
-    UnikoError,
-    "An LLM provider call failed."
-);
+create_exception!(_uniko, LlmError, UnikoError, "An LLM provider call failed.");
 create_exception!(
     _uniko,
     TimeoutError,
