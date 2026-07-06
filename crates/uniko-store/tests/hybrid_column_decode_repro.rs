@@ -70,7 +70,12 @@ async fn sparse_vector_roundtrips() {
         indices: vec![1, 5, 9],
         values: vec![0.5, 0.3, 0.2],
     };
-    let got = roundtrip("sp", DataType::SparseVector { dimensions: 100 }, input.clone()).await;
+    let got = roundtrip(
+        "sp",
+        DataType::SparseVector { dimensions: 100 },
+        input.clone(),
+    )
+    .await;
     println!("SparseVector: in={input:?}\n              out={got:?}");
     assert_eq!(input, got, "SparseVector should round-trip");
 }

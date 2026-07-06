@@ -54,11 +54,18 @@ fn sparse(seed: &mut u64) -> Value {
     idx.sort_unstable();
     idx.dedup();
     let values: Vec<f32> = (0..idx.len()).map(|_| rng(seed).abs()).collect();
-    Value::SparseVector { indices: idx, values }
+    Value::SparseVector {
+        indices: idx,
+        values,
+    }
 }
 
 fn colbert(seed: &mut u64) -> Value {
-    Value::List((0..COLBERT_TOKENS).map(|_| Value::Vector(dense(seed))).collect())
+    Value::List(
+        (0..COLBERT_TOKENS)
+            .map(|_| Value::Vector(dense(seed)))
+            .collect(),
+    )
 }
 
 async fn build_and_time(with_sparse: bool, with_colbert: bool, tag: &str) -> u128 {
@@ -67,18 +74,30 @@ async fn build_and_time(with_sparse: bool, with_colbert: bool, tag: &str) -> u12
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let db = Uni::open(dir.to_string_lossy().as_ref()).build().await.unwrap();
-    let mut sb = db
-        .schema()
-        .label("Obs")
-        .property_nullable("embedding", DataType::Vector { dimensions: DENSE_DIM });
+    let db = Uni::open(dir.to_string_lossy().as_ref())
+        .build()
+        .await
+        .unwrap();
+    let mut sb = db.schema().label("Obs").property_nullable(
+        "embedding",
+        DataType::Vector {
+            dimensions: DENSE_DIM,
+        },
+    );
     if with_sparse {
-        sb = sb.property_nullable("sparse_embedding", DataType::SparseVector { dimensions: SPARSE_DIM });
+        sb = sb.property_nullable(
+            "sparse_embedding",
+            DataType::SparseVector {
+                dimensions: SPARSE_DIM,
+            },
+        );
     }
     if with_colbert {
         sb = sb.property_nullable(
             "colbert_embedding",
-            DataType::List(Box::new(DataType::Vector { dimensions: DENSE_DIM })),
+            DataType::List(Box::new(DataType::Vector {
+                dimensions: DENSE_DIM,
+            })),
         );
     }
     sb.done().apply().await.unwrap();
@@ -109,7 +128,11 @@ async fn build_and_time(with_sparse: bool, with_colbert: bool, tag: &str) -> u12
                   ORDER BY score DESC LIMIT 20";
     let sess = db.session();
     // warmup
-    let _ = sess.query_with(cypher).param("qvec", Value::Vector(qvec.clone())).fetch_all().await;
+    let _ = sess
+        .query_with(cypher)
+        .param("qvec", Value::Vector(qvec.clone()))
+        .fetch_all()
+        .await;
 
     let t = Instant::now();
     for _ in 0..ITERS {
@@ -123,7 +146,11 @@ async fn build_and_time(with_sparse: bool, with_colbert: bool, tag: &str) -> u12
     let per_query_ms = t.elapsed().as_millis() / ITERS as u128;
 
     let size = std::fs::read_dir(dir.join("storage"))
-        .map(|rd| rd.flatten().filter_map(|e| e.metadata().ok().map(|m| m.len())).sum::<u64>())
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+                .sum::<u64>()
+        })
         .unwrap_or(0);
     println!(
         "[{tag}] dense{}{} | {N_OBS} rows | per_query={per_query_ms}ms | storage={}MB",

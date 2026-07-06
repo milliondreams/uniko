@@ -22,8 +22,14 @@ use uniko_store::schema::constants::labels;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let kb_dir: PathBuf = std::env::args().nth(1).expect("usage: <kb_dir> <cfg>").into();
-    let bc: PathBuf = std::env::args().nth(2).expect("usage: <kb_dir> <cfg>").into();
+    let kb_dir: PathBuf = std::env::args()
+        .nth(1)
+        .expect("usage: <kb_dir> <cfg>")
+        .into();
+    let bc: PathBuf = std::env::args()
+        .nth(2)
+        .expect("usage: <kb_dir> <cfg>")
+        .into();
 
     let mut config = UnikoConfig::default();
     BenchConfig::load(&bc)
@@ -43,13 +49,18 @@ async fn main() -> anyhow::Result<()> {
             m.insert("observation_id".into(), Value::String(format!("obs-{i}")));
             m.insert(
                 "content".into(),
-                Value::String(format!("sample observation {i} about cats and dogs at home")),
+                Value::String(format!(
+                    "sample observation {i} about cats and dogs at home"
+                )),
             );
             m
         })
         .collect();
     let ids = kb.batch_create_nodes(labels::OBSERVATION, &items).await?;
-    eprintln!("inserted {} observations (auto-embedded via EmbedHybrid)", ids.len());
+    eprintln!(
+        "inserted {} observations (auto-embedded via EmbedHybrid)",
+        ids.len()
+    );
 
     // Read each embedding column back. Dense + sparse decode fine; colbert fails.
     let res = kb
@@ -66,7 +77,9 @@ async fn main() -> anyhow::Result<()> {
         match v {
             None | Some(Value::Null) => "NULL".to_string(),
             Some(Value::Vector(x)) => format!("Vector(dims={})", x.len()),
-            Some(Value::SparseVector { indices, .. }) => format!("SparseVector(nnz={})", indices.len()),
+            Some(Value::SparseVector { indices, .. }) => {
+                format!("SparseVector(nnz={})", indices.len())
+            }
             Some(Value::List(l)) => format!("List(len={})", l.len()),
             Some(other) => format!("{other:?}"),
         }
@@ -80,7 +93,11 @@ async fn main() -> anyhow::Result<()> {
         }
         println!(
             "obs {:?}: dense={} sparse={} colbert={}",
-            row.value("id").and_then(|v| if let Value::String(s) = v { Some(s.as_str()) } else { None }),
+            row.value("id").and_then(|v| if let Value::String(s) = v {
+                Some(s.as_str())
+            } else {
+                None
+            }),
             kind(row.value("dense")),
             kind(row.value("sparse")),
             kind(row.value("colbert")),
