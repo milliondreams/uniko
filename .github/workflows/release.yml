@@ -185,17 +185,21 @@ jobs:
 
   # ── Build the CUDA (NVIDIA) wheel variant — `uniko-cuda`, Linux x86_64 ─────
   # Full ONNX+CUDA+LLM: `gpu-cuda` enables `ort/cuda` (a prebuilt ORT CUDA EP
-  # sidecar via pyke) AND, together with the `mistralrs`+`candle` features,
-  # compiles candle's CUDA kernels for local mistralrs LLM inference. That kernel
-  # compile needs the CUDA toolkit (nvcc) at build time, so we install
-  # cuda-toolkit-12-4 into the manylinux_2_28 (AlmaLinux 8) container and build
-  # PTX for CUDA_COMPUTE_CAP=80 (Ampere; PTX forward-JITs onto Ada/Hopper/
-  # Blackwell at first run). cudarc dynamic-loads the runtime libs, so only
-  # build-time nvcc/headers are needed here. maturin's auditwheel is skipped,
-  # then a manual `auditwheel repair` excludes the host CUDA/cuDNN libs so they
-  # resolve at runtime instead of bloating the wheel (mirrors rustic-ai/uni-db).
-  # NOTE: unverified end-to-end — rehearse via workflow_dispatch on a -rc tag
-  # before a real release; candle+CUDA is a long compile (tens of minutes).
+  # sidecar via pyke) AND, with `mistralrs`+`candle`, compiles candle's CUDA
+  # kernels for local mistralrs LLM inference — needing the CUDA toolkit (nvcc)
+  # at build time. Mirrors rustic-ai/uni-db's proven `uni-db-cuda` job: NVIDIA
+  # ships the CUDA 13.0 toolkit as RHEL/AlmaLinux 9 RPMs, so build in the
+  # manylinux_2_34 (AlmaLinux 9) container, install cuda-toolkit-13-0, and target
+  # CUDA_COMPUTE_CAP=80 (Ampere; PTX forward-JITs onto Ada/Hopper/Blackwell).
+  # CUDA 13.0 is in mistralrs-quant 0.8.1's allowlist and AL9's glibc has no
+  # rsqrt/header clash, so no host-compiler shims are needed. cudarc
+  # dynamic-loads the runtime libs (build-time nvcc/headers only). maturin's
+  # auditwheel is skipped, then a manual `auditwheel repair` excludes the host
+  # CUDA/cuDNN libs so they resolve at runtime instead of bloating the wheel.
+  # NOTE: unrehearsed for uniko — validate via workflow_dispatch on a -rc tag;
+  # the candle+mistralrs CUDA compile is long (tens of minutes). The wheel likely
+  # exceeds PyPI's 100 MB/file limit — the github-release job is the fallback;
+  # a PyPI project size increase for `uniko-cuda` may be needed (see RELEASING.md).
   build-cuda-linux:
     name: Wheel uniko-cuda (linux/x86_64, CUDA)
     runs-on: ubuntu-latest
@@ -212,43 +216,51 @@ jobs:
 
       - name: Build wheel (skip maturin auditwheel)
         uses: PyO3/maturin-action@v1
+        # NOTE: maturin-action does not reliably forward step-level `env:` into
+        # the manylinux container, so the authoritative values are re-exported
+        # inside `before-script-linux` (same container shell as the build). These
+        # step-level entries are belt-and-suspenders.
         env:
-          RUSTFLAGS: "" # clear any repo linker overrides absent in the container
-          # candle's bindgen_cuda compiles kernels for this arch; without it (and
-          # no GPU in CI to auto-detect) the build fails. sm_80 (Ampere) PTX
-          # forward-JITs onto newer archs at first run — one build covers Ampere+.
+          # nvcc's host-link path bypasses gcc-toolset-14's symbol-hiding, so
+          # embed libstdc++/libgcc to keep their too-new-for-manylinux GLIBCXX/
+          # CXXABI symbols internal — else auditwheel repair rejects the wheel.
+          RUSTFLAGS: "-Clink-arg=-static-libstdc++ -Clink-arg=-static-libgcc"
+          # candle's bindgen_cuda compiles kernels for this arch; without it (no
+          # GPU in CI to auto-detect) the build fails. sm_80 PTX forward-JITs onto
+          # newer archs — one build covers Ampere+.
           CUDA_COMPUTE_CAP: "80"
-          # Point candle/cudarc at the toolkit installed by before-script-linux.
-          CUDA_ROOT: /usr/local/cuda
-          CUDA_PATH: /usr/local/cuda
+          CUDA_HOME: /usr/local/cuda-13.0
         with:
           target: x86_64
-          manylinux: "2_28"
+          manylinux: "2_34"
           args: --release --strip --auditwheel skip --out dist-raw -m bindings/uniko-cuda/Cargo.toml
           sccache: "true"
           before-script-linux: |
             set -eux
-            # ── CUDA toolkit (nvcc + headers) for the candle/mistralrs kernel
-            # build. manylinux_2_28 is AlmaLinux 8, so use NVIDIA's rhel8 repo.
-            # Full toolkit for reliability; can be slimmed to
-            # `cuda-nvcc-12-4 cuda-cudart-devel-12-4` once the minimal set is
-            # confirmed to compile candle. cudarc dynamic-loads the runtime libs,
-            # so only build-time nvcc/headers are needed inside the container.
-            dnf install -y dnf-plugins-core || yum install -y yum-utils
-            dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo \
-              || yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
-            dnf install -y cuda-toolkit-12-4 || yum install -y cuda-toolkit-12-4
-            # Symlink nvcc onto a dir already in PATH so the maturin build finds it
-            # regardless of whether before-script env exports persist to the build.
-            ln -sf /usr/local/cuda/bin/nvcc /usr/bin/nvcc
+            # ── CUDA 13.0 toolkit (nvcc + headers) for candle/mistralrs kernels.
+            # manylinux_2_34 is AlmaLinux 9 -> NVIDIA's rhel9 repo. cudarc
+            # dynamic-loads the runtime libs, so only build-time nvcc/headers are
+            # needed inside the container.
+            dnf install -y openssl-devel unzip dnf-plugins-core
+            dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+            dnf install -y cuda-toolkit-13-0
+            # Export the toolchain into the SAME shell the maturin build runs in
+            # (step-level env: is dropped by maturin-action). PATH lets candle's
+            # bindgen_cuda find nvcc; these RUSTFLAGS/CUDA_COMPUTE_CAP re-exports
+            # are the authoritative ones.
+            export PATH="/usr/local/cuda-13.0/bin:$PATH"
+            export CUDA_HOME="/usr/local/cuda-13.0"
+            export CUDA_ROOT="/usr/local/cuda-13.0"
+            export CUDA_PATH="/usr/local/cuda-13.0"
+            export CUDA_COMPUTE_CAP="80"
+            export RUSTFLAGS="-Clink-arg=-static-libstdc++ -Clink-arg=-static-libgcc"
             nvcc --version
-            # ── OpenSSL 1.1 staging (unchanged): stage the container's OpenSSL 1.1
-            # libs into the bind-mounted workspace so the host-runner auditwheel
-            # repair (OpenSSL 3 only) can bundle libcrypto/libssl.so.1.1 that the
-            # ORT CUDA EP links against.
-            yum install -y openssl-devel unzip
+            # ── OpenSSL 3 staging: auditwheel repair runs on the HOST runner, so
+            # stage the container's OpenSSL 3 (AlmaLinux 9) into the bind-mounted
+            # workspace; the repair then bundles these instead of the host's newer
+            # OpenSSL (whose symbols would bust the manylinux tag).
             mkdir -p "$GITHUB_WORKSPACE/_cudahostlibs"
-            cp -av /usr/lib64/libcrypto.so.1.1* /usr/lib64/libssl.so.1.1* "$GITHUB_WORKSPACE/_cudahostlibs/" 2>/dev/null || true
+            cp -av /usr/lib64/libssl.so.3* /usr/lib64/libcrypto.so.3* "$GITHUB_WORKSPACE/_cudahostlibs/" 2>/dev/null || true
             PB_VERSION="28.3"
             curl -fsSL -o /tmp/protoc.zip \
               "https://github.com/protocolbuffers/protobuf/releases/download/v${PB_VERSION}/protoc-${PB_VERSION}-linux-x86_64.zip"
@@ -263,7 +275,7 @@ jobs:
           export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/_cudahostlibs:${LD_LIBRARY_PATH:-}"
           for whl in dist-raw/*.whl; do
             auditwheel repair \
-              --plat manylinux_2_28_x86_64 \
+              --plat manylinux_2_34_x86_64 \
               --wheel-dir dist \
               --exclude 'libcuda.so.*' \
               --exclude 'libcudart.so.*' \
