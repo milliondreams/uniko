@@ -408,11 +408,19 @@ jobs:
             sleep 30
           done
 
-  # ── GATED: publish wheels + sdist to PyPI (OIDC) ──────────────────────────
+  # ── GATED + FLAGGED: publish wheels + sdist to PyPI (OIDC) ─────────────────
+  # Disabled until PyPI grants the per-project file-size-limit increases (all
+  # wheels exceed the 100 MB default; see RELEASING.md). Gated on the repository
+  # variable `PYPI_PUBLISH_ENABLED` — set it to `true` under Settings → Secrets
+  # and variables → Actions → Variables once the increases are approved. While
+  # disabled, wheels still BUILD and validate, and the `github-release` job below
+  # attaches them to the GitHub Release as the interim distribution channel.
+  # (A job-level `if:` can't read workflow `env:`, so this must be a `vars.*`.)
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     needs: [guard, build-wheels, build-sdist, build-cuda-linux, build-metal]
+    if: vars.PYPI_PUBLISH_ENABLED == 'true'
     environment: release # manual-approval gate
     permissions:
       id-token: write # OIDC token exchange with PyPI
@@ -430,10 +438,15 @@ jobs:
           packages-dir: dist
 
   # ── GATED: attach artifacts to the GitHub Release ─────────────────────────
+  # Runs whenever crates.io publishing succeeded, EVEN IF publish-pypi was
+  # skipped (PyPI disabled via the flag) — while PyPI is off this is the primary
+  # channel for the wheels. `always()` is required so a skipped publish-pypi
+  # doesn't cascade-skip this job.
   github-release:
     name: GitHub Release
     runs-on: ubuntu-latest
     needs: [publish-crates, publish-pypi]
+    if: ${{ always() && needs.publish-crates.result == 'success' && needs.publish-pypi.result != 'failure' }}
     permissions:
       contents: write # create the release + upload assets
     steps:

@@ -142,6 +142,15 @@ candle/mistralrs kernels; rustic-ai/uni-db obtained the same increases for its
 to the GitHub Release (2 GB/asset) as a fallback if a PyPI upload is still
 rejected.
 
+**PyPI publishing is disabled by a flag until those increases land.** The
+`publish-pypi` job is gated on the repository variable `PYPI_PUBLISH_ENABLED`
+and will not run while it is unset. Everything else still works — wheels build
+and validate, crates.io publishes, and `github-release` attaches the wheels
+(the interim distribution channel). **To enable PyPI once the size increases are
+approved:** Settings → Secrets and variables → Actions → **Variables** → set
+`PYPI_PUBLISH_ENABLED` = `true`. (It must be a repository *variable*, not an env
+value — a job-level `if:` can't read workflow `env`.)
+
 ---
 
 ## Rehearsing without going live
