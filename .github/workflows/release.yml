@@ -138,7 +138,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist -m bindings/uniko-py/Cargo.toml
+          args: --release --strip --out dist -m bindings/uniko-py/Cargo.toml
           sccache: "true"
           # Runs inside the manylinux container before the build. Each Linux
           # target now builds on a native runner (x86_64 and ubuntu-24.04-arm),
@@ -183,6 +183,143 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  # ── Build the CUDA (NVIDIA) wheel variant — `uniko-cuda`, Linux x86_64 ─────
+  # Full ONNX+CUDA+LLM: `gpu-cuda` enables `ort/cuda` (a prebuilt ORT CUDA EP
+  # sidecar via pyke) AND, together with the `mistralrs`+`candle` features,
+  # compiles candle's CUDA kernels for local mistralrs LLM inference. That kernel
+  # compile needs the CUDA toolkit (nvcc) at build time, so we install
+  # cuda-toolkit-12-4 into the manylinux_2_28 (AlmaLinux 8) container and build
+  # PTX for CUDA_COMPUTE_CAP=80 (Ampere; PTX forward-JITs onto Ada/Hopper/
+  # Blackwell at first run). cudarc dynamic-loads the runtime libs, so only
+  # build-time nvcc/headers are needed here. maturin's auditwheel is skipped,
+  # then a manual `auditwheel repair` excludes the host CUDA/cuDNN libs so they
+  # resolve at runtime instead of bloating the wheel (mirrors rustic-ai/uni-db).
+  # NOTE: unverified end-to-end — rehearse via workflow_dispatch on a -rc tag
+  # before a real release; candle+CUDA is a long compile (tens of minutes).
+  build-cuda-linux:
+    name: Wheel uniko-cuda (linux/x86_64, CUDA)
+    runs-on: ubuntu-latest
+    needs: guard
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bootstrap variant Python sources
+        run: ./scripts/bootstrap-wheel-variants.sh
+
+      - name: Build wheel (skip maturin auditwheel)
+        uses: PyO3/maturin-action@v1
+        env:
+          RUSTFLAGS: "" # clear any repo linker overrides absent in the container
+          # candle's bindgen_cuda compiles kernels for this arch; without it (and
+          # no GPU in CI to auto-detect) the build fails. sm_80 (Ampere) PTX
+          # forward-JITs onto newer archs at first run — one build covers Ampere+.
+          CUDA_COMPUTE_CAP: "80"
+          # Point candle/cudarc at the toolkit installed by before-script-linux.
+          CUDA_ROOT: /usr/local/cuda
+          CUDA_PATH: /usr/local/cuda
+        with:
+          target: x86_64
+          manylinux: "2_28"
+          args: --release --strip --auditwheel skip --out dist-raw -m bindings/uniko-cuda/Cargo.toml
+          sccache: "true"
+          before-script-linux: |
+            set -eux
+            # ── CUDA toolkit (nvcc + headers) for the candle/mistralrs kernel
+            # build. manylinux_2_28 is AlmaLinux 8, so use NVIDIA's rhel8 repo.
+            # Full toolkit for reliability; can be slimmed to
+            # `cuda-nvcc-12-4 cuda-cudart-devel-12-4` once the minimal set is
+            # confirmed to compile candle. cudarc dynamic-loads the runtime libs,
+            # so only build-time nvcc/headers are needed inside the container.
+            dnf install -y dnf-plugins-core || yum install -y yum-utils
+            dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo \
+              || yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
+            dnf install -y cuda-toolkit-12-4 || yum install -y cuda-toolkit-12-4
+            # Symlink nvcc onto a dir already in PATH so the maturin build finds it
+            # regardless of whether before-script env exports persist to the build.
+            ln -sf /usr/local/cuda/bin/nvcc /usr/bin/nvcc
+            nvcc --version
+            # ── OpenSSL 1.1 staging (unchanged): stage the container's OpenSSL 1.1
+            # libs into the bind-mounted workspace so the host-runner auditwheel
+            # repair (OpenSSL 3 only) can bundle libcrypto/libssl.so.1.1 that the
+            # ORT CUDA EP links against.
+            yum install -y openssl-devel unzip
+            mkdir -p "$GITHUB_WORKSPACE/_cudahostlibs"
+            cp -av /usr/lib64/libcrypto.so.1.1* /usr/lib64/libssl.so.1.1* "$GITHUB_WORKSPACE/_cudahostlibs/" 2>/dev/null || true
+            PB_VERSION="28.3"
+            curl -fsSL -o /tmp/protoc.zip \
+              "https://github.com/protocolbuffers/protobuf/releases/download/v${PB_VERSION}/protoc-${PB_VERSION}-linux-x86_64.zip"
+            unzip -o /tmp/protoc.zip -d /usr/local
+            protoc --version
+
+      - name: Repair wheel (exclude host CUDA/cuDNN libs)
+        run: |
+          set -euo pipefail
+          pip install auditwheel patchelf
+          mkdir -p dist
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/_cudahostlibs:${LD_LIBRARY_PATH:-}"
+          for whl in dist-raw/*.whl; do
+            auditwheel repair \
+              --plat manylinux_2_28_x86_64 \
+              --wheel-dir dist \
+              --exclude 'libcuda.so.*' \
+              --exclude 'libcudart.so.*' \
+              --exclude 'libcublas.so.*' \
+              --exclude 'libcublasLt.so.*' \
+              --exclude 'libcurand.so.*' \
+              --exclude 'libcudnn.so.*' \
+              --exclude 'libnvrtc.so.*' \
+              --exclude 'libnvJitLink.so.*' \
+              "$whl"
+          done
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-uniko-cuda-linux-x86_64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # ── Build the Metal (Apple Silicon) wheel variant — `uniko-metal` ─────────
+  # `gpu-metal` enables `ort?/coreml` (fires because the uni-db pin always
+  # enables `provider-onnx`); CoreML is statically linked in pyke's macOS ORT
+  # bundle, so no sidecar/auditwheel dance. The `mistralrs`+`candle` features
+  # additionally compile candle's Metal kernels for local LLM inference — the
+  # macos-14 runner's Xcode/Metal SDK supplies that toolchain, so no extra
+  # install is needed. macOS arm64 only (no x86_64-apple-darwin ORT prebuilt).
+  build-metal:
+    name: Wheel uniko-metal (macos/aarch64, Metal)
+    runs-on: macos-14
+    needs: guard
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install protobuf
+        run: brew install protobuf
+
+      - name: Bootstrap variant Python sources
+        run: ./scripts/bootstrap-wheel-variants.sh
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64-apple-darwin
+          args: --release --strip --out dist -m bindings/uniko-metal/Cargo.toml
+          sccache: "true"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-uniko-metal-macos-aarch64
+          path: dist/*.whl
+          if-no-files-found: error
+
   # ── GATED: publish crates to crates.io (OIDC, dependency order) ────────────
   publish-crates:
     name: Publish crates to crates.io
@@ -223,7 +360,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [guard, build-wheels, build-sdist]
+    needs: [guard, build-wheels, build-sdist, build-cuda-linux, build-metal]
     environment: release # manual-approval gate
     permissions:
       id-token: write # OIDC token exchange with PyPI

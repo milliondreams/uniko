@@ -9,6 +9,25 @@ members = [
     "crates/uniko-api",
     "crates/uniko-bench",
     "bindings/uniko-py",
+    # GPU wheel variants — members (for workspace dep inheritance) but excluded
+    # from `default-members` below so plain `cargo build`/`check`/`test`/`doc`
+    # skip them. They reuse `bindings/uniko-py/src` with a GPU feature; `-metal`
+    # only builds on macOS. `--workspace` CI commands must `--exclude` both.
+    "bindings/uniko-cuda",
+    "bindings/uniko-metal",
+]
+# Everything except the GPU wheel variants. Keeps default builds host-portable
+# (no ORT CUDA sidecar download, no macOS-only CoreML) while still allowing an
+# explicit `-p uniko-cuda` / maturin `-m bindings/uniko-cuda/Cargo.toml` build.
+default-members = [
+    "crates/uniko-store",
+    "crates/uniko-pipes",
+    "crates/uniko-extract",
+    "crates/uniko-memory",
+    "crates/uniko-cortex",
+    "crates/uniko-api",
+    "crates/uniko-bench",
+    "bindings/uniko-py",
 ]
 
 [workspace.package]
@@ -161,3 +180,14 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.tokenizers]
 opt-level = 3
+
+# ── Release profile: strip symbols from the final artifacts ──
+# The linked-in ONNX Runtime (static `provider-onnx`) and the Lance/Arrow/
+# DataFusion stack leave ~80 MB of uncompressed symbol/debug data in the
+# cdylib; stripping trims ~18 MiB off the compressed wheel. `symbols` drops
+# both the symbol table and debuginfo while preserving the dynamic symbols
+# (PyInit / abi3 exports) the extension module needs to load. Applies to
+# `cargo build --release`, maturin release wheels, and the uniko-cuda /
+# uniko-metal variant crates that reuse this workspace.
+[profile.release]
+strip = "symbols"

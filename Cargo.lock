@@ -12524,6 +12524,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "uniko-cuda"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "serde_json",
+ "tokio",
+ "uniko-api",
+]
+
+[[package]]
 name = "uniko-extract"
 version = "0.1.0"
 dependencies = [
@@ -12580,6 +12592,18 @@ dependencies = [
  "uniko-extract",
  "uniko-pipes",
  "uniko-store",
+]
+
+[[package]]
+name = "uniko-metal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "serde_json",
+ "tokio",
+ "uniko-api",
 ]
 
 [[package]]

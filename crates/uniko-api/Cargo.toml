@@ -24,3 +24,15 @@ uniko-memory = { workspace = true }
 # is already statically linked via uni-db's default `provider-onnx`; this only
 # adds uniko-extract's own ort-backed extraction adapters.
 onnx = ["uniko-memory/onnx"]
+# Forward GPU acceleration through the facade to uni-db
+# (uniko-memory -> uniko-store -> uni-db). Consumed by the `uniko-cuda` /
+# `uniko-metal` wheel variants. `gpu-cuda` needs the CUDA toolkit at build
+# time; `gpu-metal` is macOS-only.
+gpu-cuda = ["uniko-memory/gpu-cuda"]
+gpu-metal = ["uniko-memory/gpu-metal"]
+# Forward the mistralrs+candle local-LLM providers through the facade to uni-db
+# (uniko-memory -> uniko-store -> uni-db). Consumed by the `uniko-cuda` /
+# `uniko-metal` wheel variants alongside `gpu-cuda`/`gpu-metal` so the GPU LLM
+# kernels compile. `mistralrs` on CUDA needs the CUDA toolkit (nvcc) at build time.
+mistralrs = ["uniko-memory/mistralrs"]
+candle = ["uniko-memory/candle"]

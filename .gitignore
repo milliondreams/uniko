@@ -21,6 +21,12 @@ data/nlp_obs_test_diagnostics.txt
 data/*.log
 data/logs/
 data/*.json
+
+# GPU wheel-variant Python sources — copied from bindings/uniko-py/python by
+# scripts/bootstrap-wheel-variants.sh at build time (only Cargo.toml/pyproject/
+# README are tracked per variant).
+bindings/uniko-cuda/python/
+bindings/uniko-metal/python/
 data/*_events.jsonl
 data/lme_*.json
 data/abl_*.json

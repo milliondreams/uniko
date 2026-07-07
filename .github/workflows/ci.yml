@@ -55,11 +55,16 @@ jobs:
           fi
           echo "uni-db seal intact"
 
+      # The uniko-cuda / uniko-metal wheel variants are workspace members (for
+      # dep inheritance) but reuse bindings/uniko-py/src with a GPU feature.
+      # `-cuda` would download the ORT CUDA sidecar and `-metal` only builds on
+      # macOS, so exclude both from the Linux `--workspace` runs. They are built
+      # and validated in the release workflow's dedicated GPU jobs.
       - name: cargo check
-        run: cargo check --workspace
+        run: cargo check --workspace --exclude uniko-cuda --exclude uniko-metal
 
       - name: cargo clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --exclude uniko-cuda --exclude uniko-metal -- -D warnings
 
       - name: cargo fmt
         run: cargo fmt --all --check
@@ -68,7 +73,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: cargo nextest run
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --exclude uniko-cuda --exclude uniko-metal
 
   deny:
     name: cargo-deny (licenses & advisories)
