@@ -69,6 +69,14 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all --check
 
+      # Guard the crates.io release order: assert release.yml's PUBLISH_ORDER is
+      # uniko-api's full publishable closure in topological order. Catches a new
+      # workspace crate missing from the list, or a versioned dev-dependency
+      # cycle, BEFORE tagging — crates.io is append-only, so a bad partial
+      # publish can't be undone. Fast (cargo metadata, no compile).
+      - name: Check crates.io publish order
+        run: python3 scripts/ci/check_publish_list.py
+
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 

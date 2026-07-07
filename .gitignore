@@ -40,3 +40,7 @@ data/conv30_*.json
 # Working notes that haven't been promoted to initial-docs/
 NLP_REQUIREMENTS.md
 locomo_results.json
+
+# Python bytecode
+__pycache__/
+*.pyc
