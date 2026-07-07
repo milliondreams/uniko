@@ -14,9 +14,14 @@ there are **no API tokens stored in the repo**.
 
 ## TL;DR — cutting a release
 
-1. Bump the workspace version in [`Cargo.toml`](Cargo.toml) (`[workspace.package]
-   version`) if needed, land it on `main`, and make sure CI is green. The Python
-   wheel version is derived from this same value.
+1. Bump the version with **`cargo set-version --workspace <ver>`** (cargo-edit) —
+   this updates `[workspace.package].version` **and** the internal
+   `[workspace.dependencies]` pins atomically. Everything else derives from it:
+   crate versions (`version.workspace = true`), the Python wheel version
+   (`dynamic = ["version"]`), and runtime `uniko.__version__`
+   (`env!("CARGO_PKG_VERSION")`). Do **not** hand-edit versions — the
+   `check_version_sync` CI/guard step fails if the pins drift or a pyproject
+   hardcodes a version. Land it on `main` and make sure CI is green.
 2. Tag and push:
    ```sh
    git tag v0.1.0

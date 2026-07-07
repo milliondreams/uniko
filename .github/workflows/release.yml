@@ -58,6 +58,13 @@ jobs:
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
+      # Release-gate the version single-sourcing: internal [workspace.dependencies]
+      # pins must match the workspace version, and wheel pyprojects must stay
+      # `dynamic`. (Also enforced per-push in ci.yml; repeated here because the
+      # release does not depend on the CI workflow.)
+      - name: Check version sync
+        run: python3 scripts/ci/check_version_sync.py
+
   # ── Always-on packaging validation (no registry writes) ───────────────────
   validate-crates:
     name: Validate crate packaging (dry-run)

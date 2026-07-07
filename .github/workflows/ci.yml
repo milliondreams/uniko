@@ -77,6 +77,13 @@ jobs:
       - name: Check crates.io publish order
         run: python3 scripts/ci/check_publish_list.py
 
+      # Assert every version derives from [workspace.package].version: the
+      # internal [workspace.dependencies] pins match it, and wheel pyprojects
+      # stay `dynamic`. Catches version drift on every push (bump with
+      # `cargo set-version --workspace <ver>`).
+      - name: Check version sync
+        run: python3 scripts/ci/check_version_sync.py
+
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
