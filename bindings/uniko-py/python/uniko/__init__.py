@@ -24,4 +24,8 @@ __all__ = getattr(
     _uniko, "__all__", [name for name in dir(_uniko) if not name.startswith("_")]
 )
 
-__version__ = getattr(_uniko, "__version__", "0.1.0")
+# `_uniko.__version__` is `env!("CARGO_PKG_VERSION")` — the crate version, which
+# is `version.workspace = true`, i.e. the single workspace version. The fallback
+# is a deliberately-invalid PEP 440 local sentinel (never a hardcoded release
+# number) so a stale/missing export can never masquerade as a real version.
+__version__ = getattr(_uniko, "__version__", "0+unknown")

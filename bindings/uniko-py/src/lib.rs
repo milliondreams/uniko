@@ -126,6 +126,13 @@ fn _uniko(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     builder.enable_all().thread_stack_size(8 * 1024 * 1024);
     pyo3_async_runtimes::tokio::init(builder);
 
+    // Single-source the runtime version from Cargo: `CARGO_PKG_VERSION` is the
+    // crate version, which is `version.workspace = true` -> the workspace
+    // version. Exposes `uniko._uniko.__version__` (declared in the .pyi stub) so
+    // `uniko.__version__` tracks the workspace version instead of a hardcoded
+    // Python fallback.
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+
     m.add_function(wrap_pyfunction!(_value_roundtrip, m)?)?;
     m.add_function(wrap_pyfunction!(_records_roundtrip, m)?)?;
     m.add_function(wrap_pyfunction!(_now_utc, m)?)?;

@@ -20,7 +20,13 @@ serde = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
-uniko-memory = { workspace = true }
+# Path-only (NO version) on purpose: uniko-memory depends on uniko-cortex, so a
+# versioned dev-dep here would be an unpublishable cycle (uniko-memory isn't on
+# crates.io when uniko-cortex publishes). cargo drops version-less dev-deps from
+# the published manifest, so this keeps `cargo test` working while letting
+# uniko-cortex publish ahead of uniko-memory. Do NOT switch to `workspace = true`
+# (that inherits version = "0.1.0" and re-breaks the ordered publish).
+uniko-memory = { path = "../uniko-memory" }
 uni-db = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }

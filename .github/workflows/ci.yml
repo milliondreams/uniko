@@ -12,7 +12,12 @@ env:
 jobs:
   check:
     name: Check, Lint, Format, Test
-    runs-on: ubuntu-latest
+    # The workspace (uni-db + lance/arrow/datafusion + candle + ort + tree-sitter)
+    # is large enough that a debug `cargo nextest run` exhausts ubuntu-latest's
+    # ~14 GB disk. Use the GitHub-hosted larger runner `ubuntu-xlarge` (same one
+    # rustic-ai/uni-db's public PR test job uses). GitHub-hosted (not self-hosted)
+    # so it works for public/fork PRs; not parameterized.
+    runs-on: ubuntu-xlarge
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -55,20 +60,53 @@ jobs:
           fi
           echo "uni-db seal intact"
 
+      # The uniko-cuda / uniko-metal wheel variants are workspace members (for
+      # dep inheritance) but reuse bindings/uniko-py/src with a GPU feature.
+      # `-cuda` would download the ORT CUDA sidecar and `-metal` only builds on
+      # macOS, so exclude both from the Linux `--workspace` runs. They are built
+      # and validated in the release workflow's dedicated GPU jobs.
       - name: cargo check
-        run: cargo check --workspace
+        run: cargo check --workspace --exclude uniko-cuda --exclude uniko-metal
 
       - name: cargo clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --exclude uniko-cuda --exclude uniko-metal -- -D warnings
 
       - name: cargo fmt
         run: cargo fmt --all --check
+
+      # Guard the crates.io release order: assert release.yml's PUBLISH_ORDER is
+      # uniko-api's full publishable closure in topological order. Catches a new
+      # workspace crate missing from the list, or a versioned dev-dependency
+      # cycle, BEFORE tagging — crates.io is append-only, so a bad partial
+      # publish can't be undone. Fast (cargo metadata, no compile).
+      - name: Check crates.io publish order
+        run: python3 scripts/ci/check_publish_list.py
+
+      # Assert every version derives from [workspace.package].version: the
+      # internal [workspace.dependencies] pins match it, and wheel pyprojects
+      # stay `dynamic`. Catches version drift on every push (bump with
+      # `cargo set-version --workspace <ver>`).
+      - name: Check version sync
+        run: python3 scripts/ci/check_version_sync.py
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
       - name: cargo nextest run
-        run: cargo nextest run --workspace
+        run: |
+          # Warm the shared ONNX model cache before the parallel run. Many
+          # integration tests across crates build a real local embedder and
+          # cold-download the SAME bge-small model into one on-disk cache
+          # (.uni_cache); run in parallel they race for the download lock and
+          # fail ("Lock acquisition failed: .uni_cache/onnx-embed/...blobs/*.lock").
+          # A serial pass over uniko-cortex's tests (they exercise the embedder)
+          # populates the cache first; the full parallel run is then a cache hit.
+          # The default test config fetches only `embed/default`, so one warm pass
+          # covers every crate. (If a future run shows a `nlp/default` or
+          # `rerank/default` lock error, broaden this warm filter to that crate.)
+          cargo nextest run --workspace --exclude uniko-cuda --exclude uniko-metal \
+            -E 'package(uniko-cortex)' --test-threads 1
+          cargo nextest run --workspace --exclude uniko-cuda --exclude uniko-metal
 
   deny:
     name: cargo-deny (licenses & advisories)

@@ -58,6 +58,13 @@ jobs:
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
+      # Release-gate the version single-sourcing: internal [workspace.dependencies]
+      # pins must match the workspace version, and wheel pyprojects must stay
+      # `dynamic`. (Also enforced per-push in ci.yml; repeated here because the
+      # release does not depend on the CI workflow.)
+      - name: Check version sync
+        run: python3 scripts/ci/check_version_sync.py
+
   # ── Always-on packaging validation (no registry writes) ───────────────────
   validate-crates:
     name: Validate crate packaging (dry-run)
@@ -138,7 +145,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist -m bindings/uniko-py/Cargo.toml
+          args: --release --strip --out dist -m bindings/uniko-py/Cargo.toml
           sccache: "true"
           # Runs inside the manylinux container before the build. Each Linux
           # target now builds on a native runner (x86_64 and ubuntu-24.04-arm),
@@ -183,12 +190,166 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  # ── Build the CUDA (NVIDIA) wheel variant — `uniko-cuda`, Linux x86_64 ─────
+  # Full ONNX+CUDA+LLM: `gpu-cuda` enables `ort/cuda` (a prebuilt ORT CUDA EP
+  # sidecar via pyke) AND, with `mistralrs`+`candle`, compiles candle's CUDA
+  # kernels for local mistralrs LLM inference — needing the CUDA toolkit (nvcc)
+  # at build time. Mirrors rustic-ai/uni-db's proven `uni-db-cuda` job: NVIDIA
+  # ships the CUDA 13.0 toolkit as RHEL/AlmaLinux 9 RPMs, so build in the
+  # manylinux_2_34 (AlmaLinux 9) container, install cuda-toolkit-13-0, and target
+  # CUDA_COMPUTE_CAP=80 (Ampere; PTX forward-JITs onto Ada/Hopper/Blackwell).
+  # CUDA 13.0 is in mistralrs-quant 0.8.1's allowlist and AL9's glibc has no
+  # rsqrt/header clash, so no host-compiler shims are needed. cudarc
+  # dynamic-loads the runtime libs (build-time nvcc/headers only). maturin's
+  # auditwheel is skipped, then a manual `auditwheel repair` excludes the host
+  # CUDA/cuDNN libs so they resolve at runtime instead of bloating the wheel.
+  # NOTE: unrehearsed for uniko — validate via workflow_dispatch on a -rc tag;
+  # the candle+mistralrs CUDA compile is long (tens of minutes). The wheel likely
+  # exceeds PyPI's 100 MB/file limit — the github-release job is the fallback;
+  # a PyPI project size increase for `uniko-cuda` may be needed (see RELEASING.md).
+  build-cuda-linux:
+    name: Wheel uniko-cuda (linux/x86_64, CUDA)
+    runs-on: ubuntu-latest
+    needs: guard
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bootstrap variant Python sources
+        run: ./scripts/bootstrap-wheel-variants.sh
+
+      - name: Build wheel (skip maturin auditwheel)
+        uses: PyO3/maturin-action@v1
+        # NOTE: maturin-action does not reliably forward step-level `env:` into
+        # the manylinux container, so the authoritative values are re-exported
+        # inside `before-script-linux` (same container shell as the build). These
+        # step-level entries are belt-and-suspenders.
+        env:
+          # nvcc's host-link path bypasses gcc-toolset-14's symbol-hiding, so
+          # embed libstdc++/libgcc to keep their too-new-for-manylinux GLIBCXX/
+          # CXXABI symbols internal — else auditwheel repair rejects the wheel.
+          RUSTFLAGS: "-Clink-arg=-static-libstdc++ -Clink-arg=-static-libgcc"
+          # candle's bindgen_cuda compiles kernels for this arch; without it (no
+          # GPU in CI to auto-detect) the build fails. sm_80 PTX forward-JITs onto
+          # newer archs — one build covers Ampere+.
+          CUDA_COMPUTE_CAP: "80"
+          CUDA_HOME: /usr/local/cuda-13.0
+        with:
+          target: x86_64
+          manylinux: "2_34"
+          args: --release --strip --auditwheel skip --out dist-raw -m bindings/uniko-cuda/Cargo.toml
+          sccache: "true"
+          before-script-linux: |
+            set -eux
+            # ── CUDA 13.0 toolkit (nvcc + headers) for candle/mistralrs kernels.
+            # manylinux_2_34 is AlmaLinux 9 -> NVIDIA's rhel9 repo. cudarc
+            # dynamic-loads the runtime libs, so only build-time nvcc/headers are
+            # needed inside the container.
+            dnf install -y openssl-devel unzip dnf-plugins-core
+            dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+            dnf install -y cuda-toolkit-13-0
+            # Export the toolchain into the SAME shell the maturin build runs in
+            # (step-level env: is dropped by maturin-action). PATH lets candle's
+            # bindgen_cuda find nvcc; these RUSTFLAGS/CUDA_COMPUTE_CAP re-exports
+            # are the authoritative ones.
+            export PATH="/usr/local/cuda-13.0/bin:$PATH"
+            export CUDA_HOME="/usr/local/cuda-13.0"
+            export CUDA_ROOT="/usr/local/cuda-13.0"
+            export CUDA_PATH="/usr/local/cuda-13.0"
+            export CUDA_COMPUTE_CAP="80"
+            export RUSTFLAGS="-Clink-arg=-static-libstdc++ -Clink-arg=-static-libgcc"
+            nvcc --version
+            # ── OpenSSL 3 staging: auditwheel repair runs on the HOST runner, so
+            # stage the container's OpenSSL 3 (AlmaLinux 9) into the bind-mounted
+            # workspace; the repair then bundles these instead of the host's newer
+            # OpenSSL (whose symbols would bust the manylinux tag).
+            mkdir -p "$GITHUB_WORKSPACE/_cudahostlibs"
+            cp -av /usr/lib64/libssl.so.3* /usr/lib64/libcrypto.so.3* "$GITHUB_WORKSPACE/_cudahostlibs/" 2>/dev/null || true
+            PB_VERSION="28.3"
+            curl -fsSL -o /tmp/protoc.zip \
+              "https://github.com/protocolbuffers/protobuf/releases/download/v${PB_VERSION}/protoc-${PB_VERSION}-linux-x86_64.zip"
+            unzip -o /tmp/protoc.zip -d /usr/local
+            protoc --version
+
+      - name: Repair wheel (exclude host CUDA/cuDNN libs)
+        run: |
+          set -euo pipefail
+          pip install auditwheel patchelf
+          mkdir -p dist
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/_cudahostlibs:${LD_LIBRARY_PATH:-}"
+          for whl in dist-raw/*.whl; do
+            auditwheel repair \
+              --plat manylinux_2_34_x86_64 \
+              --wheel-dir dist \
+              --exclude 'libcuda.so.*' \
+              --exclude 'libcudart.so.*' \
+              --exclude 'libcublas.so.*' \
+              --exclude 'libcublasLt.so.*' \
+              --exclude 'libcurand.so.*' \
+              --exclude 'libcudnn.so.*' \
+              --exclude 'libnvrtc.so.*' \
+              --exclude 'libnvJitLink.so.*' \
+              "$whl"
+          done
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-uniko-cuda-linux-x86_64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # ── Build the Metal (Apple Silicon) wheel variant — `uniko-metal` ─────────
+  # `gpu-metal` enables `ort?/coreml` (fires because the uni-db pin always
+  # enables `provider-onnx`); CoreML is statically linked in pyke's macOS ORT
+  # bundle, so no sidecar/auditwheel dance. The `mistralrs`+`candle` features
+  # additionally compile candle's Metal kernels for local LLM inference — the
+  # macos-14 runner's Xcode/Metal SDK supplies that toolchain, so no extra
+  # install is needed. macOS arm64 only (no x86_64-apple-darwin ORT prebuilt).
+  build-metal:
+    name: Wheel uniko-metal (macos/aarch64, Metal)
+    runs-on: macos-14
+    needs: guard
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install protobuf
+        run: brew install protobuf
+
+      - name: Bootstrap variant Python sources
+        run: ./scripts/bootstrap-wheel-variants.sh
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64-apple-darwin
+          args: --release --strip --out dist -m bindings/uniko-metal/Cargo.toml
+          sccache: "true"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-uniko-metal-macos-aarch64
+          path: dist/*.whl
+          if-no-files-found: error
+
   # ── GATED: publish crates to crates.io (OIDC, dependency order) ────────────
   publish-crates:
     name: Publish crates to crates.io
     runs-on: ubuntu-latest
     needs: [guard, validate-crates]
     environment: release # manual-approval gate
+    # Long timeout so the job survives crates.io's new-crate rate limit (burst of
+    # 5, then 1 per ~10 min) on a first release of several brand-new crate names.
+    timeout-minutes: 360
+    # Never publish from a fork.
+    if: github.repository == 'rustic-ai/uniko'
     permissions:
       id-token: write # OIDC token exchange with crates.io
     steps:
@@ -206,24 +367,67 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish in dependency order
+        # Idempotent, rate-limit-aware ordered publish (mirrors rustic-ai/uni-db):
+        #   - "already exists" on the index -> treat as success/skip, so a re-run
+        #     (or a partial manual first publish) doesn't abort the release.
+        #   - HTTP 429 -> parse crates.io's "try again after <date>" and sleep to
+        #     it (+15s), then retry the SAME crate. This is expected on a first
+        #     release of many new crate names.
+        #   - other errors -> retry a few times, then fail.
+        # A 30s settle between crates lets the index update before the next
+        # (dependent) crate resolves.
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          publish_crate() {
+            local crate="$1" attempt=0 max=20 out rc
+            while :; do
+              attempt=$((attempt + 1))
+              echo "::group::cargo publish -p $crate (attempt $attempt/$max)"
+              out="$(cargo publish -p "$crate" --locked 2>&1)"; rc=$?
+              echo "$out"; echo "::endgroup::"
+              [ "$rc" -eq 0 ] && return 0
+              if echo "$out" | grep -qiE 'already (exists|uploaded)'; then
+                echo "  -> $crate already on crates.io; skipping."; return 0
+              fi
+              if echo "$out" | grep -qiE '429|too many requests|rate limit'; then
+                local when target now wait
+                when="$(echo "$out" | sed -n 's/.*try again after \([^.]*\).*/\1/p' | head -1)"
+                target="$(date -d "$when" +%s 2>/dev/null || echo '')"
+                now="$(date +%s)"
+                if [ -n "$target" ] && [ "$target" -gt "$now" ]; then
+                  wait=$(( target - now + 15 ))
+                else
+                  wait=660
+                fi
+                echo "  -> rate limited; sleeping ${wait}s then retrying $crate"
+                sleep "$wait"; continue
+              fi
+              if [ "$attempt" -ge "$max" ]; then
+                echo "::error::failed to publish $crate after $attempt attempts"; return 1
+              fi
+              echo "  -> transient error; retrying in 30s"; sleep 30
+            done
+          }
           for crate in $PUBLISH_ORDER; do
-            echo "::group::cargo publish -p $crate"
-            # cargo publish blocks until the crate is index-available before
-            # returning (default since cargo 1.66), so the next crate in the
-            # chain resolves correctly.
-            cargo publish -p "$crate" --locked
-            echo "::endgroup::"
+            publish_crate "$crate"
+            sleep 30
           done
 
-  # ── GATED: publish wheels + sdist to PyPI (OIDC) ──────────────────────────
+  # ── GATED + FLAGGED: publish wheels + sdist to PyPI (OIDC) ─────────────────
+  # Disabled until PyPI grants the per-project file-size-limit increases (all
+  # wheels exceed the 100 MB default; see RELEASING.md). Gated on the repository
+  # variable `PYPI_PUBLISH_ENABLED` — set it to `true` under Settings → Secrets
+  # and variables → Actions → Variables once the increases are approved. While
+  # disabled, wheels still BUILD and validate, and the `github-release` job below
+  # attaches them to the GitHub Release as the interim distribution channel.
+  # (A job-level `if:` can't read workflow `env:`, so this must be a `vars.*`.)
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [guard, build-wheels, build-sdist]
+    needs: [guard, build-wheels, build-sdist, build-cuda-linux, build-metal]
+    if: vars.PYPI_PUBLISH_ENABLED == 'true'
     environment: release # manual-approval gate
     permissions:
       id-token: write # OIDC token exchange with PyPI
@@ -241,10 +445,15 @@ jobs:
           packages-dir: dist
 
   # ── GATED: attach artifacts to the GitHub Release ─────────────────────────
+  # Runs whenever crates.io publishing succeeded, EVEN IF publish-pypi was
+  # skipped (PyPI disabled via the flag) — while PyPI is off this is the primary
+  # channel for the wheels. `always()` is required so a skipped publish-pypi
+  # doesn't cascade-skip this job.
   github-release:
     name: GitHub Release
     runs-on: ubuntu-latest
     needs: [publish-crates, publish-pypi]
+    if: ${{ always() && needs.publish-crates.result == 'success' && needs.publish-pypi.result != 'failure' }}
     permissions:
       contents: write # create the release + upload assets
     steps:

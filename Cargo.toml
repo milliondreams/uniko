@@ -9,10 +9,29 @@ members = [
     "crates/uniko-api",
     "crates/uniko-bench",
     "bindings/uniko-py",
+    # GPU wheel variants — members (for workspace dep inheritance) but excluded
+    # from `default-members` below so plain `cargo build`/`check`/`test`/`doc`
+    # skip them. They reuse `bindings/uniko-py/src` with a GPU feature; `-metal`
+    # only builds on macOS. `--workspace` CI commands must `--exclude` both.
+    "bindings/uniko-cuda",
+    "bindings/uniko-metal",
+]
+# Everything except the GPU wheel variants. Keeps default builds host-portable
+# (no ORT CUDA sidecar download, no macOS-only CoreML) while still allowing an
+# explicit `-p uniko-cuda` / maturin `-m bindings/uniko-cuda/Cargo.toml` build.
+default-members = [
+    "crates/uniko-store",
+    "crates/uniko-pipes",
+    "crates/uniko-extract",
+    "crates/uniko-memory",
+    "crates/uniko-cortex",
+    "crates/uniko-api",
+    "crates/uniko-bench",
+    "bindings/uniko-py",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.91"
 license = "Apache-2.0"
@@ -25,13 +44,13 @@ categories = ["database", "text-processing"]
 
 [workspace.dependencies]
 # Internal crates (version required so `cargo publish` accepts the path deps)
-uniko-store = { path = "crates/uniko-store", version = "0.1.0" }
-uniko-pipes = { path = "crates/uniko-pipes", version = "0.1.0" }
-uniko-extract = { path = "crates/uniko-extract", version = "0.1.0" }
-uniko-memory = { path = "crates/uniko-memory", version = "0.1.0" }
-uniko-cortex = { path = "crates/uniko-cortex", version = "0.1.0" }
-uniko-api = { path = "crates/uniko-api", version = "0.1.0" }
-uniko-bench = { path = "crates/uniko-bench", version = "0.1.0" }
+uniko-store = { path = "crates/uniko-store", version = "0.1.1" }
+uniko-pipes = { path = "crates/uniko-pipes", version = "0.1.1" }
+uniko-extract = { path = "crates/uniko-extract", version = "0.1.1" }
+uniko-memory = { path = "crates/uniko-memory", version = "0.1.1" }
+uniko-cortex = { path = "crates/uniko-cortex", version = "0.1.1" }
+uniko-api = { path = "crates/uniko-api", version = "0.1.1" }
+uniko-bench = { path = "crates/uniko-bench", version = "0.1.1" }
 
 # Database — uni-db default features already include lance-backend,
 # provider-onnx (embeddings + NLP + reranker), and every remote provider.
@@ -161,3 +180,14 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.tokenizers]
 opt-level = 3
+
+# ── Release profile: strip symbols from the final artifacts ──
+# The linked-in ONNX Runtime (static `provider-onnx`) and the Lance/Arrow/
+# DataFusion stack leave ~80 MB of uncompressed symbol/debug data in the
+# cdylib; stripping trims ~18 MiB off the compressed wheel. `symbols` drops
+# both the symbol table and debuginfo while preserving the dynamic symbols
+# (PyInit / abi3 exports) the extension module needs to load. Applies to
+# `cargo build --release`, maturin release wheels, and the uniko-cuda /
+# uniko-metal variant crates that reuse this workspace.
+[profile.release]
+strip = "symbols"

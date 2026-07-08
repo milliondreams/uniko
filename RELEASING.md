@@ -14,9 +14,14 @@ there are **no API tokens stored in the repo**.
 
 ## TL;DR — cutting a release
 
-1. Bump the workspace version in [`Cargo.toml`](Cargo.toml) (`[workspace.package]
-   version`) if needed, land it on `main`, and make sure CI is green. The Python
-   wheel version is derived from this same value.
+1. Bump the version with **`cargo set-version --workspace <ver>`** (cargo-edit) —
+   this updates `[workspace.package].version` **and** the internal
+   `[workspace.dependencies]` pins atomically. Everything else derives from it:
+   crate versions (`version.workspace = true`), the Python wheel version
+   (`dynamic = ["version"]`), and runtime `uniko.__version__`
+   (`env!("CARGO_PKG_VERSION")`). Do **not** hand-edit versions — the
+   `check_version_sync` CI/guard step fails if the pins drift or a pyproject
+   hardcodes a version. Land it on `main` and make sure CI is green.
 2. Tag and push:
    ```sh
    git tag v0.1.0
@@ -114,18 +119,42 @@ For **each** of the 6 publishable crates, on crates.io:
 
 ### 3. PyPI Trusted Publishing
 
-On PyPI: **Your projects → (or "Publishing" for a new project) → Add a pending
-publisher**, with:
+The three wheel-variant projects — `uniko`, `uniko-cuda`, `uniko-metal` — are
+all already registered on PyPI (each has a `0.0.0` placeholder release), so add
+a **regular** trusted publisher on each existing project. (A "pending publisher"
+is only for a name that does *not* exist yet — no longer our case.)
 
-- PyPI Project Name: `uniko`
+On PyPI, for **each** of `uniko`, `uniko-cuda`, `uniko-metal`:
+**Project → Manage → Publishing → Add a trusted publisher (GitHub)**, with:
+
 - Owner: `rustic-ai`
 - Repository name: `uniko`
 - Workflow name: `release.yml`
 - Environment name: `release`
 
-A "pending publisher" lets the project be created on first publish without a
-prior manual upload. (If you also want to rehearse against [TestPyPI], register
-the same pending publisher there and point `publish-pypi` at it temporarily.)
+(To rehearse against [TestPyPI], register the same publisher there and point
+`publish-pypi` at it temporarily.)
+
+#### File-size limit (required — all three variants exceed 100 MB)
+
+PyPI's default per-file limit is 100 MB, and every variant is over it: the base
+`uniko` wheel statically bundles ONNX Runtime (~113 MiB), and `uniko-cuda` /
+`uniko-metal` additionally embed candle+mistralrs GPU kernels. Request a
+file-size-limit increase for **each** project via
+<https://pypi.org/help/#file-size-limit> (cite the bundled ONNX Runtime +
+candle/mistralrs kernels; rustic-ai/uni-db obtained the same increases for its
+`uni-db-cuda`/`-metal` variants). The `github-release` job attaches the wheels
+to the GitHub Release (2 GB/asset) as a fallback if a PyPI upload is still
+rejected.
+
+**PyPI publishing is disabled by a flag until those increases land.** The
+`publish-pypi` job is gated on the repository variable `PYPI_PUBLISH_ENABLED`
+and will not run while it is unset. Everything else still works — wheels build
+and validate, crates.io publishes, and `github-release` attaches the wheels
+(the interim distribution channel). **To enable PyPI once the size increases are
+approved:** Settings → Secrets and variables → Actions → **Variables** → set
+`PYPI_PUBLISH_ENABLED` = `true`. (It must be a repository *variable*, not an env
+value — a job-level `if:` can't read workflow `env`.)
 
 ---
 
