@@ -93,7 +93,20 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: cargo nextest run
-        run: cargo nextest run --workspace --exclude uniko-cuda --exclude uniko-metal
+        run: |
+          # Warm the shared ONNX model cache before the parallel run. Many
+          # integration tests across crates build a real local embedder and
+          # cold-download the SAME bge-small model into one on-disk cache
+          # (.uni_cache); run in parallel they race for the download lock and
+          # fail ("Lock acquisition failed: .uni_cache/onnx-embed/...blobs/*.lock").
+          # A serial pass over uniko-cortex's tests (they exercise the embedder)
+          # populates the cache first; the full parallel run is then a cache hit.
+          # The default test config fetches only `embed/default`, so one warm pass
+          # covers every crate. (If a future run shows a `nlp/default` or
+          # `rerank/default` lock error, broaden this warm filter to that crate.)
+          cargo nextest run --workspace --exclude uniko-cuda --exclude uniko-metal \
+            -E 'package(uniko-cortex)' --test-threads 1
+          cargo nextest run --workspace --exclude uniko-cuda --exclude uniko-metal
 
   deny:
     name: cargo-deny (licenses & advisories)
