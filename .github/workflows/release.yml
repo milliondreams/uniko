@@ -85,17 +85,19 @@ jobs:
         # is the one crate whose packaged form resolves against crates.io as-is.
         run: cargo publish -p uniko-store --dry-run --locked
 
-      - name: Package remaining crates (manifest/file validation)
-        # Downstream crates cannot be dry-run published: their packaged form
-        # depends on `uniko-store 0.1.0` (etc.) which is not on crates.io until
-        # the real publish. `--no-verify` validates the manifest + packaged file
-        # list without the compile-the-package step. Full chain verification
-        # only happens during the real, ordered publish below.
+      - name: Package remaining crates (advisory manifest check)
+        # ADVISORY — never fails the release. Downstream crates cannot be packaged
+        # before their siblings exist on crates.io at the CURRENT version: e.g.
+        # `cargo package -p uniko-pipes` resolves `uniko-store = "^0.1.1"` against
+        # the index and errors until uniko-store 0.1.1 is published. (`--no-verify`
+        # skips the compile, not the dependency resolution.) Full chain
+        # verification happens during the real, ordered publish below, where each
+        # crate is on the index before the next packages.
         run: |
-          set -euo pipefail
           for crate in uniko-pipes uniko-extract uniko-cortex uniko-memory uniko-api; do
             echo "::group::cargo package -p $crate --no-verify"
-            cargo package -p "$crate" --no-verify --locked --allow-dirty
+            cargo package -p "$crate" --no-verify --locked --allow-dirty \
+              || echo "::warning::$crate not packageable until its siblings are on crates.io at this version; verified during the ordered publish"
             echo "::endgroup::"
           done
 
@@ -158,7 +160,11 @@ jobs:
               aarch64) PB_ARCH=aarch_64 ;;
               *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
             esac
-            dnf install -y unzip || yum install -y unzip
+            # openssl-devel: a transitive dep (reqwest/native-tls in the remote
+            # providers) links openssl-sys, and the manylinux container ships no
+            # OpenSSL headers by default. maturin's auditwheel bundles the linked
+            # libs into the wheel.
+            dnf install -y unzip openssl-devel || yum install -y unzip openssl-devel
             curl -fsSL -o /tmp/protoc.zip \
               "https://github.com/protocolbuffers/protobuf/releases/download/v${PB_VERSION}/protoc-${PB_VERSION}-linux-${PB_ARCH}.zip"
             unzip -o /tmp/protoc.zip -d /usr/local
