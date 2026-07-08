@@ -12,7 +12,12 @@ env:
 jobs:
   check:
     name: Check, Lint, Format, Test
-    runs-on: ubuntu-latest
+    # The workspace (uni-db + lance/arrow/datafusion + candle + ort + tree-sitter)
+    # is large enough that a debug `cargo nextest run` exhausts ubuntu-latest's
+    # ~14 GB disk. Use the GitHub-hosted larger runner `ubuntu-xlarge` (same one
+    # rustic-ai/uni-db's public PR test job uses). GitHub-hosted (not self-hosted)
+    # so it works for public/fork PRs; not parameterized.
+    runs-on: ubuntu-xlarge
     steps:
       - name: Checkout
         uses: actions/checkout@v6
