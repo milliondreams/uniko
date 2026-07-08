@@ -30,6 +30,7 @@ async fn translate_rejects_empty_query() {
 }
 
 #[tokio::test]
+#[ignore = "requires OPENAI_API_KEY (real gpt-5-nano call); run via --run-ignored in a trusted job, never on public/fork PR CI"]
 async fn translate_returns_safe_read_only_cypher() {
     require_openai_key();
     let kb = kb_with_chat().await;
@@ -57,6 +58,7 @@ async fn translate_returns_safe_read_only_cypher() {
 }
 
 #[tokio::test]
+#[ignore = "requires OPENAI_API_KEY (real gpt-5-nano call); run via --run-ignored in a trusted job, never on public/fork PR CI"]
 async fn translate_grounds_against_schema_labels() {
     require_openai_key();
     let kb = kb_with_chat().await;
@@ -77,6 +79,7 @@ async fn translate_grounds_against_schema_labels() {
 }
 
 #[tokio::test]
+#[ignore = "requires OPENAI_API_KEY (real gpt-5-nano call); run via --run-ignored in a trusted job, never on public/fork PR CI"]
 async fn translate_caches_repeat_queries() {
     require_openai_key();
     let kb = kb_with_chat().await;
@@ -107,6 +110,7 @@ async fn translate_caches_repeat_queries() {
 }
 
 #[tokio::test]
+#[ignore = "requires OPENAI_API_KEY (real gpt-5-nano call); run via --run-ignored in a trusted job, never on public/fork PR CI"]
 async fn translate_executes_cypher_against_kb() {
     // End-to-end: the LLM's output must be syntactically valid Cypher
     // that the store can run.  We translate, execute, and require a
@@ -135,6 +139,7 @@ async fn translate_executes_cypher_against_kb() {
 /// cascade saw.
 #[cfg(feature = "onnx")]
 #[tokio::test]
+#[ignore = "requires OPENAI_API_KEY (real gpt-5-nano call); run via --run-ignored in a trusted job, never on public/fork PR CI"]
 async fn translate_uses_kniv_entity_hints() {
     require_openai_key();
     let kb = kb_with_chat().await;
