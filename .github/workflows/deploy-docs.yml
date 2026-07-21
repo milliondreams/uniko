@@ -2,13 +2,21 @@ name: Deploy Documentation
 
 # Publishes the website/ docs to GitHub Pages. The site is pure static
 # Markdown (Zensical) — no Rust build, notebooks, or uni-db checkout needed.
+#
+# The build also regenerates the PEP 503 package index under
+# website/docs/packages/ from the repo's GitHub release assets, so newly
+# released wheels become pip-installable without a manual edit. The release
+# workflow calls this workflow (workflow_call) after attaching wheels to a
+# release; it is also published on any website/ change and on manual dispatch.
 on:
   push:
     branches: [main]
     paths:
       - 'website/**'
+      - 'scripts/ci/gen_package_index.py'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -41,6 +49,15 @@ jobs:
 
       - name: Install documentation dependencies
         run: pip install "zensical>=0.0.45,<0.1" "pymdown-extensions>=10.21,<11"
+
+      - name: Generate package index from GitHub releases
+        # Writes website/docs/packages/ (gitignored) so the built site serves an
+        # up-to-date PEP 503 index over the release-hosted wheels. Uses only the
+        # standard library; GITHUB_TOKEN just raises the API rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scripts/ci/gen_package_index.py
 
       - name: Build documentation
         run: |

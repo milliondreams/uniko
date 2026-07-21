@@ -1,2 +1,5 @@
 # Zensical build output
 site/
+
+# Generated PEP 503 package index (scripts/ci/gen_package_index.py, rebuilt on docs deploy)
+docs/packages/

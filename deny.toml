@@ -46,6 +46,19 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# Duplicate transitive versions are inherited from the ML/data-store stack and
+# cannot be collapsed from uniko: `cargo update` already resolves every crate to
+# its newest semver-compatible release, and the duplicates are semver-INcompatible
+# majors pulled by different upstreams (e.g. base64 0.13 via tokenizers'
+# spm_precompiled vs 0.22 via arrow). We skip the roots of that inherited graph
+# by subtree so `multiple-versions` still flags any NEW duplicate uniko itself
+# introduces outside these trees. Revisit as the upstreams converge.
+skip-tree = [
+    { crate = "uni-db" },        # lance / datafusion / arrow + uni-xervo (mistralrs, candle, tokenizers)
+    { crate = "uni-xervo" },     # local-LLM + candle + tokenizers stack
+    { crate = "uni-xervo-pdf" }, # hayro PDF rasterizer + OCR stack
+    { crate = "pdf-extract" },   # lopdf PDF text extraction
+]
 
 [sources]
 unknown-registry = "deny"
