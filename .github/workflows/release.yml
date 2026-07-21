@@ -475,3 +475,21 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # ── Refresh the PEP 503 package index on the docs site ────────────────────
+  # The wheels are distributed as GitHub release assets (over PyPI's size
+  # limit), so pip installs them through a simple index published on GitHub
+  # Pages. Rebuild + redeploy the docs — deploy-docs.yml regenerates that index
+  # from the just-attached release assets — so a new release is immediately
+  # installable. Invoked directly (reusable workflow) rather than via a trigger,
+  # because a release created with GITHUB_TOKEN does not cascade into other
+  # workflows.
+  publish-package-index:
+    name: Publish package index (docs)
+    needs: [github-release]
+    if: ${{ always() && needs.github-release.result == 'success' }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy-docs.yml
