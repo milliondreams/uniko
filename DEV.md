@@ -62,8 +62,11 @@ Cargo workspace members (`Cargo.toml`):
 | `crates/uniko-bench` | Benchmark harness (`publish = false`). |
 | `bindings/uniko-py` | Async-first PyO3 Python SDK (alpha, `publish = false`). |
 
-`uni-db` (2.2.1) and `uni-xervo` (0.15.0) are pulled from crates.io — there is
-nothing external to install or run for them.
+`uni-db` (`^3` — the latest 3.x) and `uni-xervo` (`0.17.0`) are pulled from
+crates.io — there is nothing external to install or run for them. Those are the
+requirements declared in the workspace `Cargo.toml`; `Cargo.lock` pins the exact
+resolved versions. Refresh uni-db within the range with
+`cargo update -p uni-db`.
 
 ---
 

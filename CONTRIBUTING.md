@@ -45,9 +45,9 @@ cd uniko
 cargo build
 ```
 
-`cargo build` pulls **uni-db 2.2.1** (and **uni-xervo 0.15.0**) straight from
-crates.io. **No access token, private repository, or special credentials are
-required** — a plain `cargo build` works out of the box.
+`cargo build` pulls **uni-db** (`^3` — the latest 3.x) and **uni-xervo**
+(`0.17.0`) straight from crates.io. **No access token, private repository, or
+special credentials are required** — a plain `cargo build` works out of the box.
 
 > First builds compile inference-heavy dependencies (ONNX Runtime,
 > tokenizers). The dev profile already bumps `opt-level = 3` for `ort`,
