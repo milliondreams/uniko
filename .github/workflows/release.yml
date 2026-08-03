@@ -91,8 +91,9 @@ jobs:
       - name: Package remaining crates (advisory manifest check)
         # ADVISORY — never fails the release. Downstream crates cannot be packaged
         # before their siblings exist on crates.io at the CURRENT version: e.g.
-        # `cargo package -p uniko-pipes` resolves `uniko-store = "^0.1.1"` against
-        # the index and errors until uniko-store 0.1.1 is published. (`--no-verify`
+        # `cargo package -p uniko-pipes` resolves `uniko-store = "^<version>"`
+        # against the index and errors until that exact uniko-store version is
+        # published. (Written version-agnostically on purpose. `--no-verify`
         # skips the compile, not the dependency resolution.) Full chain
         # verification happens during the real, ordered publish below, where each
         # crate is on the index before the next packages.
