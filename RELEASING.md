@@ -203,18 +203,27 @@ candle/mistralrs kernels; rustic-ai/uni-db obtained the same increases for its
 to the GitHub Release (2 GB/asset) as a fallback if a PyPI upload is still
 rejected.
 
-**PyPI publishing is disabled by a flag until those increases land.** As of
-2026-08-03 the base `uniko` wheel would fit unaided (74.0 MiB), but
-`publish-pypi` uploads everything in `dist/` in one step, so an oversized
-`uniko-cuda` or `uniko-metal` fails the job regardless — the base wheel fitting
-is not on its own a reason to flip the flag. The
-`publish-pypi` job is gated on the repository variable `PYPI_PUBLISH_ENABLED`
-and will not run while it is unset. Everything else still works — wheels build
-and validate, crates.io publishes, and `github-release` attaches the wheels
-(the interim distribution channel). **To enable PyPI once the size increases are
-approved:** Settings → Secrets and variables → Actions → **Variables** → set
-`PYPI_PUBLISH_ENABLED` = `true`. (It must be a repository *variable*, not an env
-value — a job-level `if:` can't read workflow `env`.)
+**PyPI publishing is enabled.** The `PYPI_PUBLISH_ENABLED` repository-variable
+flag has been removed now that the per-project file-size increases are
+requested; the `release` environment's manual approval is the only remaining
+gate, so nothing reaches PyPI without an explicit deployment approval.
+
+`publish-pypi` uploads **per project**, not from one merged `dist/`. The three
+wheels are separate PyPI projects with separate size limits, and a single twine
+invocation is all-or-nothing — one rejection would abort the upload and take the
+base wheel with it.
+
+- `uniko` (base + sdist) must succeed; a failure there fails the release.
+- `uniko-cuda` / `uniko-metal` are `continue-on-error`, then re-checked by the
+  `classify` step. A failure is tolerated **only** when that wheel is actually
+  over PyPI's 100 MiB (104,857,600 B) default — in which case the job logs a
+  warning and the wheel still reaches users through `github-release`
+  (2 GB/asset). Any other failure — auth, metadata, a missing artifact, or an
+  oversize-looking failure on an under-limit wheel — still fails the job.
+
+That distinction is deliberate: a blanket `continue-on-error` would also swallow
+a broken Trusted Publisher registration and report a green release that shipped
+nothing.
 
 ---
 
