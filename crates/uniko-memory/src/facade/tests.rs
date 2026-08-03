@@ -492,7 +492,7 @@ async fn message_count(kb: &KnowledgeBase) -> usize {
 
 /// Single-row read returning one i64 column named `c`, or 0.
 async fn count_query(kb: &KnowledgeBase, cypher: &str) -> i64 {
-    kb.db()
+    kb.db() // ALLOW: test-only assertion helper; the seal governs product code.
         .session()
         .query(cypher)
         .await

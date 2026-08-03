@@ -90,16 +90,20 @@ rg -n -e 'use uni_db' -e '\.db\(\)' \
   | grep -v 'ALLOW:'
 
 # 2. compile
-cargo check --workspace
+#    `uniko-cuda` / `uniko-metal` are workspace members for dependency
+#    inheritance only: `-cuda` downloads the ORT CUDA sidecar and `-metal`
+#    compiles solely on macOS (on Linux it fails in `objc2`). CI excludes
+#    both; so must you. They are covered by the release workflow's GPU jobs.
+cargo check --workspace --exclude uniko-cuda --exclude uniko-metal
 
 # 3. lint (warnings are errors)
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --exclude uniko-cuda --exclude uniko-metal -- -D warnings
 
 # 4. format check (use `cargo fmt --all` to auto-fix)
 cargo fmt --all --check
 
 # 5. tests
-cargo nextest run --workspace
+cargo nextest run --workspace --exclude uniko-cuda --exclude uniko-metal
 
 # 6. dependency policy
 cargo deny check
