@@ -53,7 +53,9 @@ there are **no API tokens stored in the repo**.
 | `build-cuda-linux` | no | Builds the `uniko-cuda` wheel (Linux x86_64, CUDA 13 toolkit). |
 | `build-metal` | no | Builds the `uniko-metal` wheel (macOS arm64). |
 | `publish-crates` | **yes** | Publishes the 6 crates to crates.io via OIDC, in dependency order. |
-| `publish-pypi` | **yes** | Publishes all wheels + sdist to PyPI via OIDC. |
+| `publish-pypi-uniko` | **yes** | Publishes the base wheels + sdist to PyPI via OIDC. |
+| `publish-pypi-cuda` | **yes** | Publishes the `uniko-cuda` wheel. |
+| `publish-pypi-metal` | **yes** | Publishes the `uniko-metal` wheel. |
 | `github-release` | **yes** | Creates the GitHub Release and attaches all artifacts. |
 
 ### Build profile
@@ -208,33 +210,24 @@ flag has been removed now that the per-project file-size increases are
 requested; the `release` environment's manual approval is the only remaining
 gate, so nothing reaches PyPI without an explicit deployment approval.
 
-`publish-pypi` uploads **per project**, not from one merged `dist/`. The three
-wheels are separate PyPI projects with separate size limits, and a single twine
-invocation is all-or-nothing — one rejection would abort the upload and take the
-base wheel with it.
+PyPI publishing is **three separate jobs**, one per project —
+`publish-pypi-uniko` (base + sdist), `publish-pypi-cuda`, `publish-pypi-metal`.
+`uniko`, `uniko-cuda` and `uniko-metal` are separate PyPI projects with separate
+file-size limits, and a single twine invocation over a merged `dist/` is
+all-or-nothing: one rejection would abort the upload and take the other two with
+it.
 
-- `uniko` (base + sdist) goes through `pypa/gh-action-pypi-publish` and must
-  succeed; a failure there fails the release.
-- `uniko-cuda` / `uniko-metal` go through `twine` directly, with a Trusted
-  Publishing token minted in-workflow (Actions OIDC → `/_/oidc/mint-token`).
-  Their upload output is captured, and a failure is tolerated **only** when
-  PyPI's own response says the file is too large — in which case the job warns
-  and the wheel still reaches users via `github-release` (2 GB/asset). Every
-  other rejection (auth, metadata, duplicate filename) fails the job.
+Splitting at the job level, rather than scripting tolerance inside one job,
+means failures are isolated by construction. A wheel PyPI rejects — on size, or
+because an exception has not taken effect — shows up as one red job while the
+other two publish normally, and `github-release` still attaches every wheel
+(2 GB/asset). There is no classification logic and nothing is swallowed: read
+PyPI's actual error in the failed job's log.
 
-Two deliberate choices there. The GPU variants do not use the action because a
-later step cannot read the action's log, and classification has to read PyPI's
-actual rejection: the per-project limit is **mutable** — that is exactly what a
-file-size exception changes — so any hardcoded byte threshold drifts out of sync
-the moment an exception lands, and starts silently tolerating unrelated
-failures. (uni-db holds such an exception, which is why its 100,106,853 B wheel
-implies nothing about anyone else's limit.) And a blanket `continue-on-error`
-was rejected outright: it would equally swallow a broken Trusted Publisher
-registration and report a green release that shipped nothing.
-
-The cost is that `twine` does not generate PEP 740 attestations, so the two GPU
-wheels ship without them while the base wheel keeps its. Revisit if attestations
-become required across the board.
+All three run **after** crates.io — no point shipping wheels for a version whose
+crates failed to publish — and each declares `environment: release`, because the
+Trusted Publisher registrations name that environment and the OIDC claim must
+match it. Approval is per deployment, so expect to approve each.
 
 ---
 

@@ -495,129 +495,93 @@ jobs:
             sleep 30
           done
 
-  # ── GATED: publish wheels + sdist to PyPI (OIDC) ───────────────────────────
-  # The `PYPI_PUBLISH_ENABLED` repository-variable flag is gone: the per-project
-  # file-size-limit increases have been requested, so publishing is on. The
-  # `release` environment's manual approval is now the only gate — nothing
-  # reaches PyPI without someone approving the deployment.
+  # ── GATED: publish to PyPI (OIDC) — one job per PyPI project ──────────────
+  # `uniko`, `uniko-cuda` and `uniko-metal` are three separate PyPI projects
+  # with separate file-size limits, so they get three separate jobs. A single
+  # twine invocation over a merged `dist/` is all-or-nothing: one rejection
+  # would abort the upload and take the other two down with it.
   #
-  # Uploads are split PER PROJECT rather than pointing the action at one `dist/`
-  # holding all three. `uniko`, `uniko-cuda` and `uniko-metal` are separate PyPI
-  # projects with separate file-size limits, and a single twine invocation is
-  # all-or-nothing: one 100 MB rejection would abort the whole upload and take
-  # the base wheel down with it.
+  # Splitting at the JOB level rather than scripting tolerance inside one job
+  # buys three things: failures are isolated by construction instead of by
+  # `continue-on-error`; a rejected variant shows up as a red job rather than a
+  # warning buried in a green one; and every project keeps `pypa/gh-action-pypi
+  # -publish`, so all three ship PEP 740 attestations. No classification logic
+  # is needed — the operator reads PyPI's actual error in the failed job.
   #
-  # The two GPU variants are `continue-on-error` so a size rejection does not
-  # fail the release, but that is NOT left as a blanket "ignore failures" —
-  # `classify` below re-reads each skipped variant and only tolerates it when
-  # the wheel is actually over PyPI's 100 MiB default. Any other failure (auth,
-  # metadata, a missing artifact) still fails the job. A guard that cannot
-  # distinguish the error it was written for is not a guard.
-  publish-pypi:
-    name: Publish to PyPI
+  # All three run AFTER crates.io: no point shipping wheels for a version whose
+  # crates failed to publish. Each needs `environment: release`, because the
+  # Trusted Publisher registrations name that environment and the OIDC claim
+  # must match — approval is per deployment.
+  publish-pypi-uniko:
+    name: PyPI — uniko (base + sdist)
     runs-on: ubuntu-latest
-    needs: [guard, build-wheels, build-sdist, build-cuda-linux, build-metal]
+    needs: [publish-crates, build-wheels, build-sdist]
     environment: release # manual-approval gate
     permissions:
       id-token: write # OIDC token exchange with PyPI
     steps:
-      - name: Download all distributions
+      - name: Download base wheels + sdist
         uses: actions/download-artifact@v4
         with:
-          pattern: "{wheels-*,sdist}"
+          # `wheels-uniko-cuda-*` / `wheels-uniko-metal-*` are excluded by name:
+          # the base matrix uploads `wheels-<os>-<target>`.
+          pattern: "{wheels-ubuntu*,wheels-macos*,wheels-windows*,sdist}"
           path: dist
           merge-multiple: true
 
-      # Wheel filenames normalize `-` to `_`, so `uniko-*` matches only the base
-      # project and cannot swallow `uniko_cuda-*` / `uniko_metal-*`.
-      - name: Split distributions by PyPI project
-        run: |
-          set -euo pipefail
-          mkdir -p pypi/uniko pypi/uniko-cuda pypi/uniko-metal
-          mv dist/uniko-*.whl dist/uniko-*.tar.gz pypi/uniko/
-          mv dist/uniko_cuda-*.whl              pypi/uniko-cuda/
-          mv dist/uniko_metal-*.whl             pypi/uniko-metal/
-          for d in pypi/*/; do
-            echo "== $d"; ls -l "$d"
-          done
-
-      # The base wheel is well under the limit (74 MiB at 0.2.0) — a failure
-      # here is real, so no continue-on-error.
-      - name: Publish uniko (base + sdist)
+      - name: Publish uniko
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: pypi/uniko
+          packages-dir: dist
 
-      # The GPU variants go through twine directly instead of the action,
-      # because classification has to READ PyPI's rejection. The action's log
-      # isn't available to a later step, so the only alternative was guessing
-      # from file size — and that cannot work: the per-project limit is
-      # mutable (that is what a file-size exception changes), so a hardcoded
-      # threshold silently drifts out of sync exactly when an exception lands.
-      # uni-db holds such an exception, which is why its 100,106,853 B wheel
-      # says nothing about anyone else's limit.
-      #
-      # Trade-off: twine does not generate PEP 740 attestations, so the GPU
-      # wheels ship without them while the base wheel (published by the action
-      # above) keeps its. Revisit if attestations become required for all.
-      - name: Mint a PyPI token for the GPU variants
-        id: mint
-        run: |
-          set -euo pipefail
-          jwt=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-                  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=pypi" |
-                python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
-          tok=$(curl -sS -X POST https://pypi.org/_/oidc/mint-token \
-                  -H 'Content-Type: application/json' \
-                  -d "{\"token\": \"$jwt\"}" |
-                python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("token",""))')
-          if [ -z "$tok" ]; then
-            echo "::error::PyPI declined to mint a token — check the Trusted Publisher registration for uniko-cuda / uniko-metal (owner, repo, workflow release.yml, environment release)."
-            exit 1
-          fi
-          echo "::add-mask::$tok"
-          echo "token=$tok" >> "$GITHUB_OUTPUT"
+  publish-pypi-cuda:
+    name: PyPI — uniko-cuda
+    runs-on: ubuntu-latest
+    needs: [publish-crates, build-cuda-linux]
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-uniko-cuda-linux-x86_64
+          path: dist
 
-      - name: Publish GPU variants (tolerate only a size rejection)
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ steps.mint.outputs.token }}
-        run: |
-          set -uo pipefail
-          python3 -m pip install --quiet --upgrade twine
-          fatal=0
-          for v in uniko-cuda uniko-metal; do
-            echo "::group::twine upload $v"
-            python3 -m twine upload --non-interactive --disable-progress-bar \
-              "pypi/$v"/* 2>&1 | tee "upload-$v.log"
-            rc=${PIPESTATUS[0]}
-            echo "::endgroup::"
-            if [ "$rc" -eq 0 ]; then
-              echo "$v: published"
-              continue
-            fi
-            # PyPI's oversize rejection is a 400 naming the limit; anything else
-            # (auth, metadata, a duplicate filename) is a real failure.
-            if grep -qiE 'file too large|exceeds the (maximum|limit)|file-size-limit' "upload-$v.log"; then
-              echo "::warning::$v NOT published: PyPI rejected it on file size. It is attached to the GitHub Release instead. If a file-size exception was granted for $v, it has not taken effect — see the grouped log above for PyPI's exact message."
-            else
-              echo "::error::$v upload failed for a reason other than file size — see the grouped log above. Not tolerated."
-              fatal=1
-            fi
-          done
-          exit "$fatal"
+      - name: Publish uniko-cuda
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  publish-pypi-metal:
+    name: PyPI — uniko-metal
+    runs-on: ubuntu-latest
+    needs: [publish-crates, build-metal]
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-uniko-metal-macos-aarch64
+          path: dist
+
+      - name: Publish uniko-metal
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
 
   # ── GATED: attach artifacts to the GitHub Release ─────────────────────────
-  # Runs whenever crates.io publishing succeeded, even if publish-pypi did not
-  # succeed. Still the fallback channel for anything PyPI rejects on size: a GPU
-  # wheel over the limit is tolerated by `classify` there, so the job still
-  # succeeds and its wheels reach users here (2 GB/asset). `always()` is
-  # required so a skipped or failed publish-pypi doesn't cascade-skip this job.
   github-release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [publish-crates, publish-pypi]
-    if: ${{ always() && needs.publish-crates.result == 'success' && needs.publish-pypi.result != 'failure' }}
+    needs:
+      [publish-crates, publish-pypi-uniko, publish-pypi-cuda, publish-pypi-metal]
+    # Runs on a successful crates.io publish regardless of how the PyPI jobs
+    # went. This is the fallback channel: a wheel PyPI rejects (size limit, or
+    # an exception that has not taken effect) still reaches users here, at
+    # 2 GB/asset. `always()` is required so a failed or skipped PyPI job does
+    # not cascade-skip this one.
+    if: ${{ always() && needs.publish-crates.result == 'success' }}
     permissions:
       contents: write # create the release + upload assets
     steps:
