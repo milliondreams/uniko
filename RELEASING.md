@@ -171,19 +171,43 @@ On PyPI, for **each** of `uniko`, `uniko-cuda`, `uniko-metal`:
 (To rehearse against [TestPyPI], register the same publisher there and point
 `publish-pypi` at it temporarily.)
 
-#### File-size limit (required — all three variants exceed 100 MB)
+#### File-size limit (still required for the GPU variants)
 
-PyPI's default per-file limit is 100 MB, and every variant is over it: the base
-`uniko` wheel statically bundles ONNX Runtime (~113 MiB), and `uniko-cuda` /
-`uniko-metal` additionally embed candle+mistralrs GPU kernels. Request a
-file-size-limit increase for **each** project via
+PyPI's default per-file limit is 100 MB. Measured 2026-08-03, all built with
+`--profile dist` (thin LTO, `codegen-units = 1`):
+
+| Variant | Wheel | `_uniko.abi3.so` | vs 100 MB |
+| --- | --- | --- | --- |
+| `uniko` | **74.0 MiB** | 197.4 MiB | comfortably under |
+| `uniko-cuda` | **98.6 MiB** *(before `auditwheel repair`)* | 306.6 MiB | marginal — see below |
+| `uniko-metal` | not measured (macOS-only) | — | unknown |
+
+The base wheel no longer exceeds the limit. It did when this section was
+written, under a plain `--release` build; whole-graph thin LTO plus uni-db
+3.2.0 dropping the `lancedb` wrapper and 23 transitive crates brought it to
+74 MiB. **Do not treat that as clearance for the GPU variants.**
+
+`uniko-cuda` is not clear, for two compounding reasons. The 98.6 MiB figure is
+the **pre-repair** wheel — the same artifact CI puts in `dist-raw` — and the
+`auditwheel repair` step that follows bundles every non-excluded shared library
+(OpenSSL 3 is staged specifically so it gets picked up), so the published wheel
+is strictly larger. And the margin is already inside the ambiguity of "100 MB":
+103,364,283 bytes is 1.4 MiB *under* a 100 MiB limit but 3.4 MB *over* a
+decimal 100 MB one. Measure the repaired wheel from a real CI run before
+assuming it fits.
+
+Request a file-size-limit increase for **each** project via
 <https://pypi.org/help/#file-size-limit> (cite the bundled ONNX Runtime +
 candle/mistralrs kernels; rustic-ai/uni-db obtained the same increases for its
 `uni-db-cuda`/`-metal` variants). The `github-release` job attaches the wheels
 to the GitHub Release (2 GB/asset) as a fallback if a PyPI upload is still
 rejected.
 
-**PyPI publishing is disabled by a flag until those increases land.** The
+**PyPI publishing is disabled by a flag until those increases land.** As of
+2026-08-03 the base `uniko` wheel would fit unaided (74.0 MiB), but
+`publish-pypi` uploads everything in `dist/` in one step, so an oversized
+`uniko-cuda` or `uniko-metal` fails the job regardless — the base wheel fitting
+is not on its own a reason to flip the flag. The
 `publish-pypi` job is gated on the repository variable `PYPI_PUBLISH_ENABLED`
 and will not run while it is unset. Everything else still works — wheels build
 and validate, crates.io publishes, and `github-release` attaches the wheels

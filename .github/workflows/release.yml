@@ -254,8 +254,11 @@ jobs:
   # auditwheel is skipped, then a manual `auditwheel repair` excludes the host
   # CUDA/cuDNN libs so they resolve at runtime instead of bloating the wheel.
   # NOTE: unrehearsed for uniko — validate via workflow_dispatch on a -rc tag;
-  # the candle+mistralrs CUDA compile is long (tens of minutes). The wheel likely
-  # exceeds PyPI's 100 MB/file limit — the github-release job is the fallback;
+  # the candle+mistralrs CUDA compile is long (tens of minutes). Measured
+  # 2026-08-03 on a dev host at CUDA_COMPUTE_CAP=80: 98.6 MiB *before* the
+  # repair below, which then bundles OpenSSL 3 and friends — so the published
+  # wheel is larger and PyPI's 100 MB/file limit is very likely exceeded;
+  # the github-release job is the fallback;
   # a PyPI project size increase for `uniko-cuda` may be needed (see RELEASING.md).
   build-cuda-linux:
     name: Wheel uniko-cuda (linux/x86_64, CUDA)
