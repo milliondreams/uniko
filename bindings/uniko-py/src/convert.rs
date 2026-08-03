@@ -13,9 +13,11 @@
 //! then a `{"id", "labels", "properties"}` dict, which is enough for the SDK's
 //! read surface.
 //!
-//! Binary payloads are best retrieved through `data.artifact_bytes(id)`: a known
-//! uni-db limitation means `Value::Bytes` cannot be read back through a Cypher
-//! `RETURN`, so the `Bytes` arm here exists for completeness only.
+//! Binary payloads are still best retrieved through `data.artifact_bytes(id)`,
+//! which reads through the blob backend. The `Bytes` arm here is nonetheless
+//! live: the uni-db limitation that prevented `Value::Bytes` from being read
+//! back through a Cypher `RETURN` is fixed as of uni-db 3.x (see
+//! `crates/uniko-store/tests/unidb_bytes_return_repro.rs`, which now passes).
 
 use chrono::{DateTime, Utc};
 use pyo3::IntoPyObjectExt;
