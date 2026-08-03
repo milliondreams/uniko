@@ -26,6 +26,13 @@ Install once, for any surface that touches the native stack:
 - **`protobuf-compiler` (`protoc`)** — must be on `PATH`. The stack statically
   links ONNX Runtime; the build shells out to `protoc`.
   - Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`
+- **`mold`** (Linux only) — **required, not optional.** `.cargo/config.toml`
+  forces `-C link-arg=-fuse-ld=mold` for every Linux build; linking the ~500
+  statically linked dependency crates is the slowest step of an incremental
+  rebuild and mold saves ~20-60s on a cold link. Without it the build fails at
+  link time with ``error: linker `cc` failed … cannot find -fuse-ld=mold``.
+  - Debian/Ubuntu: `sudo apt-get install -y mold`
+  - Fedora/RHEL: `sudo dnf install mold`
 - **[`uv`](https://docs.astral.sh/uv/)** — only for the Python bindings and the
   docs site (manages their virtualenvs and tooling).
 
@@ -232,8 +239,8 @@ reviewed before merge.
 
 ## 8. CI reference
 
-CI (`.github/workflows/ci.yml`, `ubuntu-latest`) installs `protobuf-compiler`
-and a Rust stable toolchain with `clippy` + `rustfmt`, then runs the uni-db seal,
+CI (`.github/workflows/ci.yml`, `ubuntu-xlarge`) installs `protobuf-compiler`
+and `mold` plus a Rust stable toolchain with `clippy` + `rustfmt`, then runs the uni-db seal,
 `cargo check --workspace`, `cargo clippy --workspace -- -D warnings`,
 `cargo fmt --all --check`, and `cargo nextest run --workspace`. A separate job
 runs `cargo deny check`. Keeping the [§3 check loop](#the-local-check-loop-mirrors-ci-exactly)

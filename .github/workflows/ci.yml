@@ -30,7 +30,10 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          # mold: required, not optional — `.cargo/config.toml` forces
+          # `-fuse-ld=mold` for every Linux build, so a runner without it fails
+          # at the link step.
+          sudo apt-get install -y protobuf-compiler mold
 
       - name: Cache cargo registry and build
         uses: actions/cache@v5

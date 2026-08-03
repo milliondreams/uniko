@@ -21,8 +21,10 @@ cargo build
   **MSRV `1.91`** (`rust-version` in the workspace `Cargo.toml`).
 - `cargo build` pulls `uni-db 2.2.1` and `uni-xervo 0.15.0` straight from
   crates.io — **no token, private repo, or credentials required.**
-- **System deps:** `protobuf-compiler` (`protoc`) and a C/C++ toolchain (the
-  stack statically links ONNX Runtime via `ort`). CI installs `protobuf-compiler`.
+- **System deps:** `protobuf-compiler` (`protoc`), a C/C++ toolchain (the stack
+  statically links ONNX Runtime via `ort`), and — on Linux — `mold`, which
+  `.cargo/config.toml` forces as the link backend. CI installs
+  `protobuf-compiler mold`.
 - First builds are slow (ONNX Runtime, tokenizers compile under `opt-level = 3`).
 
 ## Test

@@ -2462,14 +2462,20 @@ All wheels are `abi3` for CPython ≥ 3.10 — one wheel per platform spans ever
 
 ```sh
 # Base CPU wheel:
-maturin build --release -m bindings/uniko-py/Cargo.toml
+maturin build --profile dist -m bindings/uniko-py/Cargo.toml
 
 # GPU variants — copy the python package in FIRST, then build:
 scripts/bootstrap-wheel-variants.sh
-CUDA_COMPUTE_CAP=80 maturin build --release --auditwheel skip \
+CUDA_COMPUTE_CAP=80 maturin build --profile dist --auditwheel skip \
     -m bindings/uniko-cuda/Cargo.toml          # Ampere PTX, fwd-JITs to newer archs
-maturin build --release -m bindings/uniko-metal/Cargo.toml   # macOS/aarch64
+maturin build --profile dist -m bindings/uniko-metal/Cargo.toml   # macOS/aarch64
 ```
+
+`dist` is the release profile plus whole-graph thin LTO at `codegen-units = 1`
+(root `Cargo.toml`); it is what CI publishes. Use `--release` for a faster local
+build when artifact size does not matter. On a machine with less than ~16 GB of
+RAM, export `CARGO_PROFILE_DIST_CODEGEN_UNITS=16` first — cgu=1 peaks around
+11-12 GiB of rustc RSS on a cdylib this size.
 
 `bootstrap-wheel-variants.sh` **must** run before building a GPU variant (the `python/` dirs are gitignored and populated by it). The CUDA build requires the CUDA toolkit (`nvcc`) at build time; `--auditwheel skip` is used so CUDA runtime libs are resolved at load, not bundled.
 
@@ -3087,14 +3093,18 @@ Building the wheels:
 
 ```sh
 # base CPU wheel
-maturin build --release -m bindings/uniko-py/Cargo.toml
+maturin build --profile dist -m bindings/uniko-py/Cargo.toml
 
 # GPU variants: copy the python package in first, then build
 scripts/bootstrap-wheel-variants.sh
-CUDA_COMPUTE_CAP=80 maturin build --release --auditwheel skip \
+CUDA_COMPUTE_CAP=80 maturin build --profile dist --auditwheel skip \
     -m bindings/uniko-cuda/Cargo.toml
-maturin build --release -m bindings/uniko-metal/Cargo.toml   # macOS/aarch64
+maturin build --profile dist -m bindings/uniko-metal/Cargo.toml   # macOS/aarch64
 ```
+
+`dist` = release + thin LTO + `codegen-units = 1`; see the profile comment in the
+root `Cargo.toml` for the size/RSS trade-off and the
+`CARGO_PROFILE_DIST_CODEGEN_UNITS` escape hatch for small runners.
 
 GPU-build specifics:
 
@@ -3296,11 +3306,11 @@ Release-time gotchas worth internalizing:
 
 ```sh
 # base CPU wheel
-maturin build --release -m bindings/uniko-py/Cargo.toml
+maturin build --profile dist -m bindings/uniko-py/Cargo.toml
 # GPU variants
 scripts/bootstrap-wheel-variants.sh
-CUDA_COMPUTE_CAP=80 maturin build --release --auditwheel skip -m bindings/uniko-cuda/Cargo.toml
-maturin build --release -m bindings/uniko-metal/Cargo.toml   # macOS/aarch64
+CUDA_COMPUTE_CAP=80 maturin build --profile dist --auditwheel skip -m bindings/uniko-cuda/Cargo.toml
+maturin build --profile dist -m bindings/uniko-metal/Cargo.toml   # macOS/aarch64
 ```
 
 `uniko-cuda` requires the CUDA toolkit (`nvcc`) at build time; `CUDA_COMPUTE_CAP=80` (Ampere) forward-JITs to newer archs, and `--auditwheel skip` means CUDA runtime libs resolve at load time rather than being bundled.

@@ -50,9 +50,45 @@ there are **no API tokens stored in the repo**.
 | `validate-crates` | no | `cargo publish --dry-run` for the leaf crate; `cargo package --no-verify` for the rest. |
 | `build-wheels` | no | Builds abi3 wheels for Linux (x86_64, aarch64), macOS (arm64), Windows (x64). |
 | `build-sdist` | no | Builds the source distribution. |
+| `build-cuda-linux` | no | Builds the `uniko-cuda` wheel (Linux x86_64, CUDA 13 toolkit). |
+| `build-metal` | no | Builds the `uniko-metal` wheel (macOS arm64). |
 | `publish-crates` | **yes** | Publishes the 6 crates to crates.io via OIDC, in dependency order. |
 | `publish-pypi` | **yes** | Publishes all wheels + sdist to PyPI via OIDC. |
 | `github-release` | **yes** | Creates the GitHub Release and attaches all artifacts. |
+
+### Build profile
+
+Every wheel job builds with `--profile dist`, not `--release`: the release
+profile plus whole-graph thin LTO at `codegen-units = 1`, defined in the root
+`Cargo.toml`. That materially shrinks the shipped `_uniko.so` — which matters
+because the wheels sit near PyPI's 100 MB/file limit — at the cost of a few
+extra minutes and a much larger peak rustc working set.
+
+Peak build memory, not build time, is what constrains `codegen-units`. Jobs on
+runners too small for cgu=1 relax it with `CARGO_PROFILE_DIST_CODEGEN_UNITS`
+rather than forking the profile. If a wheel job is killed with no error output
+(exit 137 / "The runner has received a shutdown signal"), suspect the LTO link
+being OOM-killed and raise that job's codegen-units — 4 first, then 16 — before
+investigating anything else. The variable must never be set to an empty string:
+cargo rejects it with `cannot parse integer from empty string`.
+
+> **The two macOS jobs run on `macos-15-xlarge`, a billed larger runner.**
+> The free Apple Silicon runner is 3-core/7 GB, too small to link a single
+> codegen unit. `macos-15-xlarge` is 5-core M2 / 14 GB at ~$0.102/min, billed
+> per-minute **even for public repositories** — there are no included minutes.
+> It also requires a Team or Enterprise Cloud plan, a card on file, and a
+> non-zero Actions spending limit; without those the job will not schedule at
+> all. 14 GB is the ceiling for Apple Silicon (the 30 GB `-large` runners are
+> Intel, which we cannot use — `ort` ships no `x86_64-apple-darwin` binary).
+>
+> Do not "modernize" these to `macos-14-xlarge`: macOS 14 runners are removed
+> on 2026-11-02, with failing brownout windows from October 2026.
+
+Linux builds link with `mold`, forced by `.cargo/config.toml`. The manylinux
+containers do not ship mold, so every containerized job clears or replaces
+`RUSTFLAGS` (an env `RUSTFLAGS` *replaces* the config file's rustflags rather
+than merging), and every host-runner Linux job installs mold via apt. A new
+Linux job that compiles Rust must do one or the other or it will fail at link.
 
 The publish order is fixed by the internal dependency graph:
 

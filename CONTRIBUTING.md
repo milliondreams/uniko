@@ -24,6 +24,19 @@ agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 - A recent C toolchain (for native ML dependencies such as `ort`/ONNX Runtime).
 
+- **`mold`**, on Linux — this one is required, not a nicety. `.cargo/config.toml`
+  forces it as the link backend for all Linux builds, so a machine without it
+  fails at link time rather than falling back:
+
+  ```sh
+  sudo apt-get install -y mold   # Debian/Ubuntu
+  sudo dnf install mold          # Fedora/RHEL
+  ```
+
+  Linking dominates incremental rebuilds here — roughly 500 dependency crates
+  are statically linked into a single artifact — which is why it is mandatory
+  rather than left to individual preference.
+
 ### Clone and build
 
 ```sh
