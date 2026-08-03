@@ -548,50 +548,60 @@ jobs:
         with:
           packages-dir: pypi/uniko
 
-      - name: Publish uniko-cuda
-        id: pypi_cuda
-        continue-on-error: true
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: pypi/uniko-cuda
+      # The GPU variants go through twine directly instead of the action,
+      # because classification has to READ PyPI's rejection. The action's log
+      # isn't available to a later step, so the only alternative was guessing
+      # from file size — and that cannot work: the per-project limit is
+      # mutable (that is what a file-size exception changes), so a hardcoded
+      # threshold silently drifts out of sync exactly when an exception lands.
+      # uni-db holds such an exception, which is why its 100,106,853 B wheel
+      # says nothing about anyone else's limit.
+      #
+      # Trade-off: twine does not generate PEP 740 attestations, so the GPU
+      # wheels ship without them while the base wheel (published by the action
+      # above) keeps its. Revisit if attestations become required for all.
+      - name: Mint a PyPI token for the GPU variants
+        id: mint
+        run: |
+          set -euo pipefail
+          jwt=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=pypi" |
+                python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          tok=$(curl -sS -X POST https://pypi.org/_/oidc/mint-token \
+                  -H 'Content-Type: application/json' \
+                  -d "{\"token\": \"$jwt\"}" |
+                python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("token",""))')
+          if [ -z "$tok" ]; then
+            echo "::error::PyPI declined to mint a token — check the Trusted Publisher registration for uniko-cuda / uniko-metal (owner, repo, workflow release.yml, environment release)."
+            exit 1
+          fi
+          echo "::add-mask::$tok"
+          echo "token=$tok" >> "$GITHUB_OUTPUT"
 
-      - name: Publish uniko-metal
-        id: pypi_metal
-        continue-on-error: true
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: pypi/uniko-metal
-
-      # Decide whether a skipped GPU upload was the size limit or something we
-      # must not swallow. Discriminator is the file size: PyPI's default cap is
-      # 100 MiB (104857600 B) — `uni_db_cuda` sits at 100,106,853 B, i.e. over a
-      # decimal 100 MB and under the binary one, which is what fixes the unit.
-      # Over the cap + failed => report and continue. Under the cap + failed =>
-      # the rejection was not about size; fail the release.
-      - name: Classify any skipped uploads
+      - name: Publish GPU variants (tolerate only a size rejection)
         env:
-          CUDA_OUTCOME: ${{ steps.pypi_cuda.outcome }}
-          METAL_OUTCOME: ${{ steps.pypi_metal.outcome }}
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ steps.mint.outputs.token }}
         run: |
           set -uo pipefail
-          LIMIT=104857600
+          python3 -m pip install --quiet --upgrade twine
           fatal=0
           for v in uniko-cuda uniko-metal; do
-            case "$v" in
-              uniko-cuda)  outcome="$CUDA_OUTCOME" ;;
-              uniko-metal) outcome="$METAL_OUTCOME" ;;
-            esac
-            [ "$outcome" = "success" ] && { echo "$v: published"; continue; }
-            whl=$(ls pypi/"$v"/*.whl 2>/dev/null | head -1 || true)
-            if [ -z "$whl" ]; then
-              echo "::error::$v upload failed and no wheel was present — missing artifact?"
-              fatal=1; continue
+            echo "::group::twine upload $v"
+            python3 -m twine upload --non-interactive --disable-progress-bar \
+              "pypi/$v"/* 2>&1 | tee "upload-$v.log"
+            rc=${PIPESTATUS[0]}
+            echo "::endgroup::"
+            if [ "$rc" -eq 0 ]; then
+              echo "$v: published"
+              continue
             fi
-            size=$(stat -c %s "$whl")
-            if [ "$size" -gt "$LIMIT" ]; then
-              echo "::warning::$v NOT published to PyPI: $(basename "$whl") is $size B, over PyPI's $LIMIT B limit. It is attached to the GitHub Release instead. If the file-size increase has been granted, this means it has not taken effect."
+            # PyPI's oversize rejection is a 400 naming the limit; anything else
+            # (auth, metadata, a duplicate filename) is a real failure.
+            if grep -qiE 'file too large|exceeds the (maximum|limit)|file-size-limit' "upload-$v.log"; then
+              echo "::warning::$v NOT published: PyPI rejected it on file size. It is attached to the GitHub Release instead. If a file-size exception was granted for $v, it has not taken effect — see the grouped log above for PyPI's exact message."
             else
-              echo "::error::$v upload failed but $(basename "$whl") is only $size B — under the $LIMIT B limit, so this was NOT a size rejection. Investigate before re-running."
+              echo "::error::$v upload failed for a reason other than file size — see the grouped log above. Not tolerated."
               fatal=1
             fi
           done

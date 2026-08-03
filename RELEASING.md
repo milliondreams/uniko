@@ -213,17 +213,28 @@ wheels are separate PyPI projects with separate size limits, and a single twine
 invocation is all-or-nothing — one rejection would abort the upload and take the
 base wheel with it.
 
-- `uniko` (base + sdist) must succeed; a failure there fails the release.
-- `uniko-cuda` / `uniko-metal` are `continue-on-error`, then re-checked by the
-  `classify` step. A failure is tolerated **only** when that wheel is actually
-  over PyPI's 100 MiB (104,857,600 B) default — in which case the job logs a
-  warning and the wheel still reaches users through `github-release`
-  (2 GB/asset). Any other failure — auth, metadata, a missing artifact, or an
-  oversize-looking failure on an under-limit wheel — still fails the job.
+- `uniko` (base + sdist) goes through `pypa/gh-action-pypi-publish` and must
+  succeed; a failure there fails the release.
+- `uniko-cuda` / `uniko-metal` go through `twine` directly, with a Trusted
+  Publishing token minted in-workflow (Actions OIDC → `/_/oidc/mint-token`).
+  Their upload output is captured, and a failure is tolerated **only** when
+  PyPI's own response says the file is too large — in which case the job warns
+  and the wheel still reaches users via `github-release` (2 GB/asset). Every
+  other rejection (auth, metadata, duplicate filename) fails the job.
 
-That distinction is deliberate: a blanket `continue-on-error` would also swallow
-a broken Trusted Publisher registration and report a green release that shipped
-nothing.
+Two deliberate choices there. The GPU variants do not use the action because a
+later step cannot read the action's log, and classification has to read PyPI's
+actual rejection: the per-project limit is **mutable** — that is exactly what a
+file-size exception changes — so any hardcoded byte threshold drifts out of sync
+the moment an exception lands, and starts silently tolerating unrelated
+failures. (uni-db holds such an exception, which is why its 100,106,853 B wheel
+implies nothing about anyone else's limit.) And a blanket `continue-on-error`
+was rejected outright: it would equally swallow a broken Trusted Publisher
+registration and report a green release that shipped nothing.
+
+The cost is that `twine` does not generate PEP 740 attestations, so the two GPU
+wheels ship without them while the base wheel keeps its. Revisit if attestations
+become required across the board.
 
 ---
 
