@@ -219,19 +219,21 @@ async fn test_rrf_constants() {
     assert!((TIER_WEIGHT_SEMANTIC - 1.0).abs() < f64::EPSILON);
 }
 
-/// PDF-origin chunks (`chunk_type` "block" / "page") must be recalled by
-/// `recall_chunk_and_entity_scoped`. They were previously absent from its
-/// `["session", "observation"]` filter, so all PDF text was unrecallable.
+/// PDF-origin chunks (`chunk_type` "block" / "page") must be recalled through
+/// their Artifact ownership, not through a closed chunk-type allow-list.
 /// BM25-only path (empty query vector) keeps this independent of any model.
 #[tokio::test]
 async fn recall_includes_block_and_page_chunk_types() {
     let kb = test_kb().await;
 
+    let mut artifact_props = HashMap::new();
+    artifact_props.insert("artifact_id".into(), Value::String("pdf-artifact".into()));
+    artifact_props.insert("kind".into(), Value::String("pdf".into()));
+    let artifact = kb.create_node("Artifact", &artifact_props).await.unwrap();
+
     for (i, (ctype, text)) in [
         ("block", "quarterly revenue table figures"),
         ("page", "annual shareholder report summary"),
-        // A non-PDF chunk_type that must NOT match the PDF query, as a control.
-        ("session", "unrelated meeting transcript"),
     ]
     .iter()
     .enumerate()
@@ -242,7 +244,10 @@ async fn recall_includes_block_and_page_chunk_types() {
         p.insert("chunk_type".into(), Value::String((*ctype).into()));
         // Provide the embedding explicitly so insertion needs no embed model.
         p.insert("embedding".into(), Value::Vector(vec![0.0f32; embed_dim()]));
-        kb.create_node("Chunk", &p).await.unwrap();
+        let chunk = kb.create_node("Chunk", &p).await.unwrap();
+        kb.create_edge("HAS_CHUNK", artifact, chunk, &HashMap::new())
+            .await
+            .unwrap();
     }
 
     // BM25-only recall (empty qvec, bm25 weight 1.0) for the PDF text.
@@ -265,6 +270,72 @@ async fn recall_includes_block_and_page_chunk_types() {
             .iter()
             .any(|r| r.content.contains("shareholder report")),
         "page chunk_type must be recalled"
+    );
+
+    kb.shutdown().await.unwrap();
+}
+
+/// Artifact ownership, rather than a fixed `chunk_type` list, determines
+/// whether ingest-produced chunks participate in general recall.
+#[tokio::test]
+async fn recall_includes_artifact_owned_chunk_types() {
+    let kb = test_kb().await;
+
+    let mut artifact_props = HashMap::new();
+    artifact_props.insert("artifact_id".into(), Value::String("web-artifact".into()));
+    artifact_props.insert("kind".into(), Value::String("html".into()));
+    let artifact = kb.create_node("Artifact", &artifact_props).await.unwrap();
+
+    for (i, (ctype, text)) in [
+        ("text", "fault tolerant quantum computing milestone"),
+        ("heading", "quantum error correction advances"),
+        ("future_chunk_kind", "novel qubit stabilization technique"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut props = HashMap::new();
+        props.insert("chunk_id".into(), Value::String(format!("artifact-{i}")));
+        props.insert("text".into(), Value::String((*text).into()));
+        props.insert("chunk_type".into(), Value::String((*ctype).into()));
+        props.insert("embedding".into(), Value::Vector(vec![0.0; embed_dim()]));
+        let chunk = kb.create_node("Chunk", &props).await.unwrap();
+        kb.create_edge("HAS_CHUNK", artifact, chunk, &HashMap::new())
+            .await
+            .unwrap();
+    }
+
+    let mut orphan_props = HashMap::new();
+    orphan_props.insert("chunk_id".into(), Value::String("orphan".into()));
+    orphan_props.insert(
+        "text".into(),
+        Value::String("isolated aardvark taxonomy".into()),
+    );
+    orphan_props.insert("chunk_type".into(), Value::String("text".into()));
+    orphan_props.insert("embedding".into(), Value::Vector(vec![0.0; embed_dim()]));
+    let orphan = kb.create_node("Chunk", &orphan_props).await.unwrap();
+
+    for (query, expected) in [
+        ("fault tolerant quantum computing", "fault tolerant"),
+        ("quantum error correction", "error correction"),
+        ("novel qubit stabilization", "qubit stabilization"),
+    ] {
+        let rows = kb
+            .recall_chunk_and_entity_scoped(&[], query, &[], 10, 0.0, 1.0, None)
+            .await;
+        assert!(
+            rows.iter().any(|row| row.content.contains(expected)),
+            "artifact-owned chunk must be recalled for {query:?}, got: {:?}",
+            rows.iter().map(|row| &row.content).collect::<Vec<_>>()
+        );
+    }
+
+    let orphan_rows = kb
+        .recall_chunk_and_entity_scoped(&[], "isolated aardvark taxonomy", &[], 10, 0.0, 1.0, None)
+        .await;
+    assert!(
+        orphan_rows.iter().all(|row| row.node_id != orphan),
+        "an orphan chunk must not be recalled solely by chunk_type"
     );
 
     kb.shutdown().await.unwrap();
