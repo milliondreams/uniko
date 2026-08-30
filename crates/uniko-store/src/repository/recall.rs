@@ -716,10 +716,14 @@ impl KnowledgeBase {
     /// chunks and Artifact-owned chunks) plus the entity-scoped fan-out,
     /// max-merged per node id.
     ///
+    /// `session` and `observation` each receive `per_variant_limit` candidates;
+    /// the Artifact-owned arm receives twice that limit, preserving the former
+    /// combined `block` + `page` budget without enumerating Artifact types.
+    ///
     /// Infallible by contract: individual sub-queries that fail are logged
     /// at debug and skipped (the cascade is best-effort). The structural
     /// `similar_to` source/query/fusion lists are interpolated; all values
-    /// (`chunk_types`, `ename`, vectors, text, limit) are bound.
+    /// (`chunk_type`, `ename`, vectors, text, limit) are bound.
     ///
     /// Returns the merged hits including empty-content rows — the caller
     /// applies its own empty-content filter and ranking.
@@ -760,27 +764,49 @@ impl KnowledgeBase {
             ("m.text", "$qtxt", String::new(), false, true)
         };
 
+        // Preserve the historical per-type conversational budgets: a dense
+        // Artifact must not consume the slots reserved for session or
+        // observation chunks before RRF fusion.
+        for chunk_type in ["session", "observation"] {
+            let cypher = format!(
+                "MATCH (m:Chunk) WHERE m.chunk_type = $ctype{allow_and} \
+                 RETURN id(m) AS nid, labels(m)[0] AS lbl, \
+                        m.text AS content, \
+                        similar_to({sources}, {queries}{fusion}) AS score \
+                 ORDER BY score DESC LIMIT $lim"
+            );
+            let mut builder = session
+                .query_with(&cypher)
+                .param("ctype", chunk_type)
+                .param("lim", per_variant_limit);
+            if let Some(v) = allow_param(allow) {
+                builder = builder.param("allow", v);
+            }
+            if needs_qvec {
+                builder = builder.param("qvec", Value::Vector(qvec.to_vec()));
+            }
+            if needs_qtxt {
+                builder = builder.param("qtxt", qtxt);
+            }
+            match builder.fetch_all().await {
+                Ok(result) => merge_scored_rows(result.rows(), &mut scored),
+                Err(e) => tracing::debug!(chunk_type, error = %e, "hybrid similar_to failed"),
+            }
+        }
+
+        // The former block/page arms each had their own limit. Artifact
+        // ownership replaces both closed type checks, so retain their combined
+        // 2 × limit as one open-ended Artifact candidate budget.
+        let artifact_limit = per_variant_limit.saturating_mul(2);
         let cypher = format!(
             "MATCH (m:Chunk) \
-             WHERE (m.chunk_type IN $chunk_types \
-                    OR (m)<-[:HAS_CHUNK]-(:Artifact)){allow_and} \
+             WHERE (m)<-[:HAS_CHUNK]-(:Artifact){allow_and} \
              RETURN id(m) AS nid, labels(m)[0] AS lbl, \
                     m.text AS content, \
                     similar_to({sources}, {queries}{fusion}) AS score \
              ORDER BY score DESC LIMIT $lim"
         );
-        let mut builder = session
-            .query_with(&cypher)
-            .param(
-                "chunk_types",
-                Value::List(
-                    ["session", "observation"]
-                        .into_iter()
-                        .map(|s| Value::String(s.to_owned()))
-                        .collect(),
-                ),
-            )
-            .param("lim", per_variant_limit);
+        let mut builder = session.query_with(&cypher).param("lim", artifact_limit);
         if let Some(v) = allow_param(allow) {
             builder = builder.param("allow", v);
         }
@@ -792,7 +818,7 @@ impl KnowledgeBase {
         }
         match builder.fetch_all().await {
             Ok(result) => merge_scored_rows(result.rows(), &mut scored),
-            Err(e) => tracing::debug!(error = %e, "hybrid similar_to failed"),
+            Err(e) => tracing::debug!(error = %e, "Artifact hybrid similar_to failed"),
         }
         let chunk_ms = t_start.elapsed().as_millis() as u64;
 

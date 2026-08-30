@@ -340,3 +340,73 @@ async fn recall_includes_artifact_owned_chunk_types() {
 
     kb.shutdown().await.unwrap();
 }
+
+/// Artifact candidates must have their own budget so a dense document cannot
+/// evict every conversational chunk before cross-variant RRF fusion.
+#[tokio::test]
+async fn recall_preserves_conversational_candidate_budget_with_artifacts() {
+    let kb = test_kb().await;
+
+    let mut artifact_props = HashMap::new();
+    artifact_props.insert("artifact_id".into(), Value::String("large-artifact".into()));
+    artifact_props.insert("kind".into(), Value::String("pdf".into()));
+    let artifact = kb.create_node("Artifact", &artifact_props).await.unwrap();
+
+    for i in 0..6 {
+        let mut props = HashMap::new();
+        props.insert(
+            "chunk_id".into(),
+            Value::String(format!("dense-artifact-{i}")),
+        );
+        props.insert(
+            "text".into(),
+            Value::String("quantum telemetry calibration target".into()),
+        );
+        props.insert("chunk_type".into(), Value::String("page".into()));
+        props.insert("embedding".into(), Value::Vector(vec![0.0; embed_dim()]));
+        let chunk = kb.create_node("Chunk", &props).await.unwrap();
+        kb.create_edge("HAS_CHUNK", artifact, chunk, &HashMap::new())
+            .await
+            .unwrap();
+    }
+
+    let mut conversational_ids = Vec::new();
+    for (i, ctype) in ["session", "observation"].into_iter().enumerate() {
+        let mut props = HashMap::new();
+        props.insert(
+            "chunk_id".into(),
+            Value::String(format!("conversation-{i}")),
+        );
+        props.insert(
+            "text".into(),
+            Value::String(
+                "quantum telemetry calibration target with additional conversational context"
+                    .into(),
+            ),
+        );
+        props.insert("chunk_type".into(), Value::String(ctype.into()));
+        props.insert("embedding".into(), Value::Vector(vec![0.0; embed_dim()]));
+        conversational_ids.push(kb.create_node("Chunk", &props).await.unwrap());
+    }
+
+    let rows = kb
+        .recall_chunk_and_entity_scoped(
+            &[],
+            "quantum telemetry calibration target",
+            &[],
+            2,
+            0.0,
+            1.0,
+            None,
+        )
+        .await;
+    for node_id in conversational_ids {
+        assert!(
+            rows.iter().any(|row| row.node_id == node_id),
+            "artifact candidates must not evict conversational chunk {node_id}; got: {:?}",
+            rows.iter().map(|row| row.node_id).collect::<Vec<_>>()
+        );
+    }
+
+    kb.shutdown().await.unwrap();
+}
