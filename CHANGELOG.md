@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actually lives under rather than a throwaway UUID that resolves to nothing.
   Both the text and PDF ingest paths were affected.
 
+- **A session that only ingested documents could never recall them.**
+  `Session::ingest` never created the `:Session` row — only `observe` did, via
+  `ensure_session_and_sender` — so `link_artifact_context` found no session to
+  attach to and silently skipped the `ATTACHED_TO` edge. Session-scoped
+  recall's `Artifact -ATTACHED_TO-> Session` arm was correct all along; the
+  edge was simply never written. Ingest now materializes the session first.
+
 - **Phase 1 of the recall cascade contributed nothing on any facade-ingested
   knowledge base.** `phase1_strategy` defaults to `"boost"`, which scores
   session-level chunks reached via

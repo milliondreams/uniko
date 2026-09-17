@@ -99,6 +99,17 @@ pub async fn ingest_source(
     let mime = resolve_mime(src.mime.as_ref(), sniff_bytes, sniff_path, is_text);
     let modality = modality_for_mime(&mime);
 
+    // Materialize the Session before ingesting into it. Only `observe`
+    // created Session rows (via `ensure_session_and_sender`), so a session
+    // that *only* ingests documents had no node — and the `ATTACHED_TO`
+    // link is best-effort, so it was silently skipped, leaving the artifact
+    // unreachable from session-scoped recall. The recall query arm for
+    // `Artifact -ATTACHED_TO-> Session` was correct all along; the edge was
+    // simply never written.
+    if let Some(session_id) = context.session_id.as_deref() {
+        super::session::get_or_create_session(kb, session_id, &chrono::Utc::now()).await?;
+    }
+
     match modality {
         Modality::Pdf => {
             let input = match src.data {
