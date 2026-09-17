@@ -17,6 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`uniko.IdConflictError` in Python), which is deliberately not the retriable
   `Conflict` the ingest retry loop spins on.
 
+- **Identical bytes ingested under two caller-chosen ids collapsed onto one
+  artifact, and the second id resolved to nothing.** `ingest_artifact` matched
+  on the content hash *before* the caller's `artifact_id`, returned the first
+  artifact's node while echoing back the second id, and skipped
+  `link_artifact_context` — so the second session got no `ATTACHED_TO` edge and
+  recalled nothing from a document it had just ingested. Deduplication was also
+  store-global, so this crossed agents, not just sessions.
+
+  A caller-supplied id is now the artifact's identity: two ids over identical
+  bytes are two artifacts, sharing one stored copy of the content on
+  `:ArtifactContent` where the data model always said deduplication lived, and
+  reusing one id for different bytes raises `UnikoError::IdConflict`. An
+  **auto-generated** id expresses no identity, so identical bytes still dedup
+  onto the existing artifact — re-running a corpus load does not duplicate
+  every document. Either way a dedup hit now wires the *current* call's
+  session/message provenance before returning, and reports the id the artifact
+  actually lives under rather than a throwaway UUID that resolves to nothing.
+  Both the text and PDF ingest paths were affected.
+
 - **Phase 1 of the recall cascade contributed nothing on any facade-ingested
   knowledge base.** `phase1_strategy` defaults to `"boost"`, which scores
   session-level chunks reached via

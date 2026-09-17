@@ -48,6 +48,7 @@ async fn tiered_ingest_builds_doc_ir_graph() {
 
     let opts = PdfIngestOptions {
         artifact_id: "pdf-tiered-1".into(),
+        caller_supplied_id: true,
         extractor: None, // ignored on the tiered path
         source_path: Some("tests/fixtures/dummy.pdf".into()),
         session_id: None,

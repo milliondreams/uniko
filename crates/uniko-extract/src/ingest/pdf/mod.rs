@@ -92,21 +92,49 @@ pub async fn ingest_pdf(
         ));
     }
 
-    // 2. Hash + dedup (by hash, then by artifact_id).
+    // 2. Identity — the same split as `ingest_artifact`: a caller-supplied
+    //    id is the identity (idempotent on identical bytes, rejected on
+    //    different bytes), an auto-generated one dedups on content. A
+    //    dedup hit still wires this call's session/message provenance.
     let hash = KnowledgeBase::sha256_hex(&bytes);
-    for (key, value) in [("hash", hash.as_str()), ("artifact_id", &opts.artifact_id)] {
-        if let Some((existing_id, _)) = kb.get_node_by_ext_id("Artifact", key, value).await? {
-            return Ok(PdfIngestResult {
-                artifact_node_id: existing_id,
-                artifact_id: opts.artifact_id.clone(),
-                chunk_node_ids: Vec::new(),
-                page_count: 0,
-                was_deduplicated: true,
-                extraction_failure: None,
-                page_node_ids: Vec::new(),
-                block_node_ids: Vec::new(),
-            });
+    let existing = if opts.caller_supplied_id {
+        let found = kb
+            .get_node_by_ext_id("Artifact", "artifact_id", &opts.artifact_id)
+            .await?;
+        if let Some((_, ref props)) = found {
+            let stored = match props.get("hash") {
+                Some(uniko_store::Value::String(s)) => s.as_str(),
+                _ => "",
+            };
+            if stored != hash {
+                return Err(uniko_store::UnikoError::id_conflict(
+                    "Artifact",
+                    "artifact_id",
+                    &opts.artifact_id,
+                ));
+            }
         }
+        found
+    } else {
+        kb.get_node_by_ext_id("Artifact", "hash", &hash).await?
+    };
+
+    if let Some((existing_id, existing_props)) = existing {
+        let existing_ext_id = match existing_props.get("artifact_id") {
+            Some(uniko_store::Value::String(s)) => s.clone(),
+            _ => opts.artifact_id.clone(),
+        };
+        link_pdf_context(kb, existing_id, &opts).await?;
+        return Ok(PdfIngestResult {
+            artifact_node_id: existing_id,
+            artifact_id: existing_ext_id,
+            chunk_node_ids: Vec::new(),
+            page_count: 0,
+            was_deduplicated: true,
+            extraction_failure: None,
+            page_node_ids: Vec::new(),
+            block_node_ids: Vec::new(),
+        });
     }
 
     let size = bytes.len() as i64;
@@ -202,21 +230,7 @@ pub async fn ingest_pdf(
 
     // 5b. Conversational provenance: link the PDF to the Session it was
     //     shared in and/or the Message it was attached to, when resolvable.
-    for (field, label, id_field) in [
-        (opts.session_id.as_deref(), "Session", "session_id"),
-        (
-            opts.triggered_by_message_id.as_deref(),
-            "Message",
-            "message_id",
-        ),
-    ] {
-        if let Some(ext_id) = field
-            && let Some((target_nid, _)) = kb.get_node_by_ext_id(label, id_field, ext_id).await?
-        {
-            kb.create_edge("ATTACHED_TO", artifact_nid, target_nid, &HashMap::new())
-                .await?;
-        }
-    }
+    link_pdf_context(kb, artifact_nid, &opts).await?;
 
     // 6. HAS_CONTENT edge.
     let mut edge_props: HashMap<String, Value> = HashMap::new();
@@ -304,4 +318,35 @@ async fn legacy_chunks(
         return Ok(Vec::new());
     }
     create_chunks(kb, artifact_id, artifact_nid, &chunks, "Artifact").await
+}
+
+/// Link a PDF artifact to the Session it was shared in and/or the Message
+/// it was attached to, when those resolve.
+///
+/// Shared by the create path and the dedup path: a caller that ingests a
+/// PDF already in the graph still gets ITS session wired to the artifact,
+/// otherwise it could not recall a document it had just ingested.
+/// Best-effort per reference — an unresolvable id is skipped, matching
+/// `link_artifact_context`.
+async fn link_pdf_context(
+    kb: &KnowledgeBase,
+    artifact_nid: NodeId,
+    opts: &PdfIngestOptions,
+) -> uniko_store::Result<()> {
+    for (field, label, id_field) in [
+        (opts.session_id.as_deref(), "Session", "session_id"),
+        (
+            opts.triggered_by_message_id.as_deref(),
+            "Message",
+            "message_id",
+        ),
+    ] {
+        if let Some(ext_id) = field
+            && let Some((target_nid, _)) = kb.get_node_by_ext_id(label, id_field, ext_id).await?
+        {
+            kb.create_edge("ATTACHED_TO", artifact_nid, target_nid, &HashMap::new())
+                .await?;
+        }
+    }
+    Ok(())
 }

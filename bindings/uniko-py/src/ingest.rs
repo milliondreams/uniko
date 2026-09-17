@@ -75,6 +75,14 @@ impl PyIngestSource {
     }
 
     /// Set an explicit artifact id.
+    ///
+    /// The id — not the content hash — is this artifact's identity, and is
+    /// what `agent.data().artifact(..)` fetches it back by. Re-ingesting an
+    /// id with identical content is idempotent; reusing it for different
+    /// content is rejected as an id conflict. Two ids over identical bytes
+    /// give two artifacts sharing one stored copy of the content, so a
+    /// second session that ingests the same document under its own id keeps
+    /// its own handle on it.
     fn with_id<'py>(slf: PyRef<'py, Self>, id: String) -> PyRef<'py, Self> {
         slf.map(|s| s.with_id(id));
         slf

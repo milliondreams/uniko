@@ -108,8 +108,10 @@ pub async fn ingest_source(
                     return Err(UnikoError::Unsupported("text payload typed as PDF".into()));
                 }
             };
+            let caller_supplied_id = src.id.is_some();
             let options = PdfIngestOptions {
                 artifact_id: src.id.unwrap_or_else(uniko_store::id::new_id),
+                caller_supplied_id,
                 extractor: None,
                 source_path: src.path,
                 session_id: context.session_id,
@@ -134,8 +136,10 @@ pub async fn ingest_source(
             metadata
                 .entry("content_type".to_string())
                 .or_insert_with(|| JsonValue::String(chunker_hint(modality).to_string()));
+            let caller_supplied_id = src.id.is_some();
             let artifact = IngestArtifact {
                 artifact_id: src.id.unwrap_or_else(uniko_store::id::new_id),
+                caller_supplied_id,
                 content,
                 kind: "document".to_string(),
                 path: src.path,

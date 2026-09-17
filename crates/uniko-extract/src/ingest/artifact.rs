@@ -1,4 +1,4 @@
-//! Artifact ingest: hash, dedup, create Artifact node, chunk, and link.
+//! Artifact ingest: identity, content dedup, Artifact node, chunk, link.
 
 use std::collections::HashMap;
 
@@ -28,14 +28,26 @@ pub struct ArtifactIngestResult {
 
 /// Ingest an artifact into the knowledge graph.
 ///
-/// Computes a SHA-256 content hash for deduplication.  If the hash
-/// already exists, returns the existing artifact without re-chunking.
+/// Identity depends on whether the caller named the artifact. With a
+/// caller-supplied `artifact_id`, that id is the identity: identical bytes
+/// under it are an idempotent replay, different bytes under it are an
+/// [`UnikoError::IdConflict`](uniko_store::UnikoError::IdConflict), and a
+/// second id over the same bytes is a second artifact. With an
+/// auto-generated id, identical bytes dedup onto the existing artifact.
+///
+/// Bytes are stored once either way — the blob PUT and
+/// `merge_artifact_content` are keyed on the SHA-256, so deduplication
+/// lives on `:ArtifactContent`. A dedup hit still wires this call's
+/// session/message provenance before returning.
+///
 /// Otherwise creates the Artifact node, selects a chunker based on
 /// content type, and creates Chunk nodes with HAS_CHUNK edges.
 ///
 /// # Errors
 ///
-/// Returns a storage error if any graph operation fails.
+/// Returns [`UnikoError::IdConflict`](uniko_store::UnikoError::IdConflict)
+/// when a caller-supplied id is reused for different content, or a storage
+/// error if any graph operation fails.
 pub async fn ingest_artifact(
     kb: &KnowledgeBase,
     artifact: &IngestArtifact,
@@ -43,24 +55,65 @@ pub async fn ingest_artifact(
     // 1. Compute content hash.
     let hash = hex::encode(Sha256::digest(artifact.content.as_bytes()));
 
-    // 2. Dedup: check if an artifact with this hash already exists.
-    if let Some((existing_id, _)) = kb.get_node_by_ext_id("Artifact", "hash", &hash).await? {
-        return Ok(ArtifactIngestResult {
-            artifact_node_id: existing_id,
-            artifact_id: artifact.artifact_id.clone(),
-            chunk_node_ids: Vec::new(),
-            was_deduplicated: true,
-        });
-    }
-
-    // Also check by artifact_id for idempotency.
-    if let Some((existing_id, _)) = kb
-        .get_node_by_ext_id("Artifact", "artifact_id", &artifact.artifact_id)
-        .await?
+    // 2. Identity. What counts as "already have this" depends on whether
+    //    the caller named the artifact.
+    //
+    //    A caller-supplied `artifact_id` IS the identity: it is what
+    //    `agent.data().artifact(..)` fetches back and what a session scopes
+    //    to. Re-ingesting it with identical bytes is idempotent;
+    //    re-ingesting it with different bytes is a caller bug and is
+    //    rejected rather than silently keeping the old content. Two ids
+    //    over identical bytes are two artifacts — they share one stored
+    //    copy, because the blob PUT and `merge_artifact_content` below are
+    //    keyed on `hash`, so dedup lives on `:ArtifactContent` exactly as
+    //    the data model documents.
+    //
+    //    An auto-generated id expresses no identity, so identical bytes
+    //    dedup onto the existing artifact. That is what keeps re-running a
+    //    corpus load from duplicating every document.
+    //
+    //    Either way, a dedup hit still wires THIS call's context
+    //    (`link_artifact_context`). Returning early without it was its own
+    //    bug: the second session got no `ATTACHED_TO` edge and could not
+    //    recall a document it had just ingested.
+    if artifact.caller_supplied_id {
+        if let Some((existing_id, existing_props)) = kb
+            .get_node_by_ext_id("Artifact", "artifact_id", &artifact.artifact_id)
+            .await?
+        {
+            let stored = match existing_props.get("hash") {
+                Some(Value::String(s)) => s.as_str(),
+                _ => "",
+            };
+            if stored != hash {
+                return Err(uniko_store::UnikoError::id_conflict(
+                    "Artifact",
+                    "artifact_id",
+                    &artifact.artifact_id,
+                ));
+            }
+            link_artifact_context(kb, existing_id, artifact).await?;
+            return Ok(ArtifactIngestResult {
+                artifact_node_id: existing_id,
+                artifact_id: artifact.artifact_id.clone(),
+                chunk_node_ids: Vec::new(),
+                was_deduplicated: true,
+            });
+        }
+    } else if let Some((existing_id, existing_props)) =
+        kb.get_node_by_ext_id("Artifact", "hash", &hash).await?
     {
+        let existing_ext_id = match existing_props.get("artifact_id") {
+            Some(Value::String(s)) => s.clone(),
+            _ => artifact.artifact_id.clone(),
+        };
+        link_artifact_context(kb, existing_id, artifact).await?;
         return Ok(ArtifactIngestResult {
             artifact_node_id: existing_id,
-            artifact_id: artifact.artifact_id.clone(),
+            // Report the id the artifact actually lives under, not the
+            // throwaway UUID this call minted — echoing back an id that
+            // resolves to nothing is what made this unfetchable before.
+            artifact_id: existing_ext_id,
             chunk_node_ids: Vec::new(),
             was_deduplicated: true,
         });

@@ -31,6 +31,10 @@ pub struct PdfIngestOptions {
     /// the graph carries an `artifact_id` ext-id; v1 does not auto-mint
     /// IDs (the workspace has no `uuid` dep yet).
     pub artifact_id: String,
+    /// Whether `artifact_id` is the caller's own stable id rather than an
+    /// auto-generated UUID. Decides identity on ingest — see
+    /// [`IngestArtifact::caller_supplied_id`](uniko_pipes::types::IngestArtifact::caller_supplied_id).
+    pub caller_supplied_id: bool,
     /// Optional override for the text-extraction backend.
     pub extractor: Option<Arc<dyn PdfTextExtractor>>,
     /// Optional original filesystem path / URL for the

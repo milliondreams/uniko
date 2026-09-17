@@ -39,6 +39,18 @@ pub struct IngestMessage {
 pub struct IngestArtifact {
     /// Caller-provided or auto-generated UUID v7.
     pub artifact_id: String,
+    /// Whether `artifact_id` is the caller's own stable id rather than an
+    /// auto-generated UUID.
+    ///
+    /// This is what decides identity on ingest. A caller-chosen id *is* the
+    /// artifact's identity: two ids over identical bytes are two artifacts
+    /// (sharing one stored copy of the content), and reusing one id for
+    /// different bytes is an error. An auto-generated id means the caller
+    /// expressed no identity, so identical bytes dedup onto the existing
+    /// artifact — which is what keeps re-running a corpus load from
+    /// duplicating every document.
+    #[serde(default)]
+    pub caller_supplied_id: bool,
     /// Text content (empty for binary artifacts).
     pub content: String,
     /// Artifact kind: `"file"`, `"document"`, `"url"`, `"snippet"`, etc.
@@ -167,6 +179,14 @@ impl IngestSource {
     }
 
     /// Set an explicit artifact id.
+    ///
+    /// The id — not the content hash — is this artifact's identity, and is
+    /// what `agent.data().artifact(..)` fetches it back by. Re-ingesting an
+    /// id with identical content is idempotent; reusing it for different
+    /// content is rejected as an id conflict. Two ids over identical bytes
+    /// give two artifacts sharing one stored copy of the content, so a
+    /// second session that ingests the same document under its own id keeps
+    /// its own handle on it.
     #[must_use]
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());

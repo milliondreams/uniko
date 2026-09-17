@@ -105,6 +105,9 @@ impl uniko_pipes::Step for IngestStep {
                 };
                 let options = pdf::PdfIngestOptions {
                     artifact_id: task.artifact_id,
+                    // `IngestPdf.artifact_id` is non-optional and documented
+                    // caller-provided, so the id is always the identity here.
+                    caller_supplied_id: true,
                     extractor: None,
                     source_path: task.source_path,
                     // Streamed PDFs aren't session/message-linked.
