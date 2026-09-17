@@ -15,6 +15,22 @@ CLI carries only what changes per invocation: data file, output path,
 conversation/category filters, KB reuse.  All model selection lives
 in the JSON.
 
+## Datasets
+
+Not in the repo — `data/` is gitignored (KB stores are GB-scale, and the
+source corpora are third-party). Fetch them before a run:
+
+| File | Source |
+|---|---|
+| `data/locomo10.json` | `snap-research/locomo`, `data/locomo10.json` on `main`. 2,805,274 bytes, sha256 `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4`. 10 conversations / 5,882 turns / 1,986 questions — the figures the README quotes. From *Evaluating Very Long-Term Conversational Memory of LLM Agents* (Maharana et al., Snap Research). |
+| `data/longmemeval_s_cleaned.json` | LongMemEval `_s` split. Provenance not yet recorded here — fill in when next fetched. |
+
+The LoCoMo entry was reconstructed by matching `src/data.rs`'s expected
+filename and schema against the published dataset, then confirming the
+conversation / turn / question counts; it was not recorded anywhere when
+the benchmark was first run. Verify the checksum rather than assuming a
+re-download matches.
+
 ## Shipped profiles
 
 | File | Generator | Judge | Embedder | Notes |
