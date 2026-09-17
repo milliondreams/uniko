@@ -54,6 +54,19 @@ pub enum UnikoError {
     #[error("conflict (retriable): {0}")]
     Conflict(String),
 
+    /// A caller reused a stable external id for different content: the id
+    /// already names a record whose content does not match what was just
+    /// submitted.
+    ///
+    /// Deliberately **not** [`UnikoError::Conflict`], which
+    /// [`UnikoError::is_retriable`] reports as retriable and the ingest
+    /// retry loop would spin on. Replaying the *same* content under the
+    /// same id stays idempotent and returns the original record; only a
+    /// genuine content disagreement raises this, and re-running the call
+    /// unchanged will raise it again.
+    #[error("id conflict: {0}")]
+    IdConflict(String),
+
     /// Unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),
@@ -71,6 +84,22 @@ impl UnikoError {
     #[must_use]
     pub fn is_retriable(&self) -> bool {
         matches!(self, UnikoError::Conflict(_))
+    }
+
+    /// Build the [`UnikoError::IdConflict`] raised when `id_field = ext_id`
+    /// already names a `label` record holding different content.
+    ///
+    /// Centralised so every ingest path words it the same way, and so the
+    /// message never embeds the content itself — an id conflict is often
+    /// hit with large documents, and the two bodies belong in the caller's
+    /// logs, not in an error string.
+    #[must_use]
+    pub fn id_conflict(label: &str, id_field: &str, ext_id: &str) -> Self {
+        UnikoError::IdConflict(format!(
+            "{label} {id_field} '{ext_id}' already exists with different content; \
+             re-ingesting an id is idempotent only for identical content — \
+             use a new id, or delete the existing record first"
+        ))
     }
 }
 

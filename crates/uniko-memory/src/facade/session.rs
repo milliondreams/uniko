@@ -459,8 +459,12 @@ impl Turn {
     /// Set an explicit message id for idempotent ingest.
     ///
     /// Ingest is idempotent on `message_id`: re-feeding a turn with the
-    /// same id is a no-op rather than a duplicate. When unset, a fresh
-    /// UUID v7 is generated per turn.
+    /// same id **and the same content** is a no-op rather than a
+    /// duplicate. Reusing an id for *different* content is rejected with
+    /// [`UnikoError::IdConflict`](uniko_store::UnikoError::IdConflict) —
+    /// the id already names a different turn, and accepting it silently
+    /// would drop the new one. When unset, a fresh UUID v7 is generated
+    /// per turn.
     #[must_use]
     pub fn id(mut self, message_id: impl Into<String>) -> Self {
         self.message_id = Some(message_id.into());

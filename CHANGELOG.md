@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A reused `message_id` silently kept the original turn.** `observe` treated
+  "this id exists" as "this is a replay" without comparing content, so a second
+  call under the same id returned the first record and discarded the new turn —
+  with no error. Identical content stays idempotent; a genuine content
+  disagreement now raises the new non-retriable `UnikoError::IdConflict`
+  (`uniko.IdConflictError` in Python), which is deliberately not the retriable
+  `Conflict` the ingest retry loop spins on.
+
 - **Phase 1 of the recall cascade contributed nothing on any facade-ingested
   knowledge base.** `phase1_strategy` defaults to `"boost"`, which scores
   session-level chunks reached via

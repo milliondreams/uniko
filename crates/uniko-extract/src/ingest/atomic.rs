@@ -103,11 +103,28 @@ pub async fn ingest_message_atomic(
 ) -> uniko_store::Result<AtomicIngestResult> {
     let total_start = std::time::Instant::now();
 
-    // 1. Idempotency.
-    if let Some((existing_id, _)) = kb
+    // 1. Idempotency — but only for identical content. `message_id` is a
+    //    caller-chosen stable id; reusing it for a different turn is a
+    //    caller bug, and silently returning the original would leave the
+    //    caller believing the new text was recorded. The existing node's
+    //    properties come back from the same lookup, so the comparison is
+    //    free. `IdConflict` is non-retriable by construction — the retry
+    //    loop below must not spin on it.
+    if let Some((existing_id, existing_props)) = kb
         .get_node_by_ext_id("Message", "message_id", &msg.message_id)
         .await?
     {
+        let stored = match existing_props.get("content") {
+            Some(uniko_store::Value::String(s)) => s.as_str(),
+            _ => "",
+        };
+        if stored != msg.content {
+            return Err(uniko_store::UnikoError::id_conflict(
+                "Message",
+                "message_id",
+                &msg.message_id,
+            ));
+        }
         return Ok(AtomicIngestResult {
             message_node_id: existing_id,
             chunk_node_ids: Vec::new(),
