@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recall's `Artifact -ATTACHED_TO-> Session` arm was correct all along; the
   edge was simply never written. Ingest now materializes the session first.
 
+- **A crash before a new store's first flush left it permanently unopenable.**
+  uni-db refuses to open a store with WAL segments and no snapshot manifest,
+  and the manifest is written only by a flush — so every new store had a
+  window (up to `auto_flush_interval`, 5s) in which a crash stranded
+  committed, fsynced writes. Opening a persistent knowledge base now publishes
+  a baseline snapshot before any caller write can reach it. Tracked upstream
+  as `rustic-ai/uni-db#275`.
+
 - **Phase 1 of the recall cascade contributed nothing on any facade-ingested
   knowledge base.** `phase1_strategy` defaults to `"boost"`, which scores
   session-level chunks reached via
