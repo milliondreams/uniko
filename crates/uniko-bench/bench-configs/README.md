@@ -36,6 +36,7 @@ re-download matches.
 | File | Generator | Judge | Embedder | Notes |
 |---|---|---|---|---|
 | `locomo-bge-openai.json` | gpt-4o-mini | gpt-4o-mini | bge-small (384d ONNX-CUDA) | Canonical baseline.  Last measured: 0.849 judge, $0.083/conv. |
+| `locomo-bgesmall-rerank-retrieval.json` | — (retrieval-only) | — | bge-small | The shipped recall defaults (rerank-on + boost + α=0.6, per `3d3afbd`) with no LLM, so a full corpus run needs no API key. The other bge-small retrieval-only profile, `locomo-bgesmall-retrieval.json`, disables the reranker and therefore does **not** measure the default configuration. |
 | `locomo-bge-gemini31.json` | gemini-3.1-flash-lite | gemini-3.1-pro-preview | bge-small | All-Gemini run via Vertex global endpoint.  Requires `VERTEXAI_PROJECT`/`VERTEXAI_LOCATION` env. |
 | `locomo-embeddinggemma-openai.json` | gpt-4o-mini | gpt-4o-mini | embeddinggemma-300m (ONNX-CUDA) | A/B vs bge-small for the embedder swap.  768d vectors — fresh ingest required. |
 
