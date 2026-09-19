@@ -56,6 +56,15 @@ the bge-small→bge-m3 boundary.
 | `locomo-arm-b-bge-m3-sparse` / `lme-arm-b-bge-m3-sparse` | bge-m3 | on | cross-encoder | learned-sparse (B−A) |
 | `locomo-arm-c-bge-m3-colbert` / `lme-arm-c-bge-m3-colbert` | bge-m3 | on | colbert (MaxSim) | late-interaction (C−B) |
 
+!!! note
+    **Arms B and C could not measure anything before 2026-09-19.** Both the
+    learned-sparse and ColBERT query paths failed on every query and were
+    swallowed (`debug` and `warn` respectively), so the channels contributed
+    no candidates while still costing a query each. Any B−A or C−B delta
+    recorded before that date is an artifact, not a measurement. See
+    `website/docs/guides/configuration.md` for the fix, the first real
+    numbers, and how to verify a channel is live.
+
 `reranker.style = "colbert"` re-scores the top candidates in-process by
 ColBERT MaxSim over the `colbert_embedding` column — it registers no
 reranker model (the `model_id` is a label only). Always report

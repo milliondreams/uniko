@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The learned-sparse and ColBERT retrieval channels never ran.** Both
+  produced their query vector through the `embed/hybrid` alias, but a sparse
+  query needs a `SparseEmbeddingModel` and a ColBERT query a
+  `MultiVectorEmbeddingModel` — an `EmbedHybrid` alias supplies neither, so
+  every query failed. The write path tolerates the same mismatch (it falls back
+  to the hybrid model's matching head), so ingest populated `sparse_embedding`
+  and `colbert_embedding` normally and the failure was query-only. Failures were
+  swallowed at `debug` (sparse) and `warn` (ColBERT), leaving an enabled channel
+  indistinguishable from an unhelpful one while still costing a query per
+  variant. Each query path now resolves its own narrow alias — `embed/sparse`
+  (`EmbedSparse`) and `embed/multivector` (`EmbedMultiVector`); documents still
+  get their ColBERT vectors from the single hybrid pass.
+- **Sparse and ColBERT recall projections asked for a column the procedures do
+  not yield.** `uni.sparse.query` and `uni.vector.query` yield `vid / score /
+  rerank_score`, but both call sites wrote `YIELD node, score` and then
+  `labels(node)`, which fails once the call actually executes. This was
+  unreachable until the alias fix above, which is why it had never surfaced.
+  Both now bind the vertex explicitly from the vid.
+
 - **A reused `message_id` silently kept the original turn.** `observe` treated
   "this id exists" as "this is a replay" without comparing content, so a second
   call under the same id returned the first record and discarded the new turn —
