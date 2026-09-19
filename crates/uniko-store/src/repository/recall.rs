@@ -396,8 +396,14 @@ impl KnowledgeBase {
             "null"
         };
         let cypher = format!(
+            // `uni.sparse.query` yields `vid` (Int64), not a bound node — its
+            // yield schema is `fts_query_yields()` = vid / score /
+            // rerank_score. `YIELD node` leaves `node` unbound, so
+            // `labels(node)` fails with "requires a node argument". Bind the
+            // vertex explicitly from the vid instead.
             "CALL uni.sparse.query('{label}', '{sparse_field}', $qtxt, $lim, {filter_arg}, null, {{}}) \
-             YIELD node, score \
+             YIELD vid, score \
+             MATCH (node) WHERE id(node) = vid \
              RETURN id(node) AS nid, labels(node)[0] AS lbl, \
                     coalesce(node.{content_field}, '') AS content, score"
         );
@@ -440,8 +446,10 @@ impl KnowledgeBase {
         }
         let session = self.db.session();
         let cypher = format!(
+            // Same yield-schema mismatch as the sparse channel above.
             "CALL uni.vector.query('{label}', '{colbert_field}', $q, $k, $filter, null, {{}}) \
-             YIELD node, score \
+             YIELD vid, score \
+             MATCH (node) WHERE id(node) = vid \
              RETURN id(node) AS nid, labels(node)[0] AS lbl, \
                     coalesce(node.{content_field}, '') AS content, score"
         );
