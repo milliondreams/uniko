@@ -57,6 +57,23 @@ pub const EMBED_ALIAS: &str = "embed/default";
 /// which the hybrid model does not implement).
 pub const HYBRID_EMBED_ALIAS: &str = "embed/hybrid";
 
+/// Learned-sparse alias (`EmbedSparse` task).
+///
+/// Separate from [`HYBRID_EMBED_ALIAS`] because a sparse *query* resolves the
+/// alias declared on the sparse index and asks the runtime for a
+/// `SparseEmbeddingModel`; an `EmbedHybrid` alias yields a
+/// `HybridEmbeddingModel`, which does not satisfy that lookup.
+pub const SPARSE_EMBED_ALIAS: &str = "embed/sparse";
+
+/// ColBERT multi-vector alias (`EmbedMultiVector` task), used for the
+/// **query** side only.
+///
+/// The document side stays on [`HYBRID_EMBED_ALIAS`] so `colbert_embedding`
+/// is still written in the same forward pass as the dense column. Only the
+/// per-token query embedding needs this alias: it asks the runtime for a
+/// `MultiVectorEmbeddingModel`, which an `EmbedHybrid` handle cannot supply.
+pub const MULTIVECTOR_EMBED_ALIAS: &str = "embed/multivector";
+
 /// NLP ONNX model alias for multi-task inference (NER, POS, dep, CLS).
 pub const NLP_ALIAS: &str = "nlp/default";
 
@@ -148,7 +165,10 @@ pub(crate) fn auto_embed_sparse_index(source_property: &str, config: &UnikoConfi
         .embedding
         .sparse_dimensions
         .expect("auto_embed_sparse_index requires embedding.sparse_dimensions");
-    IndexType::sparse_with_embedding(dimensions, hybrid_embedding_cfg(source_property, config))
+    IndexType::sparse_with_embedding(
+        dimensions,
+        embedding_cfg(SPARSE_EMBED_ALIAS, source_property, config),
+    )
 }
 
 /// Build an exact multi-vector (ColBERT) auto-embed index for MaxSim rerank.

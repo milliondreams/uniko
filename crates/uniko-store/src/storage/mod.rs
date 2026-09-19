@@ -733,6 +733,44 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
         });
     }
 
+    // A dedicated EmbedSparse alias so the sparse index's query path can
+    // resolve a real SparseEmbeddingModel.
+    if config.embedding.sparse_dimensions.is_some() {
+        catalog.push(ModelAliasSpec {
+            alias: crate::schema::SPARSE_EMBED_ALIAS.to_string(),
+            task: ModelTask::EmbedSparse,
+            provider_id: config.embedding.provider.clone(),
+            model_id: config.embedding.model_id.clone(),
+            revision: None,
+            warmup: WarmupPolicy::Lazy,
+            required: false,
+            timeout: None,
+            load_timeout: None,
+            retry: None,
+            options: build_embed_options(&config.embedding, &embed_eps),
+        });
+    }
+
+    // A dedicated EmbedMultiVector alias for the ColBERT *query* vector.
+    // Documents keep riding `embed/hybrid` (one pass with the dense head);
+    // only `embed_multivector_query` needs a MultiVectorEmbeddingModel,
+    // which the hybrid handle cannot be downcast to.
+    if config.embedding.multivector_dimensions.is_some() {
+        catalog.push(ModelAliasSpec {
+            alias: crate::schema::MULTIVECTOR_EMBED_ALIAS.to_string(),
+            task: ModelTask::EmbedMultiVector,
+            provider_id: config.embedding.provider.clone(),
+            model_id: config.embedding.model_id.clone(),
+            revision: None,
+            warmup: WarmupPolicy::Lazy,
+            required: false,
+            timeout: None,
+            load_timeout: None,
+            retry: None,
+            options: build_embed_options(&config.embedding, &embed_eps),
+        });
+    }
+
     // The ColBERT reranker style needs no model alias: it re-scores via
     // the embed alias's multi-vector head (MaxSim) inside recall, so only
     // register a `rerank/default` model for the xervo reranker styles.
