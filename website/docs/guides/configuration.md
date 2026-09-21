@@ -414,28 +414,27 @@ write and query sides need different capabilities:
 |---|---|---|---|
 | `embed/default` | `Embed` | always | dense columns on lone-dense labels (Message, Summary, …) |
 | `embed/hybrid` | `EmbedHybrid` | `sparse_dimensions` **or** `multivector_dimensions` set | the dense + ColBERT columns on `:Chunk` / `:Observation`, written in one forward pass |
-| `embed/sparse` | `EmbedSparse` | `sparse_dimensions` set | the `sparse_embedding` column, and the **query-side** vector for `uni.sparse.query` |
-| `embed/multivector` | `EmbedMultiVector` | `multivector_dimensions` set | the **query-side** per-token vector for ColBERT MaxSim |
+`embed/hybrid` serves **both sides**: the document pass that writes the columns,
+and the query-side vector for `uni.sparse.query` and ColBERT MaxSim.
 
-The two narrow aliases exist because **document and query sides need different
-capabilities from the same weights**. Writing goes through `embed/hybrid` and
-gets all the heads in one pass. Reading asks the runtime for a specific model
-trait — `SparseEmbeddingModel` for a sparse query, `MultiVectorEmbeddingModel`
-for a ColBERT query — and an `EmbedHybrid` alias hands back a
-`HybridEmbeddingModel`, which satisfies neither lookup.
+That is not free historically. A sparse query asks the runtime for a
+`SparseEmbeddingModel` and a ColBERT query for a `MultiVectorEmbeddingModel`,
+while an `EmbedHybrid` alias loads a `HybridEmbeddingModel` — a different trait
+object. Before **uni-xervo 0.18.1** those lookups failed and both channels
+returned nothing on every query while ingest kept populating the columns
+normally, so the failure was query-only and silent
+(`rustic-ai/uni-xervo#49`). 0.18.1 adapts the hybrid handle to each narrow
+facade (`hybrid_adapter::HybridAsSparse` / `HybridAsMultiVector`), so one alias
+now covers everything.
 
-The write path tolerates that mismatch (it falls back to the hybrid model's
-corresponding head), so **the symptom is always query-only**: ingest populates
-the columns, and retrieval silently contributes nothing.
-
-Because the runtime caches by task, each narrow alias is its own load of the
-same weights — see the cost note below.
+If you are pinned below 0.18.1, register separate `EmbedSparse` /
+`EmbedMultiVector` aliases against the same `model_id` — the per-task preset
+tables resolve the bare repo id for each head.
 
 !!! note "Cost"
-    The runtime caches loaded models **by task**, so each alias is a separate
-    load of the same weights. A full hybrid setup registers `embed/default`,
-    `embed/hybrid`, `embed/sparse` and `embed/multivector` — budget memory
-    accordingly before enabling these channels on a constrained host.
+    The runtime caches loaded models **by task**, so `embed/hybrid` is a
+    second load of the same weights alongside `embed/default` — budget roughly
+    2× embedder memory before enabling these channels on a constrained host.
 
     The ColBERT index uses an exact (flat) vector index because it only ever
     re-scores a candidate window, never scans.

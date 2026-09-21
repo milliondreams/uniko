@@ -242,12 +242,12 @@ the schema omits the column entirely when the corresponding dimension is
 
 | Column | Type | Added when | Index |
 |---|---|---|---|
-| `sparse_embedding` | `SparseVector(n)` | `embedding.sparse_dimensions = Some(n)` | sparse auto-embed index on the `embed/sparse` alias |
-| `colbert_embedding` | `List(Vector(d))` | `embedding.multivector_dimensions = Some(d)` | exact (flat) vector index on the `embed/hybrid` alias (writes); ColBERT *queries* embed through `embed/multivector` |
+| `sparse_embedding` | `SparseVector(n)` | `embedding.sparse_dimensions = Some(n)` | sparse auto-embed index on the `embed/hybrid` alias |
+| `colbert_embedding` | `List(Vector(d))` | `embedding.multivector_dimensions = Some(d)` | exact (flat) vector index on the `embed/hybrid` alias |
 
 With either set, the dense `embedding` column on these two labels moves from
-`embed/default` to `embed/hybrid`, so dense and ColBERT are produced by one
-forward pass. Changing either dimension changes the registered schema and the
+`embed/default` to `embed/hybrid`, so dense, sparse and ColBERT are all
+produced by one forward pass. Changing either dimension changes the registered schema and the
 vector widths, so it **requires a fresh ingest** — an existing store cannot be
 reused across the change.
 
