@@ -1,6 +1,6 @@
-//! Isolated repro for a uni-db bug: a process crash before a brand-new
-//! store's first L0→L1 flush leaves it permanently unopenable, even though
-//! the WAL is complete and fsynced.
+//! Regression guard for a uni-db bug, **fixed upstream in 4.0.0**: a process
+//! crash before a brand-new store's first L0→L1 flush left it permanently
+//! unopenable, even though the WAL was complete and fsynced.
 //!
 //! Symptom, on the next `Uni::open`:
 //!
@@ -32,18 +32,22 @@
 //! was deliberately left as it was. A crash cannot be fixed by calling
 //! shutdown.
 //!
+//! **Fixed in uni-db 4.0.0** (`rustic-ai/uni-db#275`). The open path now
+//! separates the two situations that shared this shape, using
+//! `table_names()` as the discriminator the old guard lacked: a store that
+//! never flushed has no L1 data, so nothing can collide with a counter
+//! starting at 0 and the WAL is replayed; a store with *lost* manifests
+//! over existing L1 data still refuses, because replay assigns fresh
+//! versions that would collide silently (`uni-db-4.0.0/src/api/mod.rs:1808`).
+//!
+//! These tests ran as `#[ignore]`d expected-failures until 2026-09-19, when
+//! the 4.0.0 upgrade showed them green. The attribute is gone so they now
+//! guard against regression on every run.
+//!
 //! The two tests isolate the manifest as the trigger: identical crash,
 //! identical writes, and the only difference is whether one flush landed
 //! first. Reproduced 5/5 against uni-db 3.4.0, with the control green 5/5
 //! in the same runs.
-//!
-//! The expected-failure is `#[ignore]`d so the workspace run stays green.
-//! Run it with:
-//!
-//! ```sh
-//! cargo nextest run -p uniko-store --test unidb_wal_no_manifest_repro \
-//!   --run-ignored all
-//! ```
 //!
 //! Depends on `uni_db` alone — no uniko types — so it lifts into the
 //! upstream repo unchanged. Reported downstream as `rustic-ai/uniko#38`.
@@ -116,13 +120,8 @@ fn crash_writer(store: &Path, flush_first: bool) {
     );
 }
 
-/// THE BUG. A crash before the first flush makes every committed write in a
-/// new store permanently unreachable.
-///
-/// Asserts the *correct* behavior, so it fails until uni-db is fixed —
-/// `#[ignore]`d to keep the workspace run green. Drop the attribute once
-/// the upstream fix lands and this is a regression guard.
-#[ignore = "expected failure: open guard refuses a WAL with no snapshot manifest (uni-db 3.4.0)"]
+/// THE BUG (fixed in 4.0.0). A crash before the first flush must not make a
+/// new store's committed writes unreachable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crash_before_first_flush_leaves_store_openable() {
     let dir = tempfile::tempdir().expect("tempdir");

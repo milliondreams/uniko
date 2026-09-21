@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use uniko_store::Value;
-use uniko_store::schema::{EMBED_ALIAS, MULTIVECTOR_EMBED_ALIAS};
+use uniko_store::schema::{EMBED_ALIAS, HYBRID_EMBED_ALIAS};
 use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 
 /// Embed a single text for a **document** (indexing/storage).
@@ -63,13 +63,13 @@ pub async fn embed_multivector_query(
     text: &str,
 ) -> Result<Vec<Vec<f32>>, UnikoError> {
     let prefixed = apply_prefix(text, kb.config().embedding.query_prefix.as_deref());
-    // Query-side ColBERT resolves the dedicated `EmbedMultiVector` alias.
-    // `embed/hybrid` loads a `HybridEmbeddingModel`, which the runtime
-    // cannot hand back as a `MultiVectorEmbeddingModel` — that lookup fails
-    // and the reranker silently keeps RRF order. Documents still get their
-    // `colbert_embedding` from the hybrid pass.
+    // ColBERT rides the hybrid alias. uni-xervo 0.18.1 adapts a
+    // `HybridEmbeddingModel` handle to the narrow `MultiVectorEmbeddingModel`
+    // facade (`hybrid_adapter::HybridAsMultiVector`), so one alias serves both
+    // the document pass and the query. Before 0.18.1 this lookup failed and
+    // the reranker silently kept RRF order — see `rustic-ai/uni-xervo#49`.
     let results = kb
-        .embed_multivector(MULTIVECTOR_EMBED_ALIAS, &[prefixed.as_str()])
+        .embed_multivector(HYBRID_EMBED_ALIAS, &[prefixed.as_str()])
         .await?;
     results
         .into_iter()

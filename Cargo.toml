@@ -68,7 +68,7 @@ uniko-bench = { path = "crates/uniko-bench", version = "0.2.2" }
 # bge-m3 GPU campaign is unaffected. To restore local LLMs, re-add
 # "provider-candle"/"provider-mistralrs" (needs a CUDA-compatible gcc<=15 +
 # matching glibc for a GPU build).
-uni-db = { version = "3", default-features = false, features = [
+uni-db = { version = "4", default-features = false, features = [
     "mimalloc",
     "lance-backend",
     "apoc-core",
@@ -87,14 +87,13 @@ uni-db = { version = "3", default-features = false, features = [
 # `KnowledgeBase::build_shared_runtime` / `open_with_runtime`. uni-db
 # uses uni-xervo internally but does not re-export the type. Version
 # pinned to whatever uni-db currently depends on (see
-# `../uni/Cargo.toml`). uni-db 3.2.0 depends on uni-xervo >=0.17.0, <1.0.0,
-# which still resolves to 0.17.0 (the newest published 0.x).
-uni-xervo = { version = "0.17.0", default-features = false }
+# `../uni/Cargo.toml`). uni-db 4.1.0 depends on uni-xervo >=0.18.1, <1.0.0.
+uni-xervo = { version = "0.18.1", default-features = false }
 # Tiered PDF extraction (native text -> OCR -> doc-VLM). Pulls only traits +
 # the pure-Rust native (lopdf) + rasterizer (hayro) tiers; the inference
 # providers ride on `uni-xervo` itself. Built against the same crates.io
-# uni-xervo 0.17.0, so the `OcrModel` / `ModelRuntime` types unify.
-uni-xervo-pdf = { version = "0.17.0", default-features = false, features = [
+# uni-xervo 0.18.1, so the `OcrModel` / `ModelRuntime` types unify.
+uni-xervo-pdf = { version = "0.18.1", default-features = false, features = [
     "pdf-input",
     "hayro",
 ] }

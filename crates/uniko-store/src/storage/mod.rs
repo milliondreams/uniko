@@ -210,7 +210,6 @@ impl KnowledgeBase {
         }
         let db = builder.build().await?;
         apply_schema(&db, &config).await?;
-        seed_baseline_snapshot(&db).await?;
         if prefetch {
             prefetch_models(&db).await;
         }
@@ -302,7 +301,6 @@ impl KnowledgeBase {
         }
         let db = builder.build().await?;
         apply_schema(&db, &config).await?;
-        seed_baseline_snapshot(&db).await?;
         Self {
             db: Arc::new(db),
             config,
@@ -538,39 +536,6 @@ impl KnowledgeBase {
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-/// Publish one snapshot manifest immediately after opening a persistent
-/// store, before any caller write can reach it.
-///
-/// uni-db refuses to open a store that has WAL segments and no snapshot
-/// manifest (`uni-db-3.4.0/src/api/mod.rs:1786-1793`), and the manifest is
-/// written only by a flush. On a store that has never flushed, the first
-/// one comes from `auto_flush_interval` (default 5s) or
-/// `auto_flush_threshold` (default 10_000 mutations) — so a crash inside
-/// that window leaves committed, fsynced writes in a WAL that can never be
-/// reopened. `shutdown()` cannot help: the whole point of a crash is that
-/// it does not run.
-///
-/// Flushing here collapses that window to nothing. Every later crash finds
-/// a manifest and recovers through the ordinary WAL replay path.
-///
-/// Cheap: at this point only `apply_schema` has written, and on a store
-/// that already has manifests the flush publishes metadata over an L0 that
-/// is empty or nearly so. It runs once per open, not per write.
-///
-/// Tracked upstream as `rustic-ai/uni-db#275`; remove this once the open
-/// guard derives its version counter from the WAL instead of refusing.
-/// `crates/uniko-store/tests/unidb_wal_no_manifest_repro.rs` is the repro.
-///
-/// # Errors
-///
-/// Propagates a flush failure. Failing the open is deliberate: nothing has
-/// been written yet, so nothing is lost, and a store that cannot flush at
-/// open is not one that should start accepting durable writes.
-async fn seed_baseline_snapshot(db: &uni_db::Uni) -> Result<()> {
-    db.flush().await?;
-    Ok(())
-}
-
 /// Sleep before a retry attempt (`attempt == 2` is the first retry), using
 /// capped exponential backoff: `base_backoff * 2^(attempt-2)` clamped to
 /// `max_backoff`. Jitter is omitted deliberately — uniko runs against an
@@ -721,44 +686,6 @@ pub fn embed_catalog(config: &UnikoConfig) -> Vec<ModelAliasSpec> {
         catalog.push(ModelAliasSpec {
             alias: HYBRID_EMBED_ALIAS.to_string(),
             task: ModelTask::EmbedHybrid,
-            provider_id: config.embedding.provider.clone(),
-            model_id: config.embedding.model_id.clone(),
-            revision: None,
-            warmup: WarmupPolicy::Lazy,
-            required: false,
-            timeout: None,
-            load_timeout: None,
-            retry: None,
-            options: build_embed_options(&config.embedding, &embed_eps),
-        });
-    }
-
-    // A dedicated EmbedSparse alias so the sparse index's query path can
-    // resolve a real SparseEmbeddingModel.
-    if config.embedding.sparse_dimensions.is_some() {
-        catalog.push(ModelAliasSpec {
-            alias: crate::schema::SPARSE_EMBED_ALIAS.to_string(),
-            task: ModelTask::EmbedSparse,
-            provider_id: config.embedding.provider.clone(),
-            model_id: config.embedding.model_id.clone(),
-            revision: None,
-            warmup: WarmupPolicy::Lazy,
-            required: false,
-            timeout: None,
-            load_timeout: None,
-            retry: None,
-            options: build_embed_options(&config.embedding, &embed_eps),
-        });
-    }
-
-    // A dedicated EmbedMultiVector alias for the ColBERT *query* vector.
-    // Documents keep riding `embed/hybrid` (one pass with the dense head);
-    // only `embed_multivector_query` needs a MultiVectorEmbeddingModel,
-    // which the hybrid handle cannot be downcast to.
-    if config.embedding.multivector_dimensions.is_some() {
-        catalog.push(ModelAliasSpec {
-            alias: crate::schema::MULTIVECTOR_EMBED_ALIAS.to_string(),
-            task: ModelTask::EmbedMultiVector,
             provider_id: config.embedding.provider.clone(),
             model_id: config.embedding.model_id.clone(),
             revision: None,

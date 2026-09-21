@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **uni-db 3.4.0 → 4.1.0, uni-xervo 0.17.0 → 0.18.1.** No API changes were
+  needed in uniko. The upgrade retires two workarounds:
+    - The baseline snapshot published on every persistent open, which existed
+      because a crash inside the first-flush window left a store that could
+      never be reopened (`rustic-ai/uni-db#275`). 4.0.0 replays the WAL when
+      there is no L1 data to collide with, so the flush is gone and the repro
+      is now a live regression guard rather than an expected failure.
+    - The per-channel narrow embed aliases (see Fixed), retired by uni-xervo
+      0.18.1.
+
+  4.0.0 alone was not adoptable: re-applying an unchanged schema to a populated
+  label was rejected, so no persistent store could be reopened after its first
+  write (`rustic-ai/uni-db#286`). Fixed in 4.1.0; the repro stays as a guard.
+
 ### Fixed
 
 - **The learned-sparse and ColBERT retrieval channels never ran.** Both
@@ -18,15 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `colbert_embedding` normally and the failure was query-only. Failures were
   swallowed at `debug` (sparse) and `warn` (ColBERT), leaving an enabled channel
   indistinguishable from an unhelpful one while still costing a query per
-  variant. Each query path now resolves its own narrow alias — `embed/sparse`
-  (`EmbedSparse`) and `embed/multivector` (`EmbedMultiVector`); documents still
-  get their ColBERT vectors from the single hybrid pass.
+  variant. Fixed upstream in uni-xervo 0.18.1, which adapts a hybrid handle to
+  each narrow facade (`hybrid_adapter::HybridAsSparse` / `HybridAsMultiVector`),
+  so one `embed/hybrid` alias serves the document pass and both query sides.
+  The interim workaround — a dedicated `EmbedSparse` / `EmbedMultiVector` alias
+  per channel, which cost the sparse head its place in the single forward pass —
+  is removed with the 4.1.0 bump.
 - **Sparse and ColBERT recall projections asked for a column the procedures do
   not yield.** `uni.sparse.query` and `uni.vector.query` yield `vid / score /
   rerank_score`, but both call sites wrote `YIELD node, score` and then
   `labels(node)`, which fails once the call actually executes. This was
   unreachable until the alias fix above, which is why it had never surfaced.
-  Both now bind the vertex explicitly from the vid.
+  Both now bind the vertex explicitly from the vid. Still required on uni-query
+  4.1.0 — `fts_query_yields()` is unchanged.
 
 - **A reused `message_id` silently kept the original turn.** `observe` treated
   "this id exists" as "this is a replay" without comparing content, so a second
