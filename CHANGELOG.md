@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **uni-db 3.4.0 → 4.1.0, uni-xervo 0.17.0 → 0.18.1.** No API changes were
+- **uni-db 3.4.0 → 4.1.1, uni-xervo 0.17.0 → 0.18.1.** No API changes were
   needed in uniko. The upgrade retires two workarounds:
     - The baseline snapshot published on every persistent open, which existed
       because a crash inside the first-flush window left a store that could
@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4.0.0 alone was not adoptable: re-applying an unchanged schema to a populated
   label was rejected, so no persistent store could be reopened after its first
   write (`rustic-ai/uni-db#286`). Fixed in 4.1.0; the repro stays as a guard.
+
+  4.1.0 was not adoptable either: full-text recall deadlocked. Lance's
+  `ScanScheduler` binds its I/O loop to whichever runtime is current and the
+  inverted index caches that loop in the shared session, while `similar_to`
+  drove its FTS lookup on a per-call runtime it then dropped — so once a query
+  loaded the index, every later query for an uncached term waited on a dead
+  loop. A repeated term was served from cache, which is why it presented as
+  "the second *different* query hangs" (`rustic-ai/uni-db#290`). Fixed in
+  4.1.1, verified here against the LoCoMo bench, which previously hung three
+  questions in and now completes.
 
 ### Fixed
 
