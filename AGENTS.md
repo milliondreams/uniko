@@ -39,6 +39,31 @@ cargo nextest run -p uniko-memory        # one crate
 cargo nextest run -E 'test(recall_cascade)'   # filter by name
 ```
 
+### macOS: put `TMPDIR` on a RAM disk
+
+`KnowledgeBase::in_memory()` is not actually in memory — uni-db materializes
+it as a store directory under `TMPDIR`, and standing one up writes the whole
+schema (24 node types, 53 edge types, plus indexes) as many small files. One
+store per test, N tests in parallel.
+
+On macOS that lands on the APFS Data volume, where small-file writes get
+pathologically slow as the volume fills. Measured on a volume at 87%: **200
+small files + `sync` took 5.45 s** (~27 ms per file) versus **0.06 s** on a RAM
+disk — about 90x. The visible symptom is not an error: tests sit at ~3% CPU
+with ~60 MB RSS and no swap, making no progress, and `cargo nextest` reports
+them only as `SLOW [>60s]` forever. It looks exactly like a deadlock and is
+not one.
+
+```sh
+diskutil erasevolume HFS+ unikoram $(hdiutil attach -nomount ram://8388608)
+export TMPDIR=/Volumes/unikoram
+```
+
+The same nine `ingest_atomic_tests` go from never finishing in >120 s to
+**2.5 s total**. Linux CI runs on fast storage and never sees this, so a green
+CI says nothing about whether your local run will hang. Eject with
+`hdiutil detach /Volumes/unikoram` when done; re-create it after a reboot.
+
 ## The check loop (mirrors CI exactly — run before declaring work done)
 
 ```sh
