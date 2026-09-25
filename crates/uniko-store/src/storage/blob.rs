@@ -78,36 +78,35 @@ impl KnowledgeBase {
         backend.put(content_id, bytes).await
     }
 
-    /// MERGE the `:ArtifactContent` row for `spec.content_id`. Returns
-    /// the `NodeId`. Idempotent — re-running on the same hash is a no-op
-    /// on the graph side.
+    /// MERGE the `:ArtifactContent` row for `spec.content_id` **inside**
+    /// `tx`, deferring the commit to the caller. Returns the `NodeId`.
+    /// Idempotent — re-running on the same hash is a no-op on the graph
+    /// side.
+    ///
+    /// Unlike [`merge_artifact_content`](Self::merge_artifact_content) this
+    /// does **not** take the per-content striped lock: the caller must
+    /// already hold it, acquired *before* opening `tx` and held across the
+    /// commit, exactly as the entity-upsert path holds
+    /// [`lock_entity_ids`](Self::lock_entity_ids). Use
+    /// [`lock_content_ids`](Self::lock_content_ids), or
+    /// [`lock_ingest_unit`](Self::lock_ingest_unit) when the same
+    /// transaction also upserts entities. Without that guard two
+    /// concurrent writers both read "absent" and both CREATE a duplicate
+    /// row — an insert phantom uni-db's SSI does not catch.
     ///
     /// # Errors
     ///
     /// Returns [`UnikoError::Storage`] on database failure.
-    pub async fn merge_artifact_content(&self, spec: MergeContent) -> Result<crate::types::NodeId> {
+    pub async fn merge_artifact_content_in_tx(
+        &self,
+        tx: &uni_db::Transaction,
+        spec: MergeContent,
+    ) -> Result<crate::types::NodeId> {
         // Host-side MATCH-or-CREATE instead of `MERGE (c:ArtifactContent
         // {content_id: $cid}) ON CREATE SET ...`: cheap because content_id
         // is Hash-indexed, and idempotent because the second leg short-
-        // circuits on an existing row. (uni-db <= 2.4 also evaluated NOT
-        // NULL on the MERGE create before ON CREATE SET ran, blowing up on
-        // required columns like mime/created_at; 2.5.0 folds ON CREATE SET
-        // into the seed props, so that is no longer why we avoid MERGE.)
-        //
-        // The real reason to keep the host-side split: the check-and-create
-        // must be atomic per content_id. Without a
-        // guard, two concurrent ingests of the same content both read
-        // "absent" and both CREATE a duplicate row (this method is called
-        // per-item under the spawn-per-message ingest worker). Hold the
-        // striped lock across the existence re-read AND the create, like
-        // `merge_node`.
-        let _rmw_guard = self
-            .rmw_locks
-            .lock(&crate::locks::content_lock_key(&spec.content_id))
-            .await;
-
-        let session = self.db.session();
-        let existing = session
+        // circuits on an existing row.
+        let existing = tx
             .query_with("MATCH (c:ArtifactContent {content_id: $cid}) RETURN id(c) AS vid LIMIT 1")
             .param("cid", Value::String(spec.content_id.clone()))
             .fetch_all()
@@ -118,44 +117,68 @@ impl KnowledgeBase {
         }
 
         let now = Utc::now();
+        let result = tx
+            .query_with(
+                "CREATE (c:ArtifactContent {
+                    content_id: $cid, bytes: $bytes, uri: $uri,
+                    mime: $mime, size: $size, perceptual_hash: $phash,
+                    audio_fingerprint: $afp, created_at: $created_at
+                }) RETURN id(c) AS vid",
+            )
+            .param("cid", Value::String(spec.content_id.clone()))
+            .param("bytes", spec.bytes.map(Value::Bytes).unwrap_or(Value::Null))
+            .param("uri", spec.uri.map(Value::String).unwrap_or(Value::Null))
+            .param("mime", Value::String(spec.mime.clone()))
+            .param("size", Value::Int(spec.size))
+            .param(
+                "phash",
+                spec.perceptual_hash.map(Value::Int).unwrap_or(Value::Null),
+            )
+            .param(
+                "afp",
+                spec.audio_fingerprint
+                    .map(Value::Bytes)
+                    .unwrap_or(Value::Null),
+            )
+            .param("created_at", datetime_value(now))
+            .fetch_all()
+            .await?;
+        let row = result
+            .rows()
+            .first()
+            .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
+        let vid: i64 = row.get("vid")?;
+        Ok(vid)
+    }
+
+    /// MERGE the `:ArtifactContent` row for `spec.content_id`. Returns
+    /// the `NodeId`. Idempotent — re-running on the same hash is a no-op
+    /// on the graph side.
+    ///
+    /// Takes the per-content striped lock and commits on its own. The
+    /// check-and-create must be atomic per `content_id`: without a guard
+    /// two concurrent ingests of the same content both read "absent" and
+    /// both CREATE a duplicate row (this method is called per-item under
+    /// the spawn-per-message ingest worker). The lock is held across the
+    /// existence re-read AND the create, like `merge_node`.
+    ///
+    /// To fold the merge into a transaction you own, use
+    /// [`merge_artifact_content_in_tx`](Self::merge_artifact_content_in_tx)
+    /// and hold the lock yourself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn merge_artifact_content(&self, spec: MergeContent) -> Result<crate::types::NodeId> {
+        let _rmw_guard = self
+            .rmw_locks
+            .lock(&crate::locks::content_lock_key(&spec.content_id))
+            .await;
+
         self.transact_with_retry(uni_db::RetryOptions::default(), move |tx| {
             let spec = spec.clone();
             async move {
-                let r = async {
-                    let result = tx
-                        .query_with(
-                            "CREATE (c:ArtifactContent {
-                                content_id: $cid, bytes: $bytes, uri: $uri,
-                                mime: $mime, size: $size, perceptual_hash: $phash,
-                                audio_fingerprint: $afp, created_at: $created_at
-                            }) RETURN id(c) AS vid",
-                        )
-                        .param("cid", Value::String(spec.content_id.clone()))
-                        .param("bytes", spec.bytes.map(Value::Bytes).unwrap_or(Value::Null))
-                        .param("uri", spec.uri.map(Value::String).unwrap_or(Value::Null))
-                        .param("mime", Value::String(spec.mime.clone()))
-                        .param("size", Value::Int(spec.size))
-                        .param(
-                            "phash",
-                            spec.perceptual_hash.map(Value::Int).unwrap_or(Value::Null),
-                        )
-                        .param(
-                            "afp",
-                            spec.audio_fingerprint
-                                .map(Value::Bytes)
-                                .unwrap_or(Value::Null),
-                        )
-                        .param("created_at", datetime_value(now))
-                        .fetch_all()
-                        .await?;
-                    let row = result
-                        .rows()
-                        .first()
-                        .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
-                    let vid: i64 = row.get("vid")?;
-                    Ok(vid)
-                }
-                .await;
+                let r = self.merge_artifact_content_in_tx(&tx, spec).await;
                 (tx, r)
             }
         })
