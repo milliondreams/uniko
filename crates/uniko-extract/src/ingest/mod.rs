@@ -15,6 +15,7 @@ pub mod pdf;
 pub mod session;
 pub mod session_chunk;
 pub mod source;
+mod unit;
 
 pub use artifact::ArtifactIngestResult;
 pub use artifact::{ArtifactContextNids, ArtifactIdentity, ArtifactPrep, UnitArtifactSeen};
@@ -22,6 +23,7 @@ pub use atomic::{AtomicIngestResult, AtomicTimings, ingest_message_atomic};
 pub use chunking::{ChunkConfig, ChunkData, Chunker, count_tokens, select_chunker};
 pub use modality::{ModalityExtractor, ModalityPrepared, ModalityRegistry};
 pub use source::{PreparedSource, prepare_source};
+pub use unit::{UnitIngestResult, UnitTurn, ingest_turns_atomic};
 // IngestSource/IngestData live in uniko-pipes (wire types) so IngestTask can
 // carry them; re-exported here so existing `uniko_extract::ingest` imports
 // and the facade are unchanged.

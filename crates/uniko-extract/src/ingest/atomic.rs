@@ -76,7 +76,7 @@ pub struct AtomicTimings {
 /// that crate): `base_backoff * 2^(attempt - 2)` clamped to `max_backoff`.
 /// `attempt` is the upcoming attempt number, so `attempt == 2` (the first
 /// retry) sleeps exactly `base_backoff`.
-async fn ingest_retry_backoff(opts: &uniko_store::RetryOptions, attempt: u32) {
+pub(super) async fn unit_retry_backoff(opts: &uniko_store::RetryOptions, attempt: u32) {
     let steps = attempt.saturating_sub(2).min(20);
     let delay = opts
         .base_backoff
@@ -147,7 +147,7 @@ pub async fn ingest_message_atomic(
 
     // 3. CPU extraction (NER + NLP + observations) — no DB I/O.
     let extract_start = std::time::Instant::now();
-    let ext = extract_entities_and_nlp(kb, msg).await;
+    let ext = extract_for_unit(kb, msg).await;
     let deduped = ext.deduped;
     let nlp_ms = ext.nlp_ms;
     #[cfg(feature = "onnx")]
@@ -295,7 +295,7 @@ pub async fn ingest_message_atomic(
                     Err(e) => {
                         let err = uniko_store::UnikoError::from(e);
                         if err.is_retriable() && attempts < retry_opts.max_attempts {
-                            ingest_retry_backoff(&retry_opts, attempts + 1).await;
+                            unit_retry_backoff(&retry_opts, attempts + 1).await;
                             continue;
                         }
                         return Err(err);
@@ -305,7 +305,7 @@ pub async fn ingest_message_atomic(
             Err(err) => {
                 tx.rollback();
                 if err.is_retriable() && attempts < retry_opts.max_attempts {
-                    ingest_retry_backoff(&retry_opts, attempts + 1).await;
+                    unit_retry_backoff(&retry_opts, attempts + 1).await;
                     continue;
                 }
                 return Err(err);
@@ -373,17 +373,17 @@ pub async fn ingest_message_atomic(
 
 /// Output of [`extract_entities_and_nlp`]. `nlp_results` is only
 /// populated when the ONNX feature is enabled.
-struct EntityExtractionOutput {
-    deduped: Vec<(RawEntity, u32)>,
+pub(super) struct EntityExtractionOutput {
+    pub(super) deduped: Vec<(RawEntity, u32)>,
     #[cfg(feature = "onnx")]
-    nlp_results: Option<Vec<crate::nlp::types::NlpResult>>,
-    nlp_ms: u128,
+    pub(super) nlp_results: Option<Vec<crate::nlp::types::NlpResult>>,
+    pub(super) nlp_ms: u128,
 }
 
 /// Run NER (rule-based + code AST + ONNX cascade + LLM stub) and
 /// dedup. Returns the deduped entity batch plus the per-sentence NLP
 /// results needed by the observation step.
-async fn extract_entities_and_nlp(
+pub(super) async fn extract_for_unit(
     #[cfg_attr(not(feature = "onnx"), allow(unused_variables))] kb: &KnowledgeBase,
     msg: &IngestMessage,
 ) -> EntityExtractionOutput {
