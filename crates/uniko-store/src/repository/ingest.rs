@@ -40,21 +40,31 @@ impl KnowledgeBase {
         let cypher = "\
             MATCH (m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
             OPTIONAL MATCH (m)-[:SENT_BY]->(p:Participant) \
-            RETURN m.content AS content, p.name AS speaker, m.timestamp AS ts \
-            ORDER BY m.timestamp";
+            RETURN m.content AS content, p.name AS speaker, m.timestamp AS ts, \
+                   m.message_id AS mid \
+            ORDER BY m.timestamp, m.message_id";
         let result = session
             .query_with(cypher)
             .param("sid", session_id)
             .fetch_all()
             .await?;
-        Ok(result
+        // `speaker` is genuinely nullable (OPTIONAL MATCH), so a missing
+        // sender legitimately reads as "unknown" — but a DECODE failure must
+        // not. Substituting "unknown" for an unreadable name silently
+        // rewrites the transcript, so the same session chunks differently on
+        // two passes and an unchanged surface is rebuilt.
+        result
             .rows()
             .iter()
-            .map(|row| TranscriptRow {
-                content: row.get("content").unwrap_or_default(),
-                speaker: row.get("speaker").unwrap_or_else(|_| "unknown".to_string()),
+            .map(|row| {
+                Ok(TranscriptRow {
+                    content: row.get("content")?,
+                    speaker: row
+                        .get::<Option<String>>("speaker")?
+                        .unwrap_or_else(|| "unknown".to_string()),
+                })
             })
-            .collect())
+            .collect()
     }
 
     /// Existing observation-chunk node ids for `session_id` (idempotency
@@ -111,16 +121,22 @@ impl KnowledgeBase {
             .param("ct", chunk_type)
             .fetch_all()
             .await?;
-        Ok(result
+        // Propagate decode failures rather than degrading them. Dropping a
+        // row via `.ok()?` makes an unreadable surface look like an ABSENT
+        // one, and defaulting `text` to "" makes a readable chunk look
+        // CHANGED — both drive `resolve_existing` into a needless rebuild of
+        // an unchanged session, re-embedding every chunk, with no error
+        // anywhere to explain it.
+        result
             .rows()
             .iter()
-            .filter_map(|r| {
-                Some(SessionChunkRow {
-                    node_id: r.get::<NodeId>("cid").ok()?,
-                    text: r.get("text").unwrap_or_default(),
+            .map(|r| {
+                Ok(SessionChunkRow {
+                    node_id: r.get::<NodeId>("cid")?,
+                    text: r.get("text")?,
                 })
             })
-            .collect())
+            .collect()
     }
 
     /// External ids of Sessions that own no session-level Chunk yet.

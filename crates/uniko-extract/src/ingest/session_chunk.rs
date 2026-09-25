@@ -162,6 +162,14 @@ fn resolve_existing(
 ) -> ChunkPlan {
     let ids: Vec<NodeId> = existing.iter().map(|r| r.node_id).collect();
     if existing.is_empty() {
+        // Distinguishes "genuinely first chunking" from "a read that missed
+        // chunks a previous pass committed" — the two are indistinguishable
+        // in the outcome (both report `rebuilt`), and only the second is a
+        // bug.
+        tracing::debug!(
+            fresh = fresh.len(),
+            "resolve_existing: no existing chunks — full rebuild"
+        );
         return ChunkPlan::Rebuild {
             keep: Vec::new(),
             doomed: Vec::new(),
@@ -180,6 +188,12 @@ fn resolve_existing(
     if common == existing.len() && common == fresh.len() {
         return ChunkPlan::Reuse(ids);
     }
+    tracing::debug!(
+        existing = existing.len(),
+        fresh = fresh.len(),
+        common,
+        "resolve_existing: chunk surface diverged — rebuilding the suffix"
+    );
     ChunkPlan::Rebuild {
         keep: ids[..common].to_vec(),
         doomed: ids[common..].to_vec(),
