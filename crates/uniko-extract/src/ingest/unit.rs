@@ -63,6 +63,18 @@ pub struct UnitIngestResult {
 #[doc(hidden)]
 const FAIL_AFTER_TURN_ENV: &str = "UNIKO_TEST_FAIL_AFTER_TURN";
 
+/// Fault-injection hook: `abort()` the PROCESS inside the transaction,
+/// after turn `n`'s writes but before the commit.
+///
+/// Distinct from [`FAIL_AFTER_TURN_ENV`], which returns an error and lets
+/// the transaction roll back cleanly. This kills the process outright — no
+/// unwinding, no `Drop`, no rollback — which is the only way to test what
+/// the issue actually asks for: that an interrupted unit leaves nothing
+/// behind after the store is REOPENED. A clean rollback and a crash are
+/// different guarantees, and only the second one depends on durability.
+#[doc(hidden)]
+const ABORT_AFTER_TURN_ENV: &str = "UNIKO_TEST_ABORT_AFTER_TURN";
+
 /// Atomic multi-turn ingest.
 ///
 /// Writes the WHOLE unit — every Message with its edges and chunks, the
@@ -292,6 +304,13 @@ pub async fn ingest_turns_atomic(
 
                 // Test-only: abort mid-unit so a rollback test can assert
                 // that the turns written BEFORE this point leave no trace.
+                if let Ok(raw) = std::env::var(ABORT_AFTER_TURN_ENV)
+                    && raw.trim().parse::<usize>() == Ok(i)
+                {
+                    // Kill the process with the write in the open
+                    // transaction and NOT committed.
+                    std::process::abort();
+                }
                 if let Ok(raw) = std::env::var(FAIL_AFTER_TURN_ENV)
                     && raw.trim().parse::<usize>() == Ok(i)
                 {
