@@ -1538,3 +1538,368 @@ async fn finalize_reuses_unchanged_chunk_prefix() {
     drop(agent);
     memory.shutdown().await.expect("shutdown");
 }
+
+// ── Atomic multi-turn units (issue #40) ────────────────────────────────
+
+/// A unit records every turn, in order, as one write.
+#[tokio::test]
+async fn unit_commits_all_turns_in_one_transaction() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-1");
+
+    let result = match session
+        .unit()
+        .turn(Turn::new("alice", "what is the plan for friday").id("u1-m1"))
+        .turn(Turn::new("bob", "we ship the release on friday").id("u1-m2"))
+        .turn(Turn::new("alice", "great, i will tell the team").id("u1-m3"))
+        .commit()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("unit commit failed: {e}"),
+    };
+
+    assert_eq!(result.turns.len(), 3, "one result per turn, in unit order");
+    assert!(!result.was_replay, "a fresh unit is not a replay");
+    assert_eq!(message_count(agent.kb()).await, 3);
+    for nid in result.message_node_ids() {
+        assert_ne!(nid, 0, "every turn must report a real node id");
+    }
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// The `NEXT` chain runs through the unit in order, even though every turn
+/// is written before the single commit.
+#[tokio::test]
+async fn unit_chains_next_edges_in_order() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-next");
+
+    if let Err(e) = session
+        .unit()
+        .turn(Turn::new("alice", "first message here").id("n-1"))
+        .turn(Turn::new("bob", "second message here").id("n-2"))
+        .turn(Turn::new("alice", "third message here").id("n-3"))
+        .commit()
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("unit commit failed: {e}");
+    }
+
+    let chained = count_query(
+        agent.kb(),
+        "MATCH (a:Message)-[:NEXT]->(b:Message) RETURN count(*) AS c",
+    )
+    .await;
+    assert_eq!(chained, 2, "three turns must form two NEXT edges");
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// An entity named in two turns of one unit yields ONE `:Entity` row but a
+/// `MENTIONS` edge from EACH message.
+///
+/// This is the regression test for the per-turn entity upsert: running the
+/// upsert once per turn either duplicates the row, because the second
+/// snapshot read cannot see the first turn's uncommitted CREATE, or sums its
+/// frequency from a stale count.
+#[tokio::test]
+async fn unit_dedups_entity_mentioned_in_two_turns() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-entity");
+
+    if let Err(e) = session
+        .unit()
+        .turn(Turn::new("alice", "Marie Curie discovered radium in Paris").id("e-1"))
+        .turn(Turn::new("bob", "Marie Curie won a Nobel Prize for it").id("e-2"))
+        .commit()
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("unit commit failed: {e}");
+    }
+
+    let distinct = count_query(
+        agent.kb(),
+        "MATCH (e:Entity) RETURN count(DISTINCT e.entity_id) AS c",
+    )
+    .await;
+    let rows = count_query(agent.kb(), "MATCH (e:Entity) RETURN count(e) AS c").await;
+    assert_eq!(
+        rows, distinct,
+        "a unit must not create two :Entity rows for one entity_id"
+    );
+
+    // Dedup must not collapse provenance: both messages still point at it.
+    let mentions = count_query(
+        agent.kb(),
+        "MATCH (m:Message)-[:MENTIONS]->(:Entity) RETURN count(DISTINCT m) AS c",
+    )
+    .await;
+    assert!(
+        mentions >= 2,
+        "both messages must keep their own MENTIONS edges, got {mentions}"
+    );
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// Re-committing a unit with the same ids and content writes nothing.
+#[tokio::test]
+async fn unit_replay_is_whole_unit_noop() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-replay");
+
+    let turns = || {
+        vec![
+            Turn::new("alice", "stable content one").id("r-1"),
+            Turn::new("bob", "stable content two").id("r-2"),
+        ]
+    };
+
+    let first = match session.commit_unit(turns()).await {
+        Ok(r) => r,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("first commit failed: {e}"),
+    };
+    assert!(!first.was_replay);
+    let after_first = message_count(agent.kb()).await;
+
+    let second = session.commit_unit(turns()).await.expect("replay");
+    assert!(second.was_replay, "an identical unit must report a replay");
+    assert_eq!(
+        message_count(agent.kb()).await,
+        after_first,
+        "a replay must not write anything"
+    );
+    assert_eq!(
+        first.message_node_ids(),
+        second.message_node_ids(),
+        "a replay must report the ids already on disk"
+    );
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// A unit whose ids are only PARTLY recorded is rejected, and writes
+/// nothing.
+///
+/// A correct caller cannot reach this: a unit commits atomically, so a
+/// replay is wholly present or wholly absent. Reaching it means ids were
+/// reused across different units, and both alternatives silently corrupt —
+/// ingesting only the absent turns changes the unit's meaning, treating it
+/// as a no-op drops a turn.
+#[tokio::test]
+async fn unit_partial_replay_is_id_conflict() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-partial");
+
+    if let Err(e) = session
+        .commit_unit(vec![Turn::new("alice", "already recorded").id("p-1")])
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("seed commit failed: {e}");
+    }
+    let before = message_count(agent.kb()).await;
+
+    let err = session
+        .commit_unit(vec![
+            Turn::new("alice", "already recorded").id("p-1"),
+            Turn::new("bob", "brand new turn").id("p-2"),
+        ])
+        .await
+        .expect_err("a partly-recorded unit must be rejected");
+    assert!(
+        matches!(err, UnikoError::IdConflict(_)),
+        "expected IdConflict, got {err:?}"
+    );
+    assert_eq!(
+        message_count(agent.kb()).await,
+        before,
+        "the absent turn must not have been written"
+    );
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// An id conflict on ANY turn fails the unit before anything is written —
+/// including the turns that precede it.
+#[tokio::test]
+async fn unit_id_conflict_on_any_turn_writes_nothing() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-conflict");
+
+    if let Err(e) = session
+        .commit_unit(vec![Turn::new("alice", "original content").id("c-1")])
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("seed commit failed: {e}");
+    }
+    let before = message_count(agent.kb()).await;
+
+    let err = session
+        .commit_unit(vec![
+            Turn::new("bob", "a genuinely fresh turn").id("c-fresh"),
+            Turn::new("alice", "DIFFERENT content").id("c-1"),
+        ])
+        .await
+        .expect_err("reusing an id with different content must be rejected");
+    assert!(
+        matches!(err, UnikoError::IdConflict(_)),
+        "expected IdConflict, got {err:?}"
+    );
+    assert_eq!(
+        message_count(agent.kb()).await,
+        before,
+        "the fresh turn preceding the conflict must not persist"
+    );
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// A unit repeating a message id internally is rejected: two turns sharing
+/// an id would mint two Message nodes whose deterministic chunk ids collide.
+#[tokio::test]
+async fn unit_with_duplicate_ids_is_rejected() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-dup");
+
+    let err = match session
+        .commit_unit(vec![
+            Turn::new("alice", "first").id("dup-1"),
+            Turn::new("bob", "second").id("dup-1"),
+        ])
+        .await
+    {
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => e,
+        Ok(_) => panic!("a unit repeating a message id must be rejected"),
+    };
+    assert!(
+        matches!(err, UnikoError::IdConflict(_)),
+        "expected IdConflict, got {err:?}"
+    );
+    assert_eq!(message_count(agent.kb()).await, 0, "nothing may persist");
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// Once commit returns, scoped recall sees the WHOLE unit — #40's
+/// read-after-write requirement.
+#[tokio::test]
+async fn unit_is_fully_recallable_after_commit() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-recall");
+
+    if let Err(e) = session
+        .unit()
+        .turn(Turn::new("alice", "where did we leave the telescope").id("rc-1"))
+        .turn(Turn::new("bob", "the telescope is in the observatory").id("rc-2"))
+        .commit()
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("unit commit failed: {e}");
+    }
+
+    let both = count_query(
+        agent.kb(),
+        "MATCH (m:Message) WHERE m.content CONTAINS 'telescope' RETURN count(m) AS c",
+    )
+    .await;
+    assert_eq!(both, 2, "both members of the pair must be visible at once");
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// An empty unit is a caller error, not a silent no-op.
+#[tokio::test]
+async fn empty_unit_is_config_error() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-empty");
+
+    let err = session
+        .commit_unit(Vec::new())
+        .await
+        .expect_err("an empty unit must be rejected");
+    assert!(
+        matches!(err, UnikoError::Config(_)),
+        "expected Config, got {err:?}"
+    );
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
