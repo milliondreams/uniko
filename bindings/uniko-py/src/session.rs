@@ -168,6 +168,44 @@ impl PySession {
         })
     }
 
+    /// Record several related turns as ONE durable, idempotent unit.
+    ///
+    /// Every turn, and every attachment on them, lands in a single
+    /// transaction: either the whole unit is visible to later recall or none
+    /// of it is. Two separate `observe` calls cannot give that — an
+    /// interruption between them leaves a question with no answer.
+    ///
+    /// Resolves to `(observe_results, was_replay)`. `was_replay` is true when
+    /// every id was already present with identical content, so nothing was
+    /// written.
+    ///
+    /// Reusing an id with different content, repeating an id inside one unit,
+    /// or submitting a unit that is only partly recorded raises
+    /// `IdConflictError`.
+    fn commit_unit<'py>(
+        &self,
+        py: Python<'py>,
+        turns: Vec<PyRef<'_, PyTurn>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Snapshot before entering the async block: PyO3 refs are not Send.
+        let turns: Vec<_> = turns
+            .iter()
+            .map(|t| t.snapshot())
+            .collect::<PyResult<_>>()?;
+        bridge!(py, session = self.inner.clone(), {
+            let mut guard = session.lock().await;
+            let result = guard.commit_unit(turns).await.map_err(to_pyerr)?;
+            Python::attach(|py| {
+                let turns: Vec<_> = result
+                    .turns
+                    .iter()
+                    .map(|r| PyObserveResult::from_rust(py, r))
+                    .collect::<PyResult<_>>()?;
+                Ok((turns, result.was_replay))
+            })
+        })
+    }
+
     /// Ingest a standalone document/blob into this session (not a turn).
     fn ingest<'py>(&self, py: Python<'py>, source: &PyIngestSource) -> PyResult<Bound<'py, PyAny>> {
         let src = source.snapshot()?;
@@ -288,6 +326,30 @@ impl PySession {
             let mut guard = session.lock().await;
             let result = guard.observe(turn).await.map_err(to_pyerr)?;
             Python::attach(|py| PyObserveResult::from_rust(py, &result))
+        })
+    }
+
+    /// Blocking variant of [`commit_unit`](Self::commit_unit).
+    fn commit_unit_sync(
+        &self,
+        py: Python<'_>,
+        turns: Vec<PyRef<'_, PyTurn>>,
+    ) -> PyResult<(Vec<Py<PyObserveResult>>, bool)> {
+        let turns: Vec<_> = turns
+            .iter()
+            .map(|t| t.snapshot())
+            .collect::<PyResult<_>>()?;
+        bridge_sync!(py, session = self.inner.clone(), {
+            let mut guard = session.lock().await;
+            let result = guard.commit_unit(turns).await.map_err(to_pyerr)?;
+            Python::attach(|py| {
+                let turns: Vec<_> = result
+                    .turns
+                    .iter()
+                    .map(|r| PyObserveResult::from_rust(py, r))
+                    .collect::<PyResult<_>>()?;
+                Ok((turns, result.was_replay))
+            })
         })
     }
 

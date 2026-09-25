@@ -149,3 +149,67 @@ def test_committed_turn_survives_abrupt_process_exit(tmp_path) -> None:
     store = str(tmp_path / "abrupt-store")
     _write_in_child(store, "abrupt")
     _read_after_restart(store)
+
+
+# ── Issue #40: atomic, idempotent multi-turn units ─────────────────────
+
+
+def test_unit_commits_every_turn_as_one_write() -> None:
+    """A related pair is recorded as one unit, visible together."""
+    engine = uniko.Uniko.in_memory_sync()
+    session = engine.agent("analyst").session("unit-a")
+    results, was_replay = session.commit_unit_sync(
+        [
+            uniko.Turn("user-a", "what is the plan for friday").id("u-1"),
+            uniko.Turn("agent", "we ship the release on friday").id("u-2"),
+        ]
+    )
+    assert len(results) == 2, "one result per turn, in unit order"
+    assert not was_replay, "a fresh unit is not a replay"
+    assert all(r.message_node_id for r in results)
+    assert engine.agent("analyst").data.message_sync("u-2").content == (
+        "we ship the release on friday"
+    )
+
+
+def test_unit_replay_is_a_whole_unit_noop() -> None:
+    """Re-committing an identical unit writes nothing and reports it."""
+    engine = uniko.Uniko.in_memory_sync()
+    session = engine.agent("analyst").session("unit-replay")
+
+    def turns() -> list[uniko.Turn]:
+        return [
+            uniko.Turn("user-a", "stable content one").id("r-1"),
+            uniko.Turn("agent", "stable content two").id("r-2"),
+        ]
+
+    first, first_replay = session.commit_unit_sync(turns())
+    assert not first_replay
+
+    second, second_replay = session.commit_unit_sync(turns())
+    assert second_replay, "an identical unit must report a replay"
+    assert [r.message_node_id for r in first] == [r.message_node_id for r in second]
+
+
+def test_unit_id_conflict_leaves_nothing_behind() -> None:
+    """A conflict on any turn fails the unit before anything is written."""
+    engine = uniko.Uniko.in_memory_sync()
+    session = engine.agent("analyst").session("unit-conflict")
+    session.commit_unit_sync([uniko.Turn("user-a", "original content").id("c-1")])
+
+    with pytest.raises(uniko.IdConflictError, match="(?i)id conflict"):
+        session.commit_unit_sync(
+            [
+                uniko.Turn("agent", "a genuinely fresh turn").id("c-fresh"),
+                uniko.Turn("user-a", "contradictory content").id("c-1"),
+            ]
+        )
+
+    # The fresh turn preceded the conflicting one in the unit, so the
+    # rollback must have taken it down too. `message_sync` returns None for a
+    # missing id rather than raising.
+    assert engine.agent("analyst").data.message_sync("c-fresh") is None
+    # ...while the turn that was committed before the failed unit survives.
+    assert (
+        engine.agent("analyst").data.message_sync("c-1").content == "original content"
+    )
