@@ -230,13 +230,18 @@ impl PySession {
 
     /// Generate and persist a summary of the session so far.
     ///
-    /// Resolves to the new summary node id, or `None` when there was nothing
-    /// new to summarize.
+    /// Resolves to `(summary_node_id, finalize_error)`: the new summary node
+    /// id or `None` when there was nothing new to summarize, paired with the
+    /// chunk-refresh failure message or `None` when it succeeded.
+    ///
+    /// The refresh is best-effort and never fails the call, but its outcome
+    /// is reported rather than only logged, so a caller can tell that the
+    /// summary was built from stale chunks.
     fn summarize<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         bridge!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
-            let node = guard.summarize().await.map_err(to_pyerr)?;
-            Ok(node)
+            let report = guard.summarize().await.map_err(to_pyerr)?;
+            Ok((report.summary, report.finalize_error))
         })
     }
 
@@ -391,11 +396,11 @@ impl PySession {
     }
 
     /// Blocking variant of [`summarize`](Self::summarize).
-    fn summarize_sync(&self, py: Python<'_>) -> PyResult<Option<NodeId>> {
+    fn summarize_sync(&self, py: Python<'_>) -> PyResult<(Option<NodeId>, Option<String>)> {
         bridge_sync!(py, session = self.inner.clone(), {
             let guard = session.lock().await;
-            let node = guard.summarize().await.map_err(to_pyerr)?;
-            Ok(node)
+            let report = guard.summarize().await.map_err(to_pyerr)?;
+            Ok((report.summary, report.finalize_error))
         })
     }
 

@@ -331,14 +331,22 @@ impl Agent {
     /// # Ok(()) }
     /// ```
     ///
-    /// Unlike [`Session::finalize`](crate::Session::finalize) this does not
-    /// quiesce the streaming pipeline first — there is no session-to-pipeline
-    /// binding at this level, so it chunks whatever is committed at call time.
+    /// Quiesces the streaming pipeline first, when the instance has one, so
+    /// the report cannot claim completion while ingest for this session is
+    /// still in flight (issue #40).
+    ///
+    /// The barrier is instance-wide rather than per-session — there is no
+    /// session-to-pipeline binding at this level — so it may wait on
+    /// unrelated work. That is broader than necessary but never waits too
+    /// little, which is the direction that matters for a completion signal.
     ///
     /// # Errors
     ///
     /// Returns [`UnikoError`] on a read or write failure.
     pub async fn finalize_session(&self, session_id: &str) -> Result<FinalizeReport, UnikoError> {
+        if let Some(pipeline) = &self.streaming {
+            pipeline.quiesce().await;
+        }
         finalize_session(&self.kb, session_id).await
     }
 

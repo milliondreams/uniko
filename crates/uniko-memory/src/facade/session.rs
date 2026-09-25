@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use uniko_extract::ingest::atomic::ingest_message_atomic;
 use uniko_extract::ingest::context::SessionContext;
 use uniko_extract::ingest::session_chunk::{
     ChunkMode, chunk_session_observations_with, chunk_session_with,
@@ -122,42 +121,21 @@ impl Session {
     /// Returns [`UnikoError`] on any extraction or write failure; on error
     /// no partial state persists for the turn.
     pub async fn observe(&mut self, turn: Turn) -> Result<ObserveResult, UnikoError> {
-        // Update speaker / pronoun window before ingest so recipient
-        // inference and pronoun resolution see the right context.
-        self.ctx.set_current_speaker(&turn.sender_id);
-        let session_id = self.ctx.session_id.clone();
-
-        // Resolve the message id up front so attachments can link to it.
-        let message_id = turn
-            .message_id
-            .clone()
-            .unwrap_or_else(uniko_store::id::new_id);
-        let mut turn = turn;
-        turn.message_id = Some(message_id.clone());
-        let attachments = std::mem::take(&mut turn.attachments);
-
-        let msg = turn.into_ingest_message(session_id.clone());
-        let message = ingest_message_atomic(&self.kb, &msg, &mut self.ctx).await?;
-
-        // Ingest each attachment linked to this message (and session).
-        let mut attachment_outcomes = Vec::with_capacity(attachments.len());
-        for source in attachments {
-            let context = IngestContext {
-                session_id: Some(session_id.clone()),
-                triggered_by_message_id: Some(message_id.clone()),
-            };
-            attachment_outcomes
-                .push(ingest_source(&self.kb, &self.extractors, source, context).await?);
-        }
-
-        // New Observations advance the consolidation counter. Only reaches a
-        // worker when streaming is on; otherwise call `Agent::consolidate`.
-        self.notify_observations(&message.extracted_observations);
-
-        Ok(ObserveResult {
-            message,
-            attachments: attachment_outcomes,
-        })
+        // One turn IS a one-turn unit. Sharing the path means the rollback,
+        // speaker-ordering and attachment-atomicity semantics cannot drift
+        // between the two entry points — a second implementation is where
+        // the next bug would live.
+        //
+        // Two behaviour changes fall out of this, both of them what #40
+        // asks for: attachments now commit WITH the message rather than in
+        // separate transactions afterwards, and an idempotent replay now
+        // advances the chain head, so the following turn still gets its
+        // NEXT edge.
+        let mut result = self.commit_unit(vec![turn]).await?;
+        Ok(result
+            .turns
+            .pop()
+            .expect("commit_unit returns one result per input turn"))
     }
 
     /// Begin a multi-turn unit: several related turns recorded as ONE
@@ -247,13 +225,15 @@ impl Session {
             .collect();
         self.notify_observations(&all_observations);
 
+        let mut attachments = result.attachments;
         Ok(UnitResult {
             turns: result
                 .turns
                 .into_iter()
-                .map(|message| ObserveResult {
+                .enumerate()
+                .map(|(i, message)| ObserveResult {
                     message,
-                    attachments: Vec::new(),
+                    attachments: std::mem::take(attachments.get_mut(i).unwrap_or(&mut Vec::new())),
                 })
                 .collect(),
             was_replay: result.was_replay,
@@ -390,25 +370,39 @@ impl Session {
     /// # Errors
     ///
     /// Returns [`UnikoError`] on a read, write, or generation failure.
-    /// A failure to refresh the chunks is logged, not returned.
-    pub async fn summarize(&self) -> Result<Option<NodeId>, UnikoError> {
-        // Best-effort: this is post-processing the caller did not ask for,
-        // and failing summary generation because a chunk rebuild hit a
-        // transient conflict would be a regression for existing callers.
-        if let Err(e) = self.finalize().await {
-            tracing::warn!(
-                session_id = %self.ctx.session_id,
-                error = %e,
-                "summarize: session chunk refresh failed; continuing with stale chunks",
-            );
-        }
-        generate_session_summary(
+    /// A failure to refresh the chunks does not fail the call; it is
+    /// reported in [`SummarizeReport::finalize_error`].
+    pub async fn summarize(&self) -> Result<SummarizeReport, UnikoError> {
+        // Still best-effort: this is post-processing the caller did not ask
+        // for, and failing summary generation because a chunk rebuild hit a
+        // transient conflict would be a regression for existing callers. But
+        // the outcome is now REPORTED rather than only logged — issue #40
+        // requires finalization success or failure to be observable, and a
+        // warn! in someone else's log is not.
+        let (finalize, finalize_error) = match self.finalize().await {
+            Ok(report) => (Some(report), None),
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %self.ctx.session_id,
+                    error = %e,
+                    "summarize: session chunk refresh failed; continuing with stale chunks",
+                );
+                (None, Some(e.to_string()))
+            }
+        };
+        let summary = generate_session_summary(
             &self.kb,
             &self.ctx.session_id,
             Utc::now(),
             self.llm_alias.as_deref(),
         )
-        .await
+        .await?;
+
+        Ok(SummarizeReport {
+            summary,
+            finalize,
+            finalize_error,
+        })
     }
 
     /// Soft-forget one turn: hide it from recall, keep the node + lineage.
@@ -696,5 +690,31 @@ impl UnitResult {
             .iter()
             .map(|t| t.message.message_node_id)
             .collect()
+    }
+}
+
+/// What one [`Session::summarize`] did.
+///
+/// Carries the chunk-refresh outcome alongside the summary so a caller can
+/// see that finalization failed, rather than that fact existing only as a
+/// `warn!` in a log the caller may not read (issue #40).
+#[derive(Debug)]
+pub struct SummarizeReport {
+    /// The generated `:Summary` node, or `None` when there was nothing to
+    /// summarize.
+    pub summary: Option<NodeId>,
+    /// The chunk refresh, when it succeeded.
+    pub finalize: Option<FinalizeReport>,
+    /// Why the chunk refresh failed, when it did. The summary was still
+    /// generated, but from stale chunks.
+    pub finalize_error: Option<String>,
+}
+
+impl SummarizeReport {
+    /// True when the chunk refresh succeeded, so the summary was built from
+    /// current chunks.
+    #[must_use]
+    pub fn finalized(&self) -> bool {
+        self.finalize_error.is_none()
     }
 }
