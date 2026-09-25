@@ -67,6 +67,52 @@ impl KnowledgeBase {
             .collect()
     }
 
+    /// Shared by the committing and in-transaction chunk-row reads so the
+    /// two cannot drift.
+    const SESSION_CHUNK_ROWS_CYPHER: &'static str = "\
+        MATCH (s:Session {session_id: $sid})-[:HAS_CHUNK]->(c:Chunk) \
+        WHERE c.chunk_type = $ct \
+        RETURN id(c) AS cid, c.text AS text, c.index AS idx \
+        ORDER BY c.index";
+
+    /// The session's existing chunk rows, read **inside** `tx`.
+    ///
+    /// The committing variant reads on a fresh session, which makes the
+    /// chunk refresh a check-then-write split across two snapshots: the read
+    /// can miss chunks a previous pass committed, and the resulting plan
+    /// rebuilds an unchanged surface. Reading inside the transaction that
+    /// performs the rewrite puts those rows in the transaction's read set,
+    /// so a concurrent write turns into a retriable conflict instead of a
+    /// wrong plan that commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn session_chunk_rows_in_tx(
+        &self,
+        tx: &uni_db::Transaction,
+        session_id: &str,
+        chunk_type: &str,
+    ) -> Result<Vec<SessionChunkRow>> {
+        let result = tx
+            .query_with(Self::SESSION_CHUNK_ROWS_CYPHER)
+            .param("sid", session_id)
+            .param("ct", chunk_type)
+            .fetch_all()
+            .await?;
+        result
+            .rows()
+            .iter()
+            .map(|r| {
+                Ok(SessionChunkRow {
+                    node_id: r.get::<NodeId>("cid")?,
+                    text: r.get("text")?,
+                })
+            })
+            .collect()
+    }
+
     /// Existing observation-chunk node ids for `session_id` (idempotency
     /// check for `chunk_type = 'observation'`).
     ///
@@ -110,13 +156,8 @@ impl KnowledgeBase {
         chunk_type: &str,
     ) -> Result<Vec<SessionChunkRow>> {
         let session = self.db.session();
-        let cypher = "\
-            MATCH (s:Session {session_id: $sid})-[:HAS_CHUNK]->(c:Chunk) \
-            WHERE c.chunk_type = $ct \
-            RETURN id(c) AS cid, c.text AS text, c.index AS idx \
-            ORDER BY c.index";
         let result = session
-            .query_with(cypher)
+            .query_with(Self::SESSION_CHUNK_ROWS_CYPHER)
             .param("sid", session_id)
             .param("ct", chunk_type)
             .fetch_all()
@@ -222,12 +263,20 @@ impl KnowledgeBase {
     ///
     /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on
     /// query failure.
+    /// Ordering note: `m.timestamp` alone is NOT a total order here. Every
+    /// observation extracted from one message shares that message's
+    /// timestamp, so their relative order was arbitrary and could differ
+    /// between two calls over identical data. The observation chunk surface
+    /// is built by concatenating these rows, so a reordering changed the
+    /// chunk text and made an unchanged session rebuild — re-embedding every
+    /// observation chunk, with nothing to explain why. `message_id` and
+    /// `observation_id` make the order total.
     pub async fn session_observation_rows(&self, session_id: &str) -> Result<Vec<ObservationRow>> {
         let session = self.db.session();
         let cypher = "\
             MATCH (o:Observation)-[:OBSERVED_IN]->(m:Message)-[:IN_SESSION]->(s:Session {session_id: $sid}) \
             RETURN o.content AS content, o.subject AS subject \
-            ORDER BY m.timestamp";
+            ORDER BY m.timestamp, m.message_id, o.observation_id";
         let result = session
             .query_with(cypher)
             .param("sid", session_id)
