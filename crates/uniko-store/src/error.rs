@@ -101,6 +101,30 @@ impl UnikoError {
              use a new id, or delete the existing record first"
         ))
     }
+
+    /// Build the [`UnikoError::IdConflict`] raised when a turn unit is
+    /// *partly* already recorded.
+    ///
+    /// Unit ingest is all-or-nothing, so a replayed unit is either wholly
+    /// present or wholly absent; a mixed unit can only mean the caller
+    /// reused `message_id`s across different units. Ingesting just the
+    /// absent turns would silently change the unit's meaning, and treating
+    /// the whole unit as a no-op would silently drop one — so this fails
+    /// loud instead. Non-retriable, so an ingest retry loop cannot spin
+    /// on it.
+    #[must_use]
+    pub fn partial_unit(present: &[String], absent: &[String]) -> Self {
+        UnikoError::IdConflict(format!(
+            "turn unit is partly recorded already: {} of {} message_id(s) exist \
+             (present: [{}]; absent: [{}]). A unit commits atomically, so a \
+             replay is wholly present or wholly absent — these ids were reused \
+             across different units. Use fresh ids, or replay the original unit",
+            present.len(),
+            present.len() + absent.len(),
+            present.join(", "),
+            absent.join(", "),
+        ))
+    }
 }
 
 impl From<uni_db::UniError> for UnikoError {
