@@ -28,8 +28,8 @@ use super::message::{
     MessageSetup, apply_message_writes_in_tx, ensure_session_and_sender, resolve_recipients,
 };
 use crate::ner::dedup::{
-    EntityUpsertPrep, admit_entities, apply_entity_upsert, deduplicate_raw, prepare_entity_upsert,
-    suppress_onnx_over_structured,
+    EntityUpsertPrep, admit_entities, apply_entity_mentions_in_tx, apply_entity_upsert_nodes,
+    deduplicate_raw, prepare_entity_upsert, suppress_onnx_over_structured,
 };
 use crate::ner::types::RawEntity;
 use crate::observations::{
@@ -164,7 +164,7 @@ pub async fn ingest_message_atomic(
     //    so without this two concurrent ingests of the same entity both read
     //    "absent" and both CREATE a duplicate row. Locking before tx-open
     //    means our snapshot (and the authoritative re-read in
-    //    `apply_entity_upsert`) reflects any entity a prior holder committed.
+    //    `apply_entity_upsert_nodes`) reflects any entity a prior holder committed.
     //    Guards drop at function exit, after `tx.commit()`.
     let _entity_guards = kb.lock_entity_ids(&entity_prep.entity_ids).await;
 
@@ -186,7 +186,7 @@ pub async fn ingest_message_atomic(
     //       single-writer-per-entity invariant survives retries. A
     //       retriable conflict aborts the whole tx (nothing persists), so a
     //       fresh attempt re-reads entity existence authoritatively
-    //       (`apply_entity_upsert`) and recreates the rolled-back
+    //       (`apply_entity_upsert_nodes`) and recreates the rolled-back
     //       Message/Observation rows — no duplicates. uni-db SSI surfaces
     //       conflicts at commit, but an in-body retriable error is handled
     //       identically for safety. `session_ctx` is advanced only AFTER a
@@ -204,7 +204,7 @@ pub async fn ingest_message_atomic(
         commit_ms,
     ) = loop {
         attempts += 1;
-        // `apply_entity_upsert` consumes the prep; hand it a fresh clone so
+        // `apply_entity_upsert_nodes` consumes the prep; hand it a fresh clone so
         // a retry can re-run. The happy path pays exactly one clone.
         let entity_prep_attempt = entity_prep.clone();
         let tx = kb.begin_tx().await?;
@@ -215,8 +215,15 @@ pub async fn ingest_message_atomic(
 
             // 7. apply entity upsert (Entity + MENTIONS).
             let apply_entity_start = std::time::Instant::now();
-            let entity_matches =
-                apply_entity_upsert(kb, &tx, message_nid, entity_prep_attempt).await?;
+            let entity_matches = apply_entity_upsert_nodes(kb, &tx, entity_prep_attempt).await?;
+            // MENTIONS is a separate phase so a multi-turn unit can
+            // upsert the entity rows once and still emit one edge set
+            // per message; a single message just passes its own nid.
+            let mentions: Vec<(NodeId, NodeId, u32)> = entity_matches
+                .iter()
+                .map(|m| (message_nid, m.node_id, m.mention_count))
+                .collect();
+            apply_entity_mentions_in_tx(kb, &tx, &mentions).await?;
             let apply_entity_ms = apply_entity_start.elapsed().as_millis();
 
             // 8. apply observations (Observation + OBSERVED_IN + ABOUT).
