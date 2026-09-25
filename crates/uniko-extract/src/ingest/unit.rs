@@ -17,7 +17,7 @@ use uniko_store::{KnowledgeBase, NodeId, UnikoError};
 use super::atomic::{AtomicIngestResult, AtomicTimings};
 use super::context::{SessionContext, advance_speaker};
 use super::message::{MessageSetup, apply_message_writes_in_tx};
-use super::source::PreparedSource;
+use super::source::{IngestOutcome, PreparedSource};
 use crate::ner::dedup::{
     UnitEntityPrep, apply_entity_mentions_in_tx, apply_entity_upsert_nodes, merge_entity_preps,
 };
@@ -44,12 +44,24 @@ pub struct UnitIngestResult {
     /// One per input turn, in unit order. Same shape as a single-message
     /// ingest, so existing callers of [`AtomicIngestResult`] are unchanged.
     pub turns: Vec<AtomicIngestResult>,
+    /// Attachment outcomes, grouped per turn and parallel to `turns`.
+    pub attachments: Vec<Vec<IngestOutcome>>,
     /// True when every `message_id` was already present with identical
     /// content: nothing was written and no transaction was opened.
     pub was_replay: bool,
     /// Transaction attempts consumed (1 on the happy path).
     pub attempts: u32,
 }
+
+/// Fault-injection hook: fail the unit inside the transaction, after turn
+/// `n`'s writes but before the commit, so a test can prove the rollback
+/// path rather than only the pre-transaction rejection path. Those are
+/// different guarantees.
+///
+/// Env vars are process-global, which is safe here only because nextest —
+/// the runner of record — gives every test its own process.
+#[doc(hidden)]
+const FAIL_AFTER_TURN_ENV: &str = "UNIKO_TEST_FAIL_AFTER_TURN";
 
 /// Atomic multi-turn ingest.
 ///
@@ -156,6 +168,7 @@ pub async fn ingest_turns_atomic(
             .collect();
         return Ok(UnitIngestResult {
             turns,
+            attachments: unit.iter().map(|_| Vec::new()).collect(),
             was_replay: true,
             attempts: 0,
         });
@@ -242,7 +255,14 @@ pub async fn ingest_turns_atomic(
     let retry_opts = uniko_store::RetryOptions::default();
     let mut attempts: u32 = 0;
 
-    let (turn_results, final_prev_nid, final_prev_ts, final_sentence_ctx, commit_ms) = loop {
+    let (
+        turn_results,
+        attachment_outcomes,
+        final_prev_nid,
+        final_prev_ts,
+        final_sentence_ctx,
+        commit_ms,
+    ) = loop {
         attempts += 1;
         let mut prev_nid = base_prev_nid;
         let mut prev_ts = base_prev_ts;
@@ -269,6 +289,16 @@ pub async fn ingest_turns_atomic(
                 prev_ts = Some(turn.message.timestamp);
                 message_nids.push(writes.message_node_id);
                 writes_per_turn.push(writes);
+
+                // Test-only: abort mid-unit so a rollback test can assert
+                // that the turns written BEFORE this point leave no trace.
+                if let Ok(raw) = std::env::var(FAIL_AFTER_TURN_ENV)
+                    && raw.trim().parse::<usize>() == Ok(i)
+                {
+                    return Err(UnikoError::Internal(format!(
+                        "{FAIL_AFTER_TURN_ENV}={raw}: injected failure after turn {i}"
+                    )));
+                }
             }
 
             // (b) ONE entity node upsert for the whole unit, so an entity
@@ -326,16 +356,18 @@ pub async fn ingest_turns_atomic(
             //     Message nid comes from this transaction — resolving it by
             //     external id beforehand would always miss, and a miss is
             //     skipped silently.
-            let mut attachment_outcomes = Vec::new();
+            let mut attachment_outcomes: Vec<Vec<IngestOutcome>> = Vec::with_capacity(unit.len());
             for (i, turn) in unit.iter().enumerate() {
                 let ctx = super::artifact::ArtifactContextNids {
                     session_nid: Some(session_nid),
                     message_nid: Some(message_nids[i]),
                     action_nid: None,
                 };
+                let mut per_turn = Vec::with_capacity(turn.attachments.len());
                 for prepared in &turn.attachments {
-                    attachment_outcomes.push(prepared.apply_in_tx(kb, &tx, ctx, &mut seen).await?);
+                    per_turn.push(prepared.apply_in_tx(kb, &tx, ctx, &mut seen).await?);
                 }
+                attachment_outcomes.push(per_turn);
             }
 
             Ok((
@@ -357,7 +389,7 @@ pub async fn ingest_turns_atomic(
                 message_nids,
                 entities_per_turn,
                 obs_per_turn,
-                _attachment_outcomes,
+                attachment_outcomes,
                 sentence_ctx,
                 prev_nid,
                 prev_ts,
@@ -390,6 +422,7 @@ pub async fn ingest_turns_atomic(
                             .collect();
                         break (
                             results,
+                            attachment_outcomes,
                             prev_nid,
                             prev_ts,
                             sentence_ctx,
@@ -433,8 +466,20 @@ pub async fn ingest_turns_atomic(
         first.timings.total_ms = started.elapsed().as_millis();
     }
 
+    // Post-commit, best-effort: mean-pooled artifact embeddings and any
+    // host `finish_post_commit`. These read committed rows through a fresh
+    // session, so they cannot run inside the transaction.
+    for (i, turn) in unit.iter().enumerate() {
+        if let Some(outcomes) = attachment_outcomes.get(i) {
+            for (prepared, outcome) in turn.attachments.iter().zip(outcomes.iter()) {
+                prepared.finish_post_commit(kb, outcome).await;
+            }
+        }
+    }
+
     Ok(UnitIngestResult {
         turns,
+        attachments: attachment_outcomes,
         was_replay: false,
         attempts,
     })
