@@ -318,17 +318,67 @@ pub async fn chunk_session_with(
         chunk.symbol_name = Some(speaker_list.clone());
     }
 
-    let plan = match resolve_existing(mode, &existing, &chunks) {
-        ChunkPlan::Reuse(ids) => {
-            tracing::debug!(session_id, chunks = ids.len(), "session chunks up to date");
-            return Ok(SessionChunkOutcome {
-                ids,
-                rebuilt: false,
-            });
-        }
-        rebuild => rebuild,
-    };
-    let chunk_nids = apply_plan(kb, plan, session_id, session_nid, &chunks).await?;
+    // Resolve the plan and apply it in ONE transaction.
+    //
+    // The pre-transaction `existing` read above is only a fast path for the
+    // `Once` short-circuit and the empty-transcript case. Deciding the
+    // rewrite on it would be a check-then-write split across two snapshots:
+    // a read that misses chunks a previous pass committed yields
+    // `existing.is_empty()`, and an unchanged surface gets rebuilt — every
+    // chunk re-embedded, with nothing to explain why. Re-reading inside the
+    // transaction puts those rows in its read set, so a stale read becomes a
+    // retriable conflict rather than a wrong plan that commits.
+    let outcome = kb
+        .transact_with_retry(uniko_store::RetryOptions::default(), |tx| {
+            let chunks = &chunks;
+            async move {
+                let r = async {
+                    let existing_in_tx = kb
+                        .session_chunk_rows_in_tx(&tx, session_id, "session")
+                        .await?;
+                    match resolve_existing(mode, &existing_in_tx, chunks) {
+                        ChunkPlan::Reuse(ids) => Ok((ids, false)),
+                        ChunkPlan::Rebuild {
+                            keep,
+                            doomed,
+                            from_index,
+                        } => {
+                            let to_create = &chunks[from_index.min(chunks.len())..];
+                            kb.detach_delete_nodes_in_tx(&tx, &doomed).await?;
+                            let mut ids = keep;
+                            ids.extend(
+                                create_chunks_in_tx(
+                                    kb,
+                                    &tx,
+                                    session_id,
+                                    session_nid,
+                                    to_create,
+                                    "Session",
+                                )
+                                .await?,
+                            );
+                            Ok((ids, true))
+                        }
+                    }
+                }
+                .await;
+                (tx, r)
+            }
+        })
+        .await?;
+
+    let (chunk_nids, rebuilt) = outcome;
+    if !rebuilt {
+        tracing::debug!(
+            session_id,
+            chunks = chunk_nids.len(),
+            "session chunks up to date"
+        );
+        return Ok(SessionChunkOutcome {
+            ids: chunk_nids,
+            rebuilt: false,
+        });
+    }
 
     tracing::info!(
         session_id,

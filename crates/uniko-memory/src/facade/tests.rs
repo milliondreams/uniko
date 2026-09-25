@@ -1059,6 +1059,15 @@ async fn finalize_is_idempotent() {
         }
         Err(e) => panic!("finalize failed: {e}"),
     };
+    // Capture exactly what the existence read returns between the two
+    // finalizes. If this is non-empty and correct, a spurious rebuild cannot
+    // be "the read came back short", which is the hypothesis to kill.
+    let between = agent
+        .kb()
+        .session_chunk_rows("fin-3", "session")
+        .await
+        .expect("between-finalize chunk read");
+
     let second = session.finalize().await.expect("second finalize");
 
     if second.rebuilt {
@@ -1072,6 +1081,16 @@ async fn finalize_is_idempotent() {
              WHERE c.chunk_type = 'session' RETURN c.text AS t ORDER BY c.index",
         )
         .await;
+        let obs_rows = agent
+            .kb()
+            .session_chunk_rows("fin-3", "observation")
+            .await
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|r| (r.node_id, r.text))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let speakers = text_query(
             agent.kb(),
             "MATCH (m:Message)-[:IN_SESSION]->(:Session {session_id: 'fin-3'}) \
@@ -1084,8 +1103,15 @@ async fn finalize_is_idempotent() {
              first.transcript_chunks  = {:?}\n\
              second.transcript_chunks = {:?}\n\
              stored chunk text        = {stored:?}\n\
-             resolved speakers        = {speakers:?}",
-            first.transcript_chunks, second.transcript_chunks,
+             resolved speakers        = {speakers:?}\n\
+             read BETWEEN finalizes   = {between:?}\n\
+             first.observation_chunks  = {:?}\n\
+             second.observation_chunks = {:?}\n\
+             observation chunk rows    = {obs_rows:?}",
+            first.transcript_chunks,
+            second.transcript_chunks,
+            first.observation_chunks,
+            second.observation_chunks,
         );
     }
     assert_eq!(
