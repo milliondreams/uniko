@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`ModalityExtractor::extract` is replaced by `prepare` + `apply_in_tx`,**
+  with a new defaulted `finish_post_commit`. Attachments now commit inside the
+  same transaction as the turns carrying them, which requires uniko to own that
+  transaction. A `tx` parameter on `extract` would not be enough: a unit must
+  know every `content_id` it will merge *before* opening the transaction, so it
+  can take the striped locks first, and a single call gives it no point at
+  which to ask. The split also keeps decoding and model inference outside the
+  transaction, where a retry does not re-pay them.
+
+  No default body can soften this. One forwarding to the old `extract` would
+  have to open its own transaction — exactly the non-atomicity this removes —
+  and would silently degrade a host that believed it had migrated. Implementors
+  get a hard error at the `impl` block instead.
+
+  ```rust
+  // before
+  async fn extract(&self, kb: &KnowledgeBase, src: &IngestSource)
+      -> Result<ArtifactIngestResult, UnikoError>
+  {
+      let caption = self.vlm.caption(src).await?;          // model
+      let nid = kb.create_node("Artifact", &props).await?;  // commits
+      Ok(ArtifactIngestResult { artifact_node_id: nid, .. })
+  }
+
+  // after
+  async fn prepare(&self, kb: &KnowledgeBase, src: &IngestSource)
+      -> Result<Box<dyn ModalityPrepared>, UnikoError>
+  {
+      let caption = self.vlm.caption(src).await?;   // model, no tx open
+      let put = kb.put_blob(&hash, &bytes).await?;  // blob I/O
+      Ok(Box::new(MyPrep { hash, size, caption, put }))
+  }
+
+  async fn apply_in_tx(
+      &self, kb: &KnowledgeBase, tx: &Transaction,
+      prep: &dyn ModalityPrepared,
+      ctx: ArtifactContextNids, seen: &mut UnitArtifactSeen,
+  ) -> Result<ArtifactIngestResult, UnikoError> {
+      let prep = prep.as_any().downcast_ref::<MyPrep>().expect("own prep");
+      let nid = kb.create_node_in_tx(tx, "Artifact", &props).await?;
+      // ctx.message_nid is already resolved — do NOT look it up by id.
+      Ok(ArtifactIngestResult { artifact_node_id: nid, .. })
+  }
+  ```
+
+  Post-commit work — such as `Artifact.image_embedding`, which has no embedding
+  config and is written through a self-committing update — moves to
+  `finish_post_commit`. Python bindings are unaffected: Python-authored
+  extractors were never exposed.
+
+- **`Session::summarize` returns `SummarizeReport`** rather than
+  `Option<NodeId>`; the Python binding returns `(summary_id, finalize_error)`.
+  The chunk refresh it performs is still best-effort — failing summary
+  generation over a transient conflict would regress existing callers — but its
+  outcome is now reported instead of only logged, so a caller can tell that a
+  summary was built from stale chunks.
+
+### Added
+
+- **Atomic, idempotent multi-turn units** (`rustic-ai/uniko#40`):
+
+  ```rust
+  session.unit()
+      .turn(Turn::new("alice", "what's the plan?").id("m-1"))
+      .turn(Turn::new("bob", "ship it friday").id("m-2"))
+      .commit().await?;
+  ```
+
+  Every message, its edges and chunks, the unit's merged entity upsert, each
+  turn's mentions and observations, and every attachment are written in ONE
+  transaction that commits once. A related pair is either wholly visible to
+  later recall or wholly absent — the guarantee two separate `observe` calls
+  cannot give, where an interruption leaves a question with no answer.
+
+  Re-committing a unit whose ids are all present with identical content is a
+  no-op. Reusing an id with different content, repeating an id within one unit,
+  or submitting a unit that is only *partly* recorded is rejected: a correct
+  caller cannot produce a partial unit, and both alternatives — ingesting only
+  the absent turns, or treating the whole unit as a no-op — silently corrupt.
+
+  `Session::observe` is now a one-turn unit, so the two entry points cannot
+  drift. Two behaviour changes follow: attachments commit **with** their
+  message rather than in separate transactions afterwards, and an idempotent
+  replay advances the chain head so the following turn still gets its `NEXT`
+  edge.
+
+- `Agent::finalize_session` quiesces the streaming pipeline before reporting,
+  so it cannot claim completion while ingest for that session is still in
+  flight. The barrier is instance-wide rather than per-session: broader than
+  needed, but it never waits too little.
+
+### Fixed
+
+- **Observation ordering was not a total order.** `session_observation_rows`
+  ordered by the *message's* timestamp, which every observation from that
+  message shares, so their relative order was arbitrary. The observation chunk
+  surface concatenates those rows, so a reordering changed the chunk text and
+  `finalize()` rebuilt an unchanged session — re-embedding every observation
+  chunk, with nothing to explain why. Since `FinalizeReport::rebuilt` ORs the
+  transcript and observation surfaces, this surfaced as a finalize claiming to
+  have rewritten a session nobody had touched.
+
+- **Session chunking no longer degrades failed reads into wrong data.**
+  `session_chunk_rows` dropped a row whose id failed to decode, making an
+  unreadable chunk surface look *absent*, and defaulted unreadable text to
+  `""`, making a readable chunk look *changed*; `session_transcript_rows`
+  substituted `"unknown"` for an unreadable speaker name, rewriting the
+  transcript that the idempotency check compares. All three now propagate. A
+  genuinely NULL speaker still reads as `"unknown"` — that case is legitimate.
+
+- **Artifact ingest is atomic.** The node, its `HAS_CONTENT` edge, the
+  provenance edges and the chunks were written in four-plus separate commits,
+  so a failure between them left a committed Artifact with no chunks. Both the
+  text and PDF paths now write in one transaction; for the tiered PDF path this
+  also collapses what was on the order of `2*pages + 4*blocks + chunks`
+  separate commits into a single one.
+
+- **PDF provenance edges could vanish silently.** `link_pdf_context` skipped an
+  unresolvable reference with no output at all — not even the debug line the
+  artifact path emits — wrote `ATTACHED_TO` without `attached_at`, and had no
+  `PRODUCED` leg.
+
 ### Changed
 
 - **uni-db 3.4.0 → 4.1.1, uni-xervo 0.17.0 → 0.18.1.** No API changes were
