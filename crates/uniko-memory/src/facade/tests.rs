@@ -476,7 +476,10 @@ async fn summarize_unused_session_is_none() {
     let session = memory.agent("assistant").session("never-used");
 
     match session.summarize().await {
-        Ok(summary) => assert!(summary.is_none(), "unused session has nothing to summarize"),
+        Ok(report) => assert!(
+            report.summary.is_none(),
+            "unused session has nothing to summarize"
+        ),
         Err(e) if is_model_unavailable(&e) => eprintln!("skipping: embeddings unavailable"),
         Err(e) => panic!("summarize failed: {e}"),
     }
@@ -502,6 +505,22 @@ async fn count_query(kb: &KnowledgeBase, cypher: &str) -> i64 {
         .first()
         .and_then(|row| row.get::<i64>("c").ok())
         .unwrap_or(0)
+}
+
+/// Collect a single string column `t` from every row, for diagnostics.
+async fn text_query(kb: &KnowledgeBase, cypher: &str) -> Vec<String> {
+    kb.db() // ALLOW: test-only assertion helper; the seal governs product code.
+        .session()
+        .query(cypher)
+        .await
+        .expect("query")
+        .rows()
+        .iter()
+        .map(|row| {
+            row.get::<String>("t")
+                .unwrap_or_else(|_| "<decode err>".into())
+        })
+        .collect()
 }
 
 async fn seed_participant(kb: &KnowledgeBase, pid: &str) {
@@ -1042,10 +1061,33 @@ async fn finalize_is_idempotent() {
     };
     let second = session.finalize().await.expect("second finalize");
 
-    assert!(
-        !second.rebuilt,
-        "an unchanged session must not be rewritten"
-    );
+    if second.rebuilt {
+        // The bare assertion said only "it rebuilt", which is useless for
+        // diagnosis. The rebuild has exactly two causes: the existing-chunk
+        // read came back short, or the freshly computed transcript differs
+        // from the stored one. Print both so a failure identifies which.
+        let stored = text_query(
+            agent.kb(),
+            "MATCH (:Session {session_id: 'fin-3'})-[:HAS_CHUNK]->(c:Chunk) \
+             WHERE c.chunk_type = 'session' RETURN c.text AS t ORDER BY c.index",
+        )
+        .await;
+        let speakers = text_query(
+            agent.kb(),
+            "MATCH (m:Message)-[:IN_SESSION]->(:Session {session_id: 'fin-3'}) \
+             OPTIONAL MATCH (m)-[:SENT_BY]->(p:Participant) \
+             RETURN coalesce(p.name, '<NULL SENT_BY>') AS t",
+        )
+        .await;
+        panic!(
+            "an unchanged session must not be rewritten\n\
+             first.transcript_chunks  = {:?}\n\
+             second.transcript_chunks = {:?}\n\
+             stored chunk text        = {stored:?}\n\
+             resolved speakers        = {speakers:?}",
+            first.transcript_chunks, second.transcript_chunks,
+        );
+    }
     assert_eq!(
         first.transcript_chunks, second.transcript_chunks,
         "unchanged session keeps the same chunk nodes"
@@ -1899,6 +1941,266 @@ async fn empty_unit_is_config_error() {
         matches!(err, UnikoError::Config(_)),
         "expected Config, got {err:?}"
     );
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// THE ROLLBACK TEST. A failure part-way through a unit leaves no trace of
+/// the turns already written inside that transaction.
+///
+/// The conflict tests above prove the *pre-transaction* rejection path
+/// writes nothing. This proves the *in-transaction* rollback path does,
+/// which is a different guarantee and the one issue #40 actually asks for:
+/// interrupt after the first member would otherwise have been written, and
+/// neither member may appear.
+///
+/// `UNIKO_TEST_FAIL_AFTER_TURN` injects the failure after turn 0's writes.
+/// Env vars are process-global, which is safe only because nextest — this
+/// repo's runner of record — gives every test its own process. Run under
+/// `cargo test` and this would leak into sibling tests.
+#[tokio::test]
+async fn unit_rollback_leaves_no_trace() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-rollback");
+
+    // Prove the store is reachable and empty before the injected failure,
+    // so a zero count afterwards cannot be a vacuous pass.
+    assert_eq!(
+        message_count(agent.kb()).await,
+        0,
+        "fixture must start empty"
+    );
+
+    // SAFETY: nextest runs each test in its own process, so this cannot
+    // race another test.
+    unsafe { std::env::set_var("UNIKO_TEST_FAIL_AFTER_TURN", "0") };
+    let result = session
+        .unit()
+        .turn(Turn::new("alice", "first turn of the pair").id("rb-1"))
+        .turn(Turn::new("bob", "second turn of the pair").id("rb-2"))
+        .commit()
+        .await;
+    unsafe { std::env::remove_var("UNIKO_TEST_FAIL_AFTER_TURN") };
+
+    let Err(err) = result else {
+        panic!("the injected failure must fail the unit");
+    };
+    if is_model_unavailable(&err) {
+        eprintln!("skipping: embeddings unavailable");
+        return;
+    }
+
+    // Neither member may be visible — not the one written before the
+    // failure, and not the one after it.
+    assert_eq!(
+        message_count(agent.kb()).await,
+        0,
+        "turn 0 was written inside the transaction and must have rolled back"
+    );
+    assert_eq!(
+        count_query(agent.kb(), "MATCH (o:Observation) RETURN count(o) AS c").await,
+        0,
+        "observations from the rolled-back turn must not persist"
+    );
+    assert_eq!(
+        count_query(agent.kb(), "MATCH (c:Chunk) RETURN count(c) AS c").await,
+        0,
+        "chunks from the rolled-back turn must not persist"
+    );
+
+    // And session_ctx must not have advanced: a later turn chains from the
+    // original head, so it gets no incoming NEXT edge.
+    session
+        .observe(Turn::new("alice", "a turn after the failed unit").id("rb-after"))
+        .await
+        .expect("observe after a failed unit must succeed");
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (:Message)-[:NEXT]->(m:Message) WHERE m.message_id = 'rb-after' \
+             RETURN count(*) AS c"
+        )
+        .await,
+        0,
+        "a rolled-back unit must not leave the chain head advanced"
+    );
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// An attachment failure rolls back its MESSAGE too — the attachments-in-
+/// the-transaction guarantee.
+#[tokio::test]
+async fn unit_attachment_rolls_back_with_its_message() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-attach-rollback");
+
+    // Seed an artifact so the unit's attachment can collide with it.
+    let seeded = match session
+        .ingest(IngestSource::text("original bytes for the shared id").with_id("att-1"))
+        .await
+    {
+        Ok(o) => o,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("seed ingest failed: {e}"),
+    };
+    let _ = seeded;
+    let before_messages = message_count(agent.kb()).await;
+
+    // Same artifact id, different bytes: an IdConflict raised while the
+    // unit's transaction is open, after the message has been written.
+    let err = session
+        .unit()
+        .turn(
+            Turn::new("alice", "a turn carrying a conflicting attachment")
+                .id("att-turn")
+                .attach(IngestSource::text("DIFFERENT bytes under the same id").with_id("att-1")),
+        )
+        .commit()
+        .await
+        .expect_err("a conflicting attachment must fail the unit");
+    assert!(
+        matches!(err, UnikoError::IdConflict(_)),
+        "expected IdConflict, got {err:?}"
+    );
+
+    assert_eq!(
+        message_count(agent.kb()).await,
+        before_messages,
+        "the message must roll back with its failed attachment"
+    );
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (m:Message) WHERE m.message_id = 'att-turn' RETURN count(m) AS c"
+        )
+        .await,
+        0,
+        "no trace of the turn whose attachment failed"
+    );
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// The same bytes attached to two turns of one unit yield ONE `:Artifact`,
+/// but an `ATTACHED_TO` edge from EACH message — dedup must not collapse
+/// provenance.
+#[tokio::test]
+async fn duplicate_attachment_across_turns_yields_one_artifact() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-attach-dedup");
+
+    let shared = "identical attachment bytes shared by two turns";
+    let result = match session
+        .unit()
+        .turn(
+            Turn::new("alice", "here is the document")
+                .id("d-1")
+                .attach(IngestSource::text(shared)),
+        )
+        .turn(
+            Turn::new("bob", "sending the same document back")
+                .id("d-2")
+                .attach(IngestSource::text(shared)),
+        )
+        .commit()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("unit commit failed: {e}"),
+    };
+
+    assert_eq!(result.turns.len(), 2);
+
+    let content_rows =
+        count_query(agent.kb(), "MATCH (c:ArtifactContent) RETURN count(c) AS c").await;
+    assert_eq!(
+        content_rows, 1,
+        "identical bytes must converge on one :ArtifactContent"
+    );
+
+    let attached = count_query(
+        agent.kb(),
+        "MATCH (:Artifact)-[:ATTACHED_TO]->(m:Message) RETURN count(DISTINCT m) AS c",
+    )
+    .await;
+    assert_eq!(
+        attached, 2,
+        "dedup must not drop the second turn's provenance"
+    );
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// An attachment links to the Message created in the SAME transaction.
+///
+/// This is the silent-regression guard. Resolving `triggered_by_message_id`
+/// before the transaction always misses — the Message is uncommitted — and a
+/// miss is skipped rather than raised, so the edge would simply vanish. No
+/// error, no warning, no panic; only this assertion catches it.
+#[tokio::test]
+async fn unit_attachment_links_to_in_tx_message() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("unit-attach-link");
+
+    if let Err(e) = session
+        .unit()
+        .turn(
+            Turn::new("alice", "please review the attached notes")
+                .id("link-1")
+                .attach(IngestSource::text("the attached notes body")),
+        )
+        .commit()
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("unit commit failed: {e}");
+    }
+
+    let linked = count_query(
+        agent.kb(),
+        "MATCH (:Artifact)-[:ATTACHED_TO]->(m:Message) WHERE m.message_id = 'link-1' \
+         RETURN count(*) AS c",
+    )
+    .await;
+    assert_eq!(
+        linked, 1,
+        "the attachment must link to the message created in the same transaction"
+    );
+
     drop(session);
     drop(agent);
     memory.shutdown().await.expect("shutdown");
