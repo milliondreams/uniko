@@ -75,8 +75,8 @@ pub use recall::{
 #[doc(no_inline)]
 pub use uniko_extract::ingest::{
     ArtifactIngestResult, AtomicIngestResult, IngestContext, IngestData, IngestOutcome,
-    IngestSource, ModalityExtractor, ModalityRegistry, PdfIngestResult, ingest_source,
-    resolve_mime,
+    IngestSource, ModalityExtractor, ModalityPrepared, ModalityRegistry, PdfIngestResult,
+    ingest_source, resolve_mime,
 };
 // Content-type taxonomy shared by ingest routing and recall channels.
 #[doc(no_inline)]
