@@ -145,6 +145,64 @@ impl KnowledgeBase {
         Ok(vid)
     }
 
+    /// Mark every earlier revision of `source_id` superseded by
+    /// `new_revision_id`, inside `tx`.
+    ///
+    /// Stamps `superseded_at` on the older artifacts — the denormalised path
+    /// the recall exclusion filter reads — and records `SUPERSEDES` from the
+    /// new revision to each, which is the ordered history. Nothing is
+    /// deleted: a superseded revision must still be attributable to the
+    /// answers it grounded, which is why retirement and supersession are
+    /// stamps rather than removals (issue #41).
+    ///
+    /// Idempotent: re-running for a revision that is already current is a
+    /// no-op, and a revision never supersedes itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn supersede_prior_revisions_in_tx(
+        &self,
+        tx: &uni_db::Transaction,
+        source_id: &str,
+        new_revision_id: &str,
+        new_artifact_nid: crate::types::NodeId,
+    ) -> Result<u64> {
+        let now = datetime_value(Utc::now());
+        // Older revisions of the SAME source, excluding this one.
+        let rows = tx
+            .query_with(
+                "MATCH (a:Artifact) WHERE a.source_id = $sid \
+                 AND a.revision_id IS NOT NULL AND a.revision_id <> $rid \
+                 AND a.superseded_at IS NULL RETURN id(a) AS vid",
+            )
+            .param("sid", Value::String(source_id.to_string()))
+            .param("rid", Value::String(new_revision_id.to_string()))
+            .fetch_all()
+            .await?;
+        let mut superseded = 0u64;
+        for row in rows.rows() {
+            let vid: i64 = row.get("vid")?;
+            tx.query_with("MATCH (a:Artifact) WHERE id(a) = $vid SET a.superseded_at = $now")
+                .param("vid", Value::Int(vid))
+                .param("now", now.clone())
+                .fetch_all()
+                .await?;
+            self.create_edges_in_tx(
+                tx,
+                &[(
+                    crate::schema::edges::SUPERSEDES,
+                    new_artifact_nid,
+                    vid,
+                    std::collections::HashMap::new(),
+                )],
+            )
+            .await?;
+            superseded += 1;
+        }
+        Ok(superseded)
+    }
+
     /// MERGE the `:ArtifactContent` row for `spec.content_id` **inside**
     /// `tx`, deferring the commit to the caller. Returns the `NodeId`.
     /// Idempotent — re-running on the same hash is a no-op on the graph

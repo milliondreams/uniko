@@ -68,6 +68,14 @@ pub struct ScopeFilter {
     /// Allowed logical sources (`source_id`, denormalised from
     /// `FROM_SOURCE`).
     pub sources: Option<Vec<String>>,
+    /// Sources and revisions that must not ground a CURRENT answer (issue
+    /// #41). Empty by default and empty whenever nothing has been retired or
+    /// superseded, in which case no predicate is emitted at all.
+    ///
+    /// Set this to [`ExcludeSet::default`] to ask for historical recall —
+    /// superseded and retired evidence included, so an older result stays
+    /// attributable to the revision that grounded it.
+    pub exclude: ExcludeSet,
 }
 
 impl ScopeFilter {
@@ -80,6 +88,7 @@ impl ScopeFilter {
             || self.until.is_some()
             || self.categories.is_some()
             || self.sources.is_some()
+            || !self.exclude.is_empty()
     }
 }
 
@@ -110,6 +119,29 @@ fn vid_in_string(ids: &[NodeId]) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!("_vid IN ({list})")
+}
+
+/// Sources and revisions that must not ground a current answer.
+///
+/// Resolved once per recall. When BOTH lists are empty — nobody has retired
+/// or superseded anything — the caller emits no predicate at all, so recall
+/// is byte-identical to before revisions existed. Results can only shrink
+/// once something has been explicitly retired or superseded, never as a
+/// silent consequence of the feature landing.
+#[derive(Debug, Clone, Default)]
+pub struct ExcludeSet {
+    /// `Source.source_id`s that have been retired.
+    pub retired_sources: Vec<String>,
+    /// `Artifact.revision_id`s replaced by a newer revision.
+    pub superseded_revisions: Vec<String>,
+}
+
+impl ExcludeSet {
+    /// True when nothing is excluded, so no predicate is needed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.retired_sources.is_empty() && self.superseded_revisions.is_empty()
+    }
 }
 
 impl KnowledgeBase {
@@ -213,6 +245,20 @@ impl KnowledgeBase {
         } else {
             ""
         };
+        // Written defensively: a NULL property makes `x IN [..]` evaluate to
+        // NULL, and `NOT NULL` is NULL — which would silently drop every
+        // record that has no source or revision at all. The IS NULL arm keeps
+        // un-sourced records eligible, which is the whole existing corpus.
+        let not_retired_pred = if f.exclude.retired_sources.is_empty() {
+            String::new()
+        } else {
+            " AND (m.source_id IS NULL OR NOT m.source_id IN $retired_sources)".to_string()
+        };
+        let not_superseded_pred = if f.exclude.superseded_revisions.is_empty() {
+            String::new()
+        } else {
+            " AND (m.revision_id IS NULL OR NOT m.revision_id IN $superseded_revisions)".to_string()
+        };
         let time_pred = |field: &str| {
             let mut s = String::new();
             if f.since.is_some() {
@@ -241,6 +287,8 @@ impl KnowledgeBase {
             a.push_str(&time_pred("m.timestamp"));
             a.push_str(cat_pred);
             a.push_str(src_pred);
+            a.push_str(&not_retired_pred);
+            a.push_str(&not_superseded_pred);
             a.push_str(" RETURN id(m) AS nid");
             arms.push(a);
         }
@@ -259,6 +307,8 @@ impl KnowledgeBase {
             a.push_str(&time_pred("m.temporal_anchor"));
             a.push_str(cat_pred);
             a.push_str(src_pred);
+            a.push_str(&not_retired_pred);
+            a.push_str(&not_superseded_pred);
             a.push_str(" RETURN id(m) AS nid");
             arms.push(a);
         }
@@ -295,6 +345,8 @@ impl KnowledgeBase {
                 a.push_str(" WHERE sc.session_id IN $sessions");
                 a.push_str(cat_pred);
                 a.push_str(src_pred);
+                a.push_str(&not_retired_pred);
+                a.push_str(&not_superseded_pred);
                 a.push_str(" RETURN id(m) AS nid");
                 arms.push(a);
             }
@@ -304,6 +356,8 @@ impl KnowledgeBase {
             let mut a = String::from("MATCH (m:Chunk) WHERE 1=1");
             a.push_str(cat_pred);
             a.push_str(src_pred);
+            a.push_str(&not_retired_pred);
+            a.push_str(&not_superseded_pred);
             a.push_str(" RETURN id(m) AS nid");
             arms.push(a);
         }
@@ -316,6 +370,8 @@ impl KnowledgeBase {
                 let mut a = format!("MATCH (m:{label}) WHERE 1=1");
                 a.push_str(cat_pred);
                 a.push_str(src_pred);
+                a.push_str(&not_retired_pred);
+                a.push_str(&not_superseded_pred);
                 a.push_str(" RETURN id(m) AS nid");
                 arms.push(a);
             }
@@ -339,6 +395,24 @@ impl KnowledgeBase {
         if let Some(src) = &f.sources {
             let list: Vec<Value> = src.iter().map(|x| Value::String(x.clone())).collect();
             builder = builder.param("sources", Value::List(list));
+        }
+        if !f.exclude.retired_sources.is_empty() {
+            let list: Vec<Value> = f
+                .exclude
+                .retired_sources
+                .iter()
+                .map(|x| Value::String(x.clone()))
+                .collect();
+            builder = builder.param("retired_sources", Value::List(list));
+        }
+        if !f.exclude.superseded_revisions.is_empty() {
+            let list: Vec<Value> = f
+                .exclude
+                .superseded_revisions
+                .iter()
+                .map(|x| Value::String(x.clone()))
+                .collect();
+            builder = builder.param("superseded_revisions", Value::List(list));
         }
         if let Some(since) = f.since {
             builder = builder.param("since", datetime_value(since));
@@ -384,6 +458,104 @@ impl KnowledgeBase {
         Ok(decode_scored_rows(result.rows()))
     }
 
+    /// Resolve which sources are retired and which revisions superseded.
+    ///
+    /// Two small reads, and the common case (nothing retired or superseded)
+    /// returns empty so the candidate queries stay unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn resolve_exclude_set(&self) -> Result<ExcludeSet> {
+        let session = self.db.session();
+        let retired = session
+            .query_with("MATCH (s:Source) WHERE s.retired_at IS NOT NULL RETURN s.source_id AS sid")
+            .fetch_all()
+            .await?;
+        let superseded = session
+            .query_with(
+                "MATCH (a:Artifact) WHERE a.superseded_at IS NOT NULL \
+                 AND a.revision_id IS NOT NULL RETURN a.revision_id AS rid",
+            )
+            .fetch_all()
+            .await?;
+        Ok(ExcludeSet {
+            retired_sources: retired
+                .rows()
+                .iter()
+                .filter_map(|r| r.get::<String>("sid").ok())
+                .collect(),
+            superseded_revisions: superseded
+                .rows()
+                .iter()
+                .filter_map(|r| r.get::<String>("rid").ok())
+                .collect(),
+        })
+    }
+
+    /// Retire a logical source: no revision of it grounds a current answer.
+    ///
+    /// Nothing is deleted, so historical attribution survives. Retirement is
+    /// recorded on the `:Source`, never on the content, so retiring one
+    /// source cannot affect another that happens to share identical bytes —
+    /// those share an `:ArtifactContent` row but not a `:Source`.
+    ///
+    /// Returns `false` when no such source exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn retire_source(&self, source_id: &str) -> Result<bool> {
+        self.set_source_retired_at(source_id, Some(chrono::Utc::now()))
+            .await
+    }
+
+    /// Un-retire a source, making its current revision eligible again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn restore_source(&self, source_id: &str) -> Result<bool> {
+        self.set_source_retired_at(source_id, None).await
+    }
+
+    /// Stamp or clear `Source.retired_at`, in a transaction.
+    ///
+    /// A mutation cannot run on a read-only session, so this goes through
+    /// `transact_with_retry` — the same path every other write takes.
+    async fn set_source_retired_at(
+        &self,
+        source_id: &str,
+        at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let value = at.map_or(Value::Null, datetime_value);
+        let sid = source_id.to_string();
+        self.transact_with_retry(uni_db::RetryOptions::default(), move |tx| {
+            let sid = sid.clone();
+            let value = value.clone();
+            async move {
+                let r = async {
+                    let rows = tx
+                        .query_with(
+                            "MATCH (s:Source {source_id: $sid}) SET s.retired_at = $at \
+                             RETURN id(s) AS vid",
+                        )
+                        .param("sid", Value::String(sid))
+                        .param("at", value)
+                        .fetch_all()
+                        .await?;
+                    Ok(!rows.rows().is_empty())
+                }
+                .await;
+                (tx, r)
+            }
+        })
+        .await
+    }
+
     /// The `(category, source_id)` provenance of each node in `ids`.
     ///
     /// One batched read rather than a per-item lookup: recall returns tens of
@@ -399,7 +571,8 @@ impl KnowledgeBase {
     pub async fn provenance_for_nodes(
         &self,
         ids: &[NodeId],
-    ) -> Result<std::collections::HashMap<NodeId, (Option<String>, Option<String>)>> {
+    ) -> Result<std::collections::HashMap<NodeId, (Option<String>, Option<String>, Option<String>)>>
+    {
         if ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -407,7 +580,8 @@ impl KnowledgeBase {
         let result = session
             .query_with(
                 "MATCH (n) WHERE id(n) IN $ids \
-                 RETURN id(n) AS nid, n.category AS category, n.source_id AS source_id",
+                 RETURN id(n) AS nid, n.category AS category, n.source_id AS source_id, \
+                        n.revision_id AS revision_id",
             )
             .param(
                 "ids",
@@ -420,8 +594,9 @@ impl KnowledgeBase {
             let nid: i64 = row.get("nid")?;
             let category = row.get::<Option<String>>("category").unwrap_or(None);
             let source_id = row.get::<Option<String>>("source_id").unwrap_or(None);
-            if category.is_some() || source_id.is_some() {
-                out.insert(nid, (category, source_id));
+            let revision_id = row.get::<Option<String>>("revision_id").unwrap_or(None);
+            if category.is_some() || source_id.is_some() || revision_id.is_some() {
+                out.insert(nid, (category, source_id, revision_id));
             }
         }
         Ok(out)
