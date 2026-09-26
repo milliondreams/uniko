@@ -186,6 +186,7 @@ pub async fn ingest_into_kb_with_observer(
                 metadata: HashMap::new(),
                 category: None,
                 source_id: None,
+                revision_id: None,
             };
 
             // Atomic ingest: Message + entities + observations in one tx.

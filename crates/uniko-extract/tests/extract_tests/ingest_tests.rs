@@ -27,6 +27,7 @@ fn test_message(id: &str, content: &str, session: &str, sender: &str) -> IngestM
         metadata: HashMap::new(),
         category: None,
         source_id: None,
+        revision_id: None,
     }
 }
 
@@ -506,6 +507,7 @@ async fn test_ingest_artifact_links_conversational_context() {
         produced_by_action_id: Some("act-ctx".into()),
         category: None,
         source_id: None,
+        revision_id: None,
     };
     let result = uniko_extract::ingest::artifact::ingest_artifact(&kb, &art)
         .await

@@ -55,6 +55,7 @@ async fn tiered_ingest_builds_doc_ir_graph() {
         triggered_by_message_id: None,
         category: None,
         source_id: None,
+        revision_id: None,
     };
     let result = ingest_pdf(&kb, PdfInput::Bytes(bytes), opts)
         .await

@@ -163,6 +163,7 @@ pub async fn ingest_item(
                         metadata: HashMap::new(),
                         category: None,
                         source_id: None,
+                        revision_id: None,
                     };
 
                     // Atomic per-message ingest: one tx for Message +

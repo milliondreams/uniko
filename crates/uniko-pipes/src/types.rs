@@ -42,6 +42,12 @@ pub struct IngestMessage {
     /// record so the recall filter needs no traversal.
     #[serde(default)]
     pub source_id: Option<String>,
+    /// Immutable revision identity for this ingest (issue #41). Together
+    /// with the content fingerprint it decides idempotency: the same
+    /// revision with the same bytes is a no-op, the same revision with
+    /// changed bytes is rejected.
+    #[serde(default)]
+    pub revision_id: Option<String>,
 }
 
 /// An artifact (file, document, URL) to ingest.
@@ -94,6 +100,12 @@ pub struct IngestArtifact {
     /// record so the recall filter needs no traversal.
     #[serde(default)]
     pub source_id: Option<String>,
+    /// Immutable revision identity for this ingest (issue #41). Together
+    /// with the content fingerprint it decides idempotency: the same
+    /// revision with the same bytes is a no-op, the same revision with
+    /// changed bytes is rejected.
+    #[serde(default)]
+    pub revision_id: Option<String>,
 }
 
 /// Source of PDF bytes — mirrors `uniko_extract::ingest::pdf::PdfInput`.
@@ -162,6 +174,12 @@ pub struct IngestSource {
     /// record so the recall filter needs no traversal.
     #[serde(default)]
     pub source_id: Option<String>,
+    /// Immutable revision identity for this ingest (issue #41). Together
+    /// with the content fingerprint it decides idempotency: the same
+    /// revision with the same bytes is a no-op, the same revision with
+    /// changed bytes is rejected.
+    #[serde(default)]
+    pub revision_id: Option<String>,
 }
 
 impl IngestSource {
@@ -190,6 +208,7 @@ impl IngestSource {
             metadata: HashMap::new(),
             category: None,
             source_id: None,
+            revision_id: None,
         }
     }
 
@@ -202,6 +221,7 @@ impl IngestSource {
             metadata: HashMap::new(),
             category: None,
             source_id: None,
+            revision_id: None,
         }
     }
 
@@ -245,6 +265,19 @@ impl IngestSource {
     #[must_use]
     pub fn with_source(mut self, source_id: impl Into<String>) -> Self {
         self.source_id = Some(source_id.into());
+        self
+    }
+
+    /// Declare which revision of that source these bytes are (issue #41).
+    ///
+    /// Re-ingesting the same revision with identical bytes is idempotent;
+    /// the same revision with changed bytes is rejected, because a revision
+    /// id is a promise about the content. A NEW revision of the same source
+    /// supersedes the previous one, which then stops grounding current
+    /// answers while staying attributable to history.
+    #[must_use]
+    pub fn with_revision(mut self, revision_id: impl Into<String>) -> Self {
+        self.revision_id = Some(revision_id.into());
         self
     }
 

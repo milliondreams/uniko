@@ -50,6 +50,7 @@ fn msg(id: &str, content: &str, sender: &str) -> IngestMessage {
         metadata: HashMap::new(),
         category: None,
         source_id: None,
+        revision_id: None,
     }
 }
 

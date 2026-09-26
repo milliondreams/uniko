@@ -192,6 +192,8 @@ pub struct ObservationInputs<'a> {
     pub category: Option<&'a str>,
     /// The parent message's logical source id, inherited likewise.
     pub source_id: Option<&'a str>,
+    /// The parent's revision id (issue #41), inherited likewise.
+    pub revision_id: Option<&'a str>,
 }
 
 /// Output of a successful [`prepare_observations`] call.
@@ -212,6 +214,8 @@ pub struct ObservationPrep {
     pub category: Option<String>,
     /// Provenance inherited from the parent message.
     pub source_id: Option<String>,
+    /// Provenance inherited from the parent message.
+    pub revision_id: Option<String>,
 }
 
 impl ObservationPrep {
@@ -365,6 +369,7 @@ pub async fn prepare_observations(
     Ok(ObservationPrepOutcome::Ready(Box::new(ObservationPrep {
         category: input.category.map(str::to_string),
         source_id: input.source_id.map(str::to_string),
+        revision_id: input.revision_id.map(str::to_string),
         all_obs,
         used_model,
         sender_ref,
@@ -400,6 +405,7 @@ pub async fn apply_observations(
         entity_refs,
         category,
         source_id,
+        revision_id,
         ..
     } = prep;
 
@@ -416,6 +422,9 @@ pub async fn apply_observations(
             }
             if let Some(ref source_id) = source_id {
                 props.insert("source_id".into(), Value::String(source_id.clone()));
+            }
+            if let Some(ref revision_id) = revision_id {
+                props.insert("revision_id".into(), Value::String(revision_id.clone()));
             }
             // Normalize the subject (the grouping/ABOUT key) so it keys
             // identically with Entity names and consolidation grouping. The

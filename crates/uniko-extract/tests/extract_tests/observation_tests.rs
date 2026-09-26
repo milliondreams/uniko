@@ -33,6 +33,7 @@ fn ingest_msg(id: &str, content: &str, session: &str, sender: &str) -> IngestMes
         metadata: HashMap::new(),
         category: None,
         source_id: None,
+        revision_id: None,
     }
 }
 

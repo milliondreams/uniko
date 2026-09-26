@@ -51,6 +51,8 @@ pub struct PdfIngestOptions {
     pub category: Option<String>,
     /// Logical source id (issue #39).
     pub source_id: Option<String>,
+    /// Revision identity for these bytes (issue #41).
+    pub revision_id: Option<String>,
 }
 
 impl std::fmt::Debug for PdfIngestOptions {

@@ -152,6 +152,8 @@ pub struct ArtifactPrep {
     /// Logical source id (issue #39), materialised as a `:Source` with a
     /// `FROM_SOURCE` edge and denormalised onto the artifact and its chunks.
     pub source_id: Option<String>,
+    /// Revision identity for these bytes (issue #41).
+    pub revision_id: Option<String>,
 }
 
 impl ArtifactPrep {
@@ -227,6 +229,7 @@ pub async fn prepare_artifact(
         produced_by_action_id: artifact.produced_by_action_id.clone(),
         category: artifact.category.clone(),
         source_id: artifact.source_id.clone(),
+        revision_id: artifact.revision_id.clone(),
     })
 }
 
@@ -331,6 +334,28 @@ pub async fn ingest_artifact_in_tx(
         });
     }
 
+    // 2b. Revision identity (issue #41). A revision id is a promise about
+    //     the content, so the same revision with different bytes is a caller
+    //     error rather than a silent update. Checked in-tx so it also sees a
+    //     revision this same unit just wrote.
+    if let Some(ref revision_id) = prep.revision_id
+        && let Some((_, existing_props)) = kb
+            .get_node_by_ext_id_in_tx(tx, "Artifact", "revision_id", revision_id)
+            .await?
+    {
+        let stored = match existing_props.get("hash") {
+            Some(Value::String(h)) => h.as_str(),
+            _ => "",
+        };
+        if stored != prep.hash {
+            return Err(uniko_store::UnikoError::id_conflict(
+                "Artifact",
+                "revision_id",
+                revision_id,
+            ));
+        }
+    }
+
     // 3. MERGE :ArtifactContent. Memoized per unit so two turns sharing
     //    bytes under DIFFERENT caller ids still converge on one content
     //    row — the case that keeps dedup on `:ArtifactContent`.
@@ -382,6 +407,9 @@ pub async fn ingest_artifact_in_tx(
     if let Some(ref source_id) = prep.source_id {
         props.insert("source_id".into(), Value::String(source_id.clone()));
     }
+    if let Some(ref revision_id) = prep.revision_id {
+        props.insert("revision_id".into(), Value::String(revision_id.clone()));
+    }
     let artifact_nid = kb.create_node_in_tx(tx, "Artifact", &props).await?;
     seen.insert(prep.identity(), artifact_nid, prep.artifact_id.clone());
 
@@ -413,6 +441,15 @@ pub async fn ingest_artifact_in_tx(
         .await?;
     }
 
+    // 5c. A newer revision replaces the previous current one for this
+    //     source: stamp the old artifact and record the ordered history.
+    //     Nothing is deleted, so the superseded revision stays attributable
+    //     to the answers it grounded (issue #41).
+    if let (Some(source_id), Some(revision_id)) = (&prep.source_id, &prep.revision_id) {
+        kb.supersede_prior_revisions_in_tx(tx, source_id, revision_id, artifact_nid)
+            .await?;
+    }
+
     // 6. Contextual provenance (F18/F22/F30).
     link_artifact_context_in_tx(kb, tx, artifact_nid, prep, ctx).await?;
 
@@ -427,6 +464,7 @@ pub async fn ingest_artifact_in_tx(
         super::message::ChunkProvenance {
             category: prep.category.as_deref(),
             source_id: prep.source_id.as_deref(),
+            revision_id: prep.revision_id.as_deref(),
         },
     )
     .await?;

@@ -29,6 +29,7 @@ fn ingest_msg(id: &str, content: &str, content_type: &str, session: &str) -> Ing
         metadata: HashMap::new(),
         category: None,
         source_id: None,
+        revision_id: None,
     }
 }
 

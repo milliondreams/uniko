@@ -33,6 +33,7 @@ fn test_message(id: &str, content: &str, session: &str, sender: &str) -> IngestM
         metadata: HashMap::new(),
         category: None,
         source_id: None,
+        revision_id: None,
     }
 }
 

@@ -100,6 +100,8 @@ pub struct PdfPrep {
     pub category: Option<String>,
     /// Logical source id (issue #39).
     pub source_id: Option<String>,
+    /// Revision identity for these bytes (issue #41).
+    pub revision_id: Option<String>,
 }
 
 /// The chunk provenance a PDF's chunks inherit from it.
@@ -107,6 +109,7 @@ fn pdf_prov(prep: &PdfPrep) -> super::message::ChunkProvenance<'_> {
     super::message::ChunkProvenance {
         category: prep.category.as_deref(),
         source_id: prep.source_id.as_deref(),
+        revision_id: prep.revision_id.as_deref(),
     }
 }
 
@@ -240,6 +243,7 @@ pub async fn prepare_pdf(
         legacy_pages,
         category: opts.category.clone(),
         source_id: opts.source_id.clone(),
+        revision_id: opts.revision_id.clone(),
     })
 }
 

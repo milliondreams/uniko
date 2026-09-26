@@ -231,6 +231,7 @@ pub async fn prepare_source(
                 triggered_by_message_id: context.triggered_by_message_id.clone(),
                 category: src.category.clone(),
                 source_id: src.source_id.clone(),
+                revision_id: src.revision_id.clone(),
             };
             Ok(PreparedSource::Pdf(Box::new(
                 super::pdf::prepare_pdf(kb, input, &options).await?,
@@ -266,6 +267,7 @@ pub async fn prepare_source(
                 produced_by_action_id: None,
                 category: src.category.clone(),
                 source_id: src.source_id.clone(),
+                revision_id: src.revision_id.clone(),
             };
             Ok(PreparedSource::Artifact(Box::new(
                 super::artifact::prepare_artifact(kb, &artifact).await?,
