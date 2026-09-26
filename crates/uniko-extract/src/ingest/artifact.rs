@@ -146,6 +146,12 @@ pub struct ArtifactPrep {
     pub triggered_by_message_id: Option<String>,
     /// Optional provenance, resolved in-tx when the caller passes no nid.
     pub produced_by_action_id: Option<String>,
+    /// Caller's record category (issue #39), written to `Artifact.category`
+    /// and inherited by this artifact's chunks.
+    pub category: Option<String>,
+    /// Logical source id (issue #39), materialised as a `:Source` with a
+    /// `FROM_SOURCE` edge and denormalised onto the artifact and its chunks.
+    pub source_id: Option<String>,
 }
 
 impl ArtifactPrep {
@@ -219,6 +225,8 @@ pub async fn prepare_artifact(
         session_id: artifact.session_id.clone(),
         triggered_by_message_id: artifact.triggered_by_message_id.clone(),
         produced_by_action_id: artifact.produced_by_action_id.clone(),
+        category: artifact.category.clone(),
+        source_id: artifact.source_id.clone(),
     })
 }
 
@@ -365,6 +373,15 @@ pub async fn ingest_artifact_in_tx(
     if let Some(ref lang) = prep.language {
         props.insert("language".into(), Value::String(lang.clone()));
     }
+    // Typed provenance (issue #39), denormalised onto the artifact so a
+    // recall scope filters with a property predicate rather than a
+    // traversal.
+    if let Some(ref category) = prep.category {
+        props.insert("category".into(), Value::String(category.clone()));
+    }
+    if let Some(ref source_id) = prep.source_id {
+        props.insert("source_id".into(), Value::String(source_id.clone()));
+    }
     let artifact_nid = kb.create_node_in_tx(tx, "Artifact", &props).await?;
     seen.insert(prep.identity(), artifact_nid, prep.artifact_id.clone());
 
@@ -377,6 +394,25 @@ pub async fn ingest_artifact_in_tx(
     )
     .await?;
 
+    // 5b. Logical source: the :Source row is the normalised truth that
+    //     outlives any one revision of these bytes (issue #41 builds on it);
+    //     `Artifact.source_id` above is the denormalised filter path.
+    if let Some(ref source_id) = prep.source_id {
+        let source_nid = kb
+            .merge_source_in_tx(tx, source_id, None, prep.path.as_deref())
+            .await?;
+        kb.create_edges_in_tx(
+            tx,
+            &[(
+                uniko_store::schema::edges::FROM_SOURCE,
+                artifact_nid,
+                source_nid,
+                HashMap::new(),
+            )],
+        )
+        .await?;
+    }
+
     // 6. Contextual provenance (F18/F22/F30).
     link_artifact_context_in_tx(kb, tx, artifact_nid, prep, ctx).await?;
 
@@ -388,6 +424,10 @@ pub async fn ingest_artifact_in_tx(
         artifact_nid,
         &prep.chunks,
         "Artifact",
+        super::message::ChunkProvenance {
+            category: prep.category.as_deref(),
+            source_id: prep.source_id.as_deref(),
+        },
     )
     .await?;
 

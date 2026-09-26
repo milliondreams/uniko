@@ -245,13 +245,15 @@ pub async fn ingest_message_atomic(
                 seed_sentence_ctx: Some(&session_ctx.sentence_ctx),
                 timestamp,
                 observation_rules_path: rules_path.as_deref(),
+                category: msg.category.as_deref(),
+                source_id: msg.source_id.as_deref(),
             };
             let obs_outcome = prepare_observations(inputs).await?;
             let (extracted_observations, sentence_ctx_updated) = match obs_outcome {
                 ObservationPrepOutcome::Skip(_) => (Vec::new(), None),
                 ObservationPrepOutcome::Ready(prep) => {
                     let sc_updated = prep.sentence_ctx_updated.clone();
-                    let obs_nids = apply_observations(kb, &tx, message_nid, prep).await?;
+                    let obs_nids = apply_observations(kb, &tx, message_nid, *prep).await?;
                     (obs_nids, sc_updated)
                 }
             };

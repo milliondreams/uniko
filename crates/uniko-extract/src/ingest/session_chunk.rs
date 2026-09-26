@@ -23,7 +23,7 @@ use uniko_store::{KnowledgeBase, NodeId, Value};
 
 use super::chunking::text::TextChunker;
 use super::chunking::{ChunkConfig, ChunkData, Chunker};
-use super::message::{create_chunks, create_chunks_in_tx};
+use super::message::{ChunkProvenance, create_chunks, create_chunks_in_tx};
 
 /// How an existing session-level chunk surface is treated on a re-run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -78,7 +78,15 @@ async fn apply_plan(
 
     // Nothing existed: the plain create path already retries on conflict.
     if keep.is_empty() && doomed.is_empty() {
-        return create_chunks(kb, parent_ext_id, parent_nid, to_create, "Session").await;
+        return create_chunks(
+            kb,
+            parent_ext_id,
+            parent_nid,
+            to_create,
+            "Session",
+            ChunkProvenance::default(),
+        )
+        .await;
     }
 
     let start = std::time::Instant::now();
@@ -86,7 +94,16 @@ async fn apply_plan(
         .transact_with_retry(uniko_store::RetryOptions::default(), |tx| async {
             let r = async {
                 kb.detach_delete_nodes_in_tx(&tx, &doomed).await?;
-                create_chunks_in_tx(kb, &tx, parent_ext_id, parent_nid, to_create, "Session").await
+                create_chunks_in_tx(
+                    kb,
+                    &tx,
+                    parent_ext_id,
+                    parent_nid,
+                    to_create,
+                    "Session",
+                    ChunkProvenance::default(),
+                )
+                .await
             }
             .await;
             (tx, r)
@@ -354,6 +371,7 @@ pub async fn chunk_session_with(
                                     session_nid,
                                     to_create,
                                     "Session",
+                                    ChunkProvenance::default(),
                                 )
                                 .await?,
                             );

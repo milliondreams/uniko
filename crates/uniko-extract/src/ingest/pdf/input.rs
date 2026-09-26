@@ -47,6 +47,10 @@ pub struct PdfIngestOptions {
     /// Message this PDF was attached to; links `Artifact -ATTACHED_TO->
     /// Message` (conversational attachment provenance).
     pub triggered_by_message_id: Option<String>,
+    /// Caller's record category (issue #39).
+    pub category: Option<String>,
+    /// Logical source id (issue #39).
+    pub source_id: Option<String>,
 }
 
 impl std::fmt::Debug for PdfIngestOptions {

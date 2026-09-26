@@ -88,6 +88,7 @@ pub(super) async fn materialize_tiered_in_tx(
     artifact_nid: NodeId,
     pages: &[TieredPageResult],
     chunk_cfg: &ChunkConfig,
+    prov: super::super::message::ChunkProvenance<'_>,
 ) -> uniko_store::Result<TieredMaterialized> {
     let mut out = TieredMaterialized::default();
 
@@ -182,7 +183,8 @@ pub(super) async fn materialize_tiered_in_tx(
                 continue;
             }
             let chunk_nids =
-                create_chunks_in_tx(kb, tx, &block_ext_id, block_nid, &chunks, "Block").await?;
+                create_chunks_in_tx(kb, tx, &block_ext_id, block_nid, &chunks, "Block", prov)
+                    .await?;
             for &chunk_nid in &chunk_nids {
                 // Also attach to the Artifact (B1): keeps mean-pool and
                 // artifact-scoped recall working without touching their queries.
@@ -446,9 +448,21 @@ mod tests {
         }];
 
         let cfg = ChunkConfig::default();
-        let mat = materialize_tiered(&kb, "art-doc-ir", artifact_nid, &pages, &cfg)
-            .await
-            .expect("materialize");
+        // `materialize_tiered_in_tx` defers the commit to its caller, so the
+        // test owns the transaction the way the unit path does.
+        let tx = kb.begin_tx().await.expect("begin tx");
+        let mat = materialize_tiered_in_tx(
+            &kb,
+            &tx,
+            "art-doc-ir",
+            artifact_nid,
+            &pages,
+            &cfg,
+            crate::ingest::message::ChunkProvenance::default(),
+        )
+        .await
+        .expect("materialize");
+        tx.commit().await.expect("commit");
 
         assert_eq!(mat.page_node_ids.len(), 1);
         assert_eq!(mat.block_node_ids.len(), 2);

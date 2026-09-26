@@ -25,6 +25,8 @@ fn test_message(id: &str, content: &str, session: &str, sender: &str) -> IngestM
         addressed_to: None,
         timestamp: Utc::now(),
         metadata: HashMap::new(),
+        category: None,
+        source_id: None,
     }
 }
 
@@ -502,6 +504,8 @@ async fn test_ingest_artifact_links_conversational_context() {
         session_id: Some("sess-ctx".into()),
         triggered_by_message_id: Some("msg-ctx".into()),
         produced_by_action_id: Some("act-ctx".into()),
+        category: None,
+        source_id: None,
     };
     let result = uniko_extract::ingest::artifact::ingest_artifact(&kb, &art)
         .await

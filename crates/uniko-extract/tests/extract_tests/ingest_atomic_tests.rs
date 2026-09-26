@@ -31,6 +31,8 @@ fn test_message(id: &str, content: &str, session: &str, sender: &str) -> IngestM
         addressed_to: None,
         timestamp: Utc::now(),
         metadata: HashMap::new(),
+        category: None,
+        source_id: None,
     }
 }
 

@@ -53,6 +53,8 @@ async fn tiered_ingest_builds_doc_ir_graph() {
         source_path: Some("tests/fixtures/dummy.pdf".into()),
         session_id: None,
         triggered_by_message_id: None,
+        category: None,
+        source_id: None,
     };
     let result = ingest_pdf(&kb, PdfInput::Bytes(bytes), opts)
         .await
@@ -115,7 +117,7 @@ async fn tiered_ingest_builds_doc_ir_graph() {
 
     // The materialized text is recallable via the chunk filter fix.
     let recalled = kb
-        .recall_chunk_and_entity_scoped(&[], "dummy", &[], 10, 0.0, 1.0)
+        .recall_chunk_and_entity_scoped(&[], "dummy", &[], 10, 0.0, 1.0, None)
         .await;
     assert!(
         recalled

@@ -48,6 +48,8 @@ fn msg(id: &str, content: &str, sender: &str) -> IngestMessage {
         }]),
         timestamp: Utc::now(),
         metadata: HashMap::new(),
+        category: None,
+        source_id: None,
     }
 }
 

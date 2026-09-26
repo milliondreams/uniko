@@ -32,6 +32,16 @@ pub struct IngestMessage {
     pub timestamp: DateTime<Utc>,
     /// Arbitrary caller metadata forwarded to pipeline steps.
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Caller's own record class — a user assertion, an executed result, a
+    /// model interpretation (issue #39). Typed provenance: it is filterable
+    /// by recall and deliberately NOT part of the searchable text.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Stable logical source this record came from. Materialised as a
+    /// `:Source` node with a `FROM_SOURCE` edge, and denormalised onto the
+    /// record so the recall filter needs no traversal.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// An artifact (file, document, URL) to ingest.
@@ -74,6 +84,16 @@ pub struct IngestArtifact {
     /// (F18).
     #[serde(default)]
     pub produced_by_action_id: Option<String>,
+    /// Caller's own record class — a user assertion, an executed result, a
+    /// model interpretation (issue #39). Typed provenance: it is filterable
+    /// by recall and deliberately NOT part of the searchable text.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Stable logical source this record came from. Materialised as a
+    /// `:Source` node with a `FROM_SOURCE` edge, and denormalised onto the
+    /// record so the recall filter needs no traversal.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// Source of PDF bytes — mirrors `uniko_extract::ingest::pdf::PdfInput`.
@@ -132,6 +152,16 @@ pub struct IngestSource {
     pub path: Option<String>,
     /// Arbitrary metadata forwarded to ingest.
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Caller's own record class — a user assertion, an executed result, a
+    /// model interpretation (issue #39). Typed provenance: it is filterable
+    /// by recall and deliberately NOT part of the searchable text.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Stable logical source this record came from. Materialised as a
+    /// `:Source` node with a `FROM_SOURCE` edge, and denormalised onto the
+    /// record so the recall filter needs no traversal.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 impl IngestSource {
@@ -158,6 +188,8 @@ impl IngestSource {
             id: None,
             path: Some(recorded),
             metadata: HashMap::new(),
+            category: None,
+            source_id: None,
         }
     }
 
@@ -168,6 +200,8 @@ impl IngestSource {
             id: None,
             path: None,
             metadata: HashMap::new(),
+            category: None,
+            source_id: None,
         }
     }
 
@@ -190,6 +224,27 @@ impl IngestSource {
     #[must_use]
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
+        self
+    }
+
+    /// Tag this source with the caller's own record category (issue #39).
+    ///
+    /// Typed provenance: recall can filter on it, and it never enters the
+    /// searchable text — which is the point, since the alternative is
+    /// encoding a class into the prose and parsing it back out of results.
+    #[must_use]
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
+        self
+    }
+
+    /// Attribute this source to a stable logical source id (issue #39).
+    ///
+    /// Materialised as a `:Source` node with a `FROM_SOURCE` edge, so the
+    /// same logical origin can be recognised across separate ingests.
+    #[must_use]
+    pub fn with_source(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
         self
     }
 

@@ -184,6 +184,8 @@ pub async fn ingest_into_kb_with_observer(
                 addressed_to: Some(vec![other_speaker]),
                 timestamp,
                 metadata: HashMap::new(),
+                category: None,
+                source_id: None,
             };
 
             // Atomic ingest: Message + entities + observations in one tx.

@@ -353,13 +353,15 @@ pub async fn ingest_turns_atomic(
                     seed_sentence_ctx: Some(&sentence_ctx),
                     timestamp: turn.message.timestamp,
                     observation_rules_path: rules_path.as_deref(),
+                    category: turn.message.category.as_deref(),
+                    source_id: turn.message.source_id.as_deref(),
                 };
                 let (obs_nids, sc_updated) = match prepare_observations(inputs).await? {
                     ObservationPrepOutcome::Skip(_) => (Vec::new(), None),
                     ObservationPrepOutcome::Ready(prep) => {
                         let sc = prep.sentence_ctx_updated.clone();
                         (
-                            apply_observations(kb, &tx, message_nids[i], prep).await?,
+                            apply_observations(kb, &tx, message_nids[i], *prep).await?,
                             sc,
                         )
                     }

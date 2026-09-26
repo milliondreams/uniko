@@ -117,6 +117,8 @@ impl uniko_pipes::Step for IngestStep {
                     // Streamed PDFs aren't session/message-linked.
                     session_id: None,
                     triggered_by_message_id: None,
+                    category: None,
+                    source_id: None,
                 };
                 let result = pdf::ingest_pdf(&ctx.kb, input, options).await?;
                 ctx.node_id = result.artifact_node_id;

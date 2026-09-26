@@ -78,8 +78,32 @@ pub(crate) async fn apply_message_writes_in_tx(
         let zero_vec: Vec<Value> = (0..dims).map(|_| Value::Float(0.0)).collect();
         props.insert("embedding".into(), Value::List(zero_vec));
     }
+    // Typed provenance (issue #39), denormalised onto the message so a
+    // recall scope filters with a property predicate, not a traversal.
+    if let Some(ref category) = msg.category {
+        props.insert("category".into(), Value::String(category.clone()));
+    }
+    if let Some(ref source_id) = msg.source_id {
+        props.insert("source_id".into(), Value::String(source_id.clone()));
+    }
     let message_nid = kb.create_node_in_tx(tx, "Message", &props).await?;
     let create_ms = create_start.elapsed().as_millis();
+
+    // The :Source row is the normalised truth the denormalised property
+    // caches; issue #41 hangs revisions and retirement off it.
+    if let Some(ref source_id) = msg.source_id {
+        let source_nid = kb.merge_source_in_tx(tx, source_id, None, None).await?;
+        kb.create_edges_in_tx(
+            tx,
+            &[(
+                uniko_store::schema::edges::FROM_SOURCE,
+                message_nid,
+                source_nid,
+                HashMap::new(),
+            )],
+        )
+        .await?;
+    }
 
     // Create all per-message edges in ONE Cypher statement.
     let edges_start = std::time::Instant::now();
@@ -118,7 +142,19 @@ pub(crate) async fn apply_message_writes_in_tx(
         let chunk_cfg = ChunkConfig::from_uniko_config(kb.config());
         let chunker = select_chunker(&msg.content_type, None);
         let chunks = chunker.chunk(&msg.content, &chunk_cfg);
-        create_chunks_in_tx(kb, tx, &msg.message_id, message_nid, &chunks, "Message").await?
+        create_chunks_in_tx(
+            kb,
+            tx,
+            &msg.message_id,
+            message_nid,
+            &chunks,
+            "Message",
+            ChunkProvenance {
+                category: msg.category.as_deref(),
+                source_id: msg.source_id.as_deref(),
+            },
+        )
+        .await?
     } else {
         Vec::new()
     };
@@ -238,6 +274,7 @@ pub async fn create_chunks(
     parent_nid: NodeId,
     chunks: &[super::chunking::ChunkData],
     parent_label: &str,
+    prov: ChunkProvenance<'_>,
 ) -> uniko_store::Result<Vec<NodeId>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
@@ -250,8 +287,16 @@ pub async fn create_chunks(
     // op (matching every other `transact_with_retry` site).
     let nids = kb
         .transact_with_retry(uniko_store::RetryOptions::default(), |tx| async {
-            let r =
-                create_chunks_in_tx(kb, &tx, parent_ext_id, parent_nid, chunks, parent_label).await;
+            let r = create_chunks_in_tx(
+                kb,
+                &tx,
+                parent_ext_id,
+                parent_nid,
+                chunks,
+                parent_label,
+                prov,
+            )
+            .await;
             (tx, r)
         })
         .await?;
@@ -278,6 +323,19 @@ pub async fn create_chunks(
 /// # Errors
 ///
 /// Returns a storage error if either batched write fails.
+/// Provenance a chunk inherits from its parent Message or Artifact.
+///
+/// Passed down rather than stored on [`ChunkData`](super::chunking::ChunkData)
+/// so the chunkers stay unaware of it — they split text, they do not classify
+/// records.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ChunkProvenance<'a> {
+    /// The parent's record category (issue #39).
+    pub category: Option<&'a str>,
+    /// The parent's logical source id.
+    pub source_id: Option<&'a str>,
+}
+
 pub async fn create_chunks_in_tx(
     kb: &KnowledgeBase,
     tx: &uniko_store::Transaction,
@@ -285,6 +343,7 @@ pub async fn create_chunks_in_tx(
     parent_nid: NodeId,
     chunks: &[super::chunking::ChunkData],
     parent_label: &str,
+    prov: ChunkProvenance<'_>,
 ) -> uniko_store::Result<Vec<NodeId>> {
     if chunks.is_empty() {
         return Ok(Vec::new());
@@ -304,6 +363,12 @@ pub async fn create_chunks_in_tx(
             props.insert("chunk_type".into(), Value::String(c.chunk_type.clone()));
             if let Some(ref lang) = c.language {
                 props.insert("language".into(), Value::String(lang.clone()));
+            }
+            if let Some(category) = prov.category {
+                props.insert("category".into(), Value::String(category.to_string()));
+            }
+            if let Some(source_id) = prov.source_id {
+                props.insert("source_id".into(), Value::String(source_id.to_string()));
             }
             if let Some(ref sym) = c.symbol_name {
                 props.insert("symbol_name".into(), Value::String(sym.clone()));
@@ -417,6 +482,8 @@ mod tests {
             addressed_to: None,
             timestamp: chrono::Utc::now(),
             metadata: std::collections::HashMap::new(),
+            category: None,
+            source_id: None,
         };
         let mut ctx = SessionContext::new(msg.session_id.clone(), 0);
 

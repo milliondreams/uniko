@@ -96,6 +96,18 @@ pub struct PdfPrep {
     pub tiered_pages: Vec<uni_xervo_pdf::TieredPageResult>,
     /// Text-only pages, used when the tiered path is off or unavailable.
     pub legacy_pages: Vec<ExtractedPage>,
+    /// Caller's record category (issue #39).
+    pub category: Option<String>,
+    /// Logical source id (issue #39).
+    pub source_id: Option<String>,
+}
+
+/// The chunk provenance a PDF's chunks inherit from it.
+fn pdf_prov(prep: &PdfPrep) -> super::message::ChunkProvenance<'_> {
+    super::message::ChunkProvenance {
+        category: prep.category.as_deref(),
+        source_id: prep.source_id.as_deref(),
+    }
 }
 
 impl PdfPrep {
@@ -226,6 +238,8 @@ pub async fn prepare_pdf(
         #[cfg(feature = "pdf-ocr")]
         tiered_pages,
         legacy_pages,
+        category: opts.category.clone(),
+        source_id: opts.source_id.clone(),
     })
 }
 
@@ -393,6 +407,7 @@ pub async fn ingest_pdf_in_tx(
             artifact_nid,
             &prep.tiered_pages,
             &chunk_cfg,
+            pdf_prov(prep),
         )
         .await?;
         page_node_ids = mat.page_node_ids;
@@ -406,6 +421,7 @@ pub async fn ingest_pdf_in_tx(
             artifact_nid,
             &prep.legacy_pages,
             &chunk_cfg,
+            pdf_prov(prep),
         )
         .await?
     };
@@ -417,6 +433,7 @@ pub async fn ingest_pdf_in_tx(
         artifact_nid,
         &prep.legacy_pages,
         &chunk_cfg,
+        pdf_prov(prep),
     )
     .await?;
 
@@ -486,12 +503,13 @@ async fn legacy_chunks_in_tx(
     artifact_nid: NodeId,
     pages: &[ExtractedPage],
     chunk_cfg: &ChunkConfig,
+    prov: super::message::ChunkProvenance<'_>,
 ) -> uniko_store::Result<Vec<NodeId>> {
     let chunks = chunk_pages(pages, chunk_cfg);
     if chunks.is_empty() {
         return Ok(Vec::new());
     }
-    create_chunks_in_tx(kb, tx, artifact_id, artifact_nid, &chunks, "Artifact").await
+    create_chunks_in_tx(kb, tx, artifact_id, artifact_nid, &chunks, "Artifact", prov).await
 }
 
 /// Link a PDF artifact to the Session/Message/Action it belongs to, inside
