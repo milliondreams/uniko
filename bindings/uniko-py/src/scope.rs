@@ -66,6 +66,17 @@ impl PyScope {
         slf
     }
 
+    /// Include superseded revisions and retired sources — historical recall
+    /// (issue #41).
+    ///
+    /// Ordinary recall excludes them, so a replaced page or a retired feed
+    /// cannot ground a current answer. Ask for them when the question is
+    /// what grounded a result at the time.
+    fn include_superseded<'py>(slf: PyRef<'py, Self>) -> PyRef<'py, Self> {
+        slf.map(Scope::include_superseded);
+        slf
+    }
+
     /// Restrict recall to these participant names (sender or subject).
     fn participants<'py>(slf: PyRef<'py, Self>, participants: Vec<String>) -> PyRef<'py, Self> {
         slf.map(|s| s.participants(participants));

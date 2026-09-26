@@ -281,3 +281,60 @@ def test_source_filter_and_exposed_provenance() -> None:
     bundle = agent.recall_in_sync("beacon signal", scope)
     for item in bundle.items:
         assert item.source_id == "feed-alpha", f"a disallowed source leaked: {item!r}"
+
+
+# ── Issue #41: source revisions and retirement ─────────────────────────
+
+
+def test_newer_revision_supersedes_and_retirement_hides_both() -> None:
+    """The issue's sequence: A, then a contradicting B, then retirement."""
+    engine = uniko.Uniko.in_memory_sync()
+    agent = engine.agent("analyst")
+    session = agent.session("rev-a")
+
+    session.ingest_sync(
+        uniko.IngestSource.from_text("The summit elevation is 3200 metres.")
+        .with_id("pg-a")
+        .with_source("wiki-summit")
+        .with_revision("rev-a")
+    )
+    session.ingest_sync(
+        uniko.IngestSource.from_text("The summit elevation is 3450 metres.")
+        .with_id("pg-b")
+        .with_source("wiki-summit")
+        .with_revision("rev-b")
+    )
+
+    # Ordinary recall must not be grounded by the superseded revision.
+    current = agent.recall_sync("summit elevation")
+    assert all(i.revision_id != "rev-a" for i in current.items), (
+        "a superseded revision must not ground a current answer"
+    )
+
+    # Retiring the source takes every revision out of current recall.
+    assert agent.retire_source_sync("wiki-summit") is True
+    after = agent.recall_sync("summit elevation")
+    assert all(i.source_id != "wiki-summit" for i in after.items), (
+        "a retired source must not ground a current answer"
+    )
+
+
+def test_reusing_a_revision_with_changed_content_is_rejected() -> None:
+    """A revision id is a promise about the content."""
+    engine = uniko.Uniko.in_memory_sync()
+    session = engine.agent("analyst").session("rev-c")
+    src = (
+        uniko.IngestSource.from_text("original body")
+        .with_id("rc-a")
+        .with_source("feed-x")
+        .with_revision("rx-1")
+    )
+    session.ingest_sync(src)
+
+    with pytest.raises(uniko.IdConflictError, match="(?i)id conflict"):
+        session.ingest_sync(
+            uniko.IngestSource.from_text("DIFFERENT body")
+            .with_id("rc-b")
+            .with_source("feed-x")
+            .with_revision("rx-1")
+        )

@@ -85,6 +85,12 @@ impl PyTurn {
         slf
     }
 
+    /// Declare which revision of that source this turn reflects (issue #41).
+    fn revision<'py>(slf: PyRef<'py, Self>, revision_id: String) -> PyRef<'py, Self> {
+        slf.map(|t| t.revision(revision_id));
+        slf
+    }
+
     /// Override the content type (defaults to `"text"`).
     fn content_type<'py>(slf: PyRef<'py, Self>, content_type: String) -> PyRef<'py, Self> {
         slf.map(|t| t.content_type(content_type));

@@ -155,6 +155,9 @@ pub struct PyRecallItem {
     /// "lineage unavailable" signal for an aggregate with no single source.
     #[pyo3(get)]
     source_id: Option<String>,
+    /// Which revision of that source grounded this item (issue #41).
+    #[pyo3(get)]
+    revision_id: Option<String>,
 }
 
 impl PyRecallItem {
@@ -175,6 +178,7 @@ impl PyRecallItem {
                 sources,
                 category: item.category.clone(),
                 source_id: item.source_id.clone(),
+                revision_id: item.revision_id.clone(),
             },
         )
     }

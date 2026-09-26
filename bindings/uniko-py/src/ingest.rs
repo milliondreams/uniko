@@ -100,6 +100,17 @@ impl PyIngestSource {
         slf
     }
 
+    /// Declare which revision of that source these bytes are (issue #41).
+    ///
+    /// The same revision with identical bytes is idempotent; the same
+    /// revision with changed bytes raises `IdConflictError`. A new revision
+    /// supersedes the previous one, which then stops grounding current
+    /// answers while remaining attributable to history.
+    fn with_revision<'py>(slf: PyRef<'py, Self>, revision_id: String) -> PyRef<'py, Self> {
+        slf.map(|s| s.with_revision(revision_id));
+        slf
+    }
+
     /// Record a source path / URL on the artifact.
     fn with_path<'py>(slf: PyRef<'py, Self>, path: String) -> PyRef<'py, Self> {
         slf.map(|s| s.with_path(path));
