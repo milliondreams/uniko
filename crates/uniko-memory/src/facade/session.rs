@@ -536,6 +536,7 @@ pub struct Turn {
     attachments: Vec<IngestSource>,
     category: Option<String>,
     source_id: Option<String>,
+    revision_id: Option<String>,
 }
 
 impl Turn {
@@ -552,6 +553,7 @@ impl Turn {
             attachments: Vec::new(),
             category: None,
             source_id: None,
+            revision_id: None,
         }
     }
 
@@ -624,6 +626,17 @@ impl Turn {
         self
     }
 
+    /// Declare which revision of that source this turn reflects (issue #41).
+    ///
+    /// A new revision of the same source supersedes the previous one, which
+    /// then stops grounding current answers while staying attributable to
+    /// the results it did ground.
+    #[must_use]
+    pub fn revision(mut self, revision_id: impl Into<String>) -> Self {
+        self.revision_id = Some(revision_id.into());
+        self
+    }
+
     /// Attach a document/file shared in this turn.
     ///
     /// On [`observe`](Session::observe) each attachment is ingested and
@@ -655,6 +668,7 @@ impl Turn {
             metadata: self.metadata,
             category: self.category,
             source_id: self.source_id,
+            revision_id: self.revision_id,
         }
     }
 }

@@ -67,6 +67,7 @@ fn test_message(id: &str) -> IngestTask {
         metadata: HashMap::new(),
         category: None,
         source_id: None,
+        revision_id: None,
     })
 }
 

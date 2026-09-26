@@ -354,6 +354,7 @@ mod tests {
                     sources: vec![from_msg.clone(), from_doc.clone()],
                     category: None,
                     source_id: None,
+                    revision_id: None,
                 },
                 RecallItem {
                     node_id: 2,
@@ -363,6 +364,7 @@ mod tests {
                     sources: vec![from_msg.clone()],
                     category: None,
                     source_id: None,
+                    revision_id: None,
                 },
             ],
             total_tokens: 0,

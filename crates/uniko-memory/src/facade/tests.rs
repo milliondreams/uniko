@@ -2621,3 +2621,274 @@ async fn coverage_describes_only_permitted_evidence() {
     drop(agent);
     memory.shutdown().await.expect("shutdown");
 }
+
+// ── Source revisions and retirement (issue #41) ────────────────────────
+
+/// The issue's acceptance sequence, end to end: ingest revision A, ingest a
+/// contradicting revision B, confirm current recall uses B while historical
+/// recall still attributes A, then retire the source and confirm neither
+/// revision grounds a current answer.
+#[tokio::test]
+async fn newer_revision_supersedes_and_retirement_hides_both() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let session = agent.session("rev-1");
+
+    // Revision A of a page.
+    if let Err(e) = session
+        .ingest(
+            IngestSource::text("The summit elevation is 3200 metres.")
+                .with_id("page-a")
+                .with_source("wiki-summit")
+                .with_revision("rev-a"),
+        )
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("ingest A failed: {e}");
+    }
+
+    // Nothing is superseded yet, so A is current.
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (a:Artifact) WHERE a.revision_id = 'rev-a' AND a.superseded_at IS NULL \
+             RETURN count(a) AS c"
+        )
+        .await,
+        1,
+        "the only revision must be current"
+    );
+
+    // Revision B contradicts A.
+    session
+        .ingest(
+            IngestSource::text("The summit elevation is 3450 metres.")
+                .with_id("page-b")
+                .with_source("wiki-summit")
+                .with_revision("rev-b"),
+        )
+        .await
+        .expect("ingest B");
+
+    // A is now history; B is current; the history edge records the order.
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (a:Artifact) WHERE a.revision_id = 'rev-a' AND a.superseded_at IS NOT NULL \
+             RETURN count(a) AS c"
+        )
+        .await,
+        1,
+        "revision A must be stamped superseded once B arrives"
+    );
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (b:Artifact {revision_id: 'rev-b'})-[:SUPERSEDES]->\
+             (a:Artifact {revision_id: 'rev-a'}) RETURN count(*) AS c"
+        )
+        .await,
+        1,
+        "SUPERSEDES must record which revision replaced which"
+    );
+
+    // Ordinary recall: only the current revision may ground an answer.
+    let current = match agent.recall("summit elevation").await {
+        Ok(bundle) => bundle,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("recall failed: {e}"),
+    };
+    for item in &current.items {
+        assert_ne!(
+            item.revision_id.as_deref(),
+            Some("rev-a"),
+            "a superseded revision must not ground a current answer: {item:?}"
+        );
+    }
+
+    // Historical recall: A is still attributable to the revision that
+    // grounded it.
+    let historical = agent
+        .recall_in("summit elevation", Scope::default().include_superseded())
+        .await
+        .expect("historical recall");
+    let saw_a = historical
+        .items
+        .iter()
+        .any(|i| i.revision_id.as_deref() == Some("rev-a"));
+    assert!(
+        saw_a || historical.items.is_empty(),
+        "historical recall must be able to reach revision A; got {:?}",
+        historical
+            .items
+            .iter()
+            .map(|i| i.revision_id.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // Retire the source: now NEITHER revision grounds a current answer.
+    assert!(
+        agent.retire_source("wiki-summit").await.expect("retire"),
+        "retiring an existing source must report success"
+    );
+    let after = agent.recall("summit elevation").await.expect("recall");
+    for item in &after.items {
+        assert_ne!(
+            item.source_id.as_deref(),
+            Some("wiki-summit"),
+            "a retired source must not ground a current answer: {item:?}"
+        );
+    }
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// Retiring one source must not affect another that merely shares identical
+/// bytes.
+///
+/// Identical content converges on ONE `:ArtifactContent` row by design, so a
+/// retirement implemented on the content rather than the source would take
+/// both down. This pins that it is recorded on the `:Source`.
+#[tokio::test]
+async fn retiring_one_source_leaves_an_identical_twin_alive() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let session = agent.session("rev-twin");
+
+    let shared = "The lighthouse beam rotates every twelve seconds.";
+    for (id, src) in [("twin-1", "feed-one"), ("twin-2", "feed-two")] {
+        if let Err(e) = session
+            .ingest(
+                IngestSource::text(shared)
+                    .with_id(id)
+                    .with_source(src)
+                    .with_revision(format!("{src}-r1")),
+            )
+            .await
+        {
+            if is_model_unavailable(&e) {
+                eprintln!("skipping: embeddings unavailable");
+                return;
+            }
+            panic!("ingest failed: {e}");
+        }
+    }
+
+    // Two sources, two artifacts, but ONE stored copy of the bytes.
+    assert_eq!(
+        count_query(agent.kb(), "MATCH (s:Source) RETURN count(s) AS c").await,
+        2,
+        "two independent logical sources"
+    );
+    assert_eq!(
+        count_query(agent.kb(), "MATCH (c:ArtifactContent) RETURN count(c) AS c").await,
+        1,
+        "identical bytes must still share one stored copy"
+    );
+
+    agent.retire_source("feed-one").await.expect("retire");
+
+    // feed-two is untouched: retirement is a property of the source.
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (s:Source {source_id: 'feed-two'}) WHERE s.retired_at IS NULL \
+             RETURN count(s) AS c"
+        )
+        .await,
+        1,
+        "retiring feed-one must not retire feed-two"
+    );
+    let bundle = match agent.recall("lighthouse beam").await {
+        Ok(b) => b,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("recall failed: {e}"),
+    };
+    for item in &bundle.items {
+        assert_ne!(
+            item.source_id.as_deref(),
+            Some("feed-one"),
+            "the retired source must be excluded: {item:?}"
+        );
+    }
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// The same revision with changed bytes is rejected: a revision id is a
+/// promise about the content.
+#[tokio::test]
+async fn reusing_a_revision_with_changed_content_is_rejected() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let session = agent.session("rev-conflict");
+
+    if let Err(e) = session
+        .ingest(
+            IngestSource::text("original body of the page")
+                .with_id("rc-1")
+                .with_source("feed-x")
+                .with_revision("rx-1"),
+        )
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("seed ingest failed: {e}");
+    }
+
+    // Same revision, same bytes: idempotent.
+    session
+        .ingest(
+            IngestSource::text("original body of the page")
+                .with_id("rc-1")
+                .with_source("feed-x")
+                .with_revision("rx-1"),
+        )
+        .await
+        .expect("re-ingesting an identical revision must be a no-op");
+
+    // Same revision, different bytes: rejected.
+    let err = session
+        .ingest(
+            IngestSource::text("SILENTLY DIFFERENT body of the page")
+                .with_id("rc-2")
+                .with_source("feed-x")
+                .with_revision("rx-1"),
+        )
+        .await
+        .expect_err("changed content under one revision id must be rejected");
+    assert!(
+        matches!(err, UnikoError::IdConflict(_)),
+        "expected IdConflict, got {err:?}"
+    );
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}

@@ -180,6 +180,14 @@ pub struct RecallItem {
     /// `None` on an aggregate with no single source, which is the explicit
     /// "lineage unavailable" signal rather than a silent blank.
     pub source_id: Option<String>,
+    /// Which revision of that source grounded this item (issue #41).
+    ///
+    /// Ordinary recall only returns current revisions, so this normally
+    /// names the live one. Under
+    /// [`Scope::include_superseded`](Scope::include_superseded) it is how a
+    /// historical result stays attributable to the revision that actually
+    /// grounded it.
+    pub revision_id: Option<String>,
 }
 
 impl RecallItem {
@@ -281,6 +289,14 @@ pub struct Dimensions {
     pub categories: Option<Vec<String>>,
     /// Restrict to records from one of these logical `Source.source_id`s.
     pub sources: Option<Vec<String>>,
+    /// Include evidence from superseded revisions and retired sources
+    /// (issue #41).
+    ///
+    /// `false` (the default) is ordinary recall: only the current revision of
+    /// a live source can ground an answer. `true` is historical recall — it
+    /// keeps an older result attributable to the revision that actually
+    /// grounded it.
+    pub include_superseded: bool,
 }
 
 impl Dimensions {
@@ -378,6 +394,19 @@ impl Scope {
     #[must_use]
     pub fn sources(mut self, sources: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.dims.sources = Some(sources.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Include superseded revisions and retired sources — historical recall
+    /// (issue #41).
+    ///
+    /// Ordinary recall excludes them, so a replaced page or a retired feed
+    /// cannot ground a current answer. Ask for them when the question is
+    /// "what grounded this result at the time", which must stay answerable
+    /// after the evidence stops being current.
+    #[must_use]
+    pub fn include_superseded(mut self) -> Self {
+        self.dims.include_superseded = true;
         self
     }
 
@@ -713,9 +742,10 @@ async fn attach_provenance(kb: &KnowledgeBase, items: &mut [RecallItem]) {
     match kb.provenance_for_nodes(&ids).await {
         Ok(map) => {
             for item in items.iter_mut() {
-                if let Some((category, source_id)) = map.get(&item.node_id) {
+                if let Some((category, source_id, revision_id)) = map.get(&item.node_id) {
                     item.category = category.clone();
                     item.source_id = source_id.clone();
+                    item.revision_id = revision_id.clone();
                 }
             }
         }
@@ -1030,16 +1060,30 @@ async fn recall_unfiltered(
     // Resolve the dimensional scope into an allow-set once, threaded to the
     // candidate generators via `config.dimensions_allow`. When unconstrained
     // (the default) this is skipped and the cascade runs exactly as before.
+    //
+    // Superseded and retired evidence is excluded from ORDINARY recall
+    // (issue #41). The exclude-set is resolved first: when nothing has been
+    // retired or superseded it comes back empty, `is_active()` stays false,
+    // and the cascade runs exactly as before — so landing revisions does not
+    // silently shrink anyone's results. They shrink only once a source has
+    // actually been retired or a revision replaced.
+    let exclude = if config.dimensions.include_superseded {
+        uniko_store::repository::recall::ExcludeSet::default()
+    } else {
+        kb.resolve_exclude_set().await?
+    };
+
     let owned_config;
-    let config = if !config.dimensions.is_unconstrained() && config.dimensions_allow.is_none() {
-        let filter = uniko_store::repository::recall::ScopeFilter {
-            sessions: config.dimensions.sessions.clone(),
-            participants: config.dimensions.participants.clone(),
-            since: config.dimensions.since,
-            until: config.dimensions.until,
-            categories: config.dimensions.categories.clone(),
-            sources: config.dimensions.sources.clone(),
-        };
+    let filter = uniko_store::repository::recall::ScopeFilter {
+        sessions: config.dimensions.sessions.clone(),
+        participants: config.dimensions.participants.clone(),
+        since: config.dimensions.since,
+        until: config.dimensions.until,
+        categories: config.dimensions.categories.clone(),
+        sources: config.dimensions.sources.clone(),
+        exclude,
+    };
+    let config = if filter.is_active() && config.dimensions_allow.is_none() {
         let allow = kb.resolve_scope_allow_set(&filter).await?;
         let mut scoped = config.clone();
         scoped.dimensions_allow = Some(allow);
@@ -1245,6 +1289,7 @@ async fn recall_unfiltered(
                 node_id: nid,
                 category: None,
                 source_id: None,
+                revision_id: None,
                 kind,
                 score: score * kind.tier().weight(),
                 content,
@@ -1550,6 +1595,7 @@ async fn phase1_compact(
                     node_id: row.node_id,
                     category: None,
                     source_id: None,
+                    revision_id: None,
                     kind,
                     score: weighted,
                     content: row.content,
@@ -1808,6 +1854,7 @@ fn fuse_and_score_phase2(
                 node_id: nid,
                 category: None,
                 source_id: None,
+                revision_id: None,
                 kind,
                 score: score * kind.tier().weight(),
                 content,

@@ -125,6 +125,7 @@ mod tests {
             sources: Vec::new(),
             category: None,
             source_id: None,
+            revision_id: None,
         }
     }
 

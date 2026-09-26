@@ -115,6 +115,7 @@ pub async fn add_observation(
         extract_ms: 0,
         category: None,
         source_id: None,
+        revision_id: None,
     };
 
     let tx = kb.begin_tx().await?;
