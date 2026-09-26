@@ -213,3 +213,71 @@ def test_unit_id_conflict_leaves_nothing_behind() -> None:
     assert (
         engine.agent("analyst").data.message_sync("c-1").content == "original content"
     )
+
+
+# ── Issue #39: typed provenance and pre-ranking filters ────────────────
+
+
+def test_recall_returns_only_the_permitted_category() -> None:
+    """A category filter narrows candidates before ranking, not after."""
+    engine = uniko.Uniko.in_memory_sync()
+    agent = engine.agent("analyst")
+    session = agent.session("prov-a")
+    session.commit_unit_sync(
+        [
+            uniko.Turn("user-a", "the telescope readings look stable")
+            .id("pv-1")
+            .category("user_assertion"),
+            uniko.Turn("agent", "the telescope query returned 42 rows")
+            .id("pv-2")
+            .category("executed_result"),
+        ]
+    )
+
+    scope = uniko.Scope().categories(["executed_result"])
+    bundle = agent.recall_in_sync("telescope", scope)
+    assert bundle.items, "the permitted category must still return evidence"
+    for item in bundle.items:
+        assert item.category == "executed_result", (
+            f"a disallowed category leaked: {item!r}"
+        )
+
+
+def test_unmatched_category_returns_empty() -> None:
+    """No eligible match returns empty rather than other categories."""
+    engine = uniko.Uniko.in_memory_sync()
+    agent = engine.agent("analyst")
+    session = agent.session("prov-b")
+    session.observe_sync(
+        uniko.Turn("user-a", "the telescope readings look stable")
+        .id("pv-3")
+        .category("user_assertion")
+    )
+
+    scope = uniko.Scope().categories(["no_such_category"])
+    bundle = agent.recall_in_sync("telescope", scope)
+    assert not bundle.items, (
+        f"an unmatched category must not be padded with others: {bundle.items!r}"
+    )
+
+
+def test_source_filter_and_exposed_provenance() -> None:
+    """A source filter narrows, and each item reports its source."""
+    engine = uniko.Uniko.in_memory_sync()
+    agent = engine.agent("analyst")
+    session = agent.session("prov-c")
+    session.commit_unit_sync(
+        [
+            uniko.Turn("agent", "the beacon signal was steady all week")
+            .id("pv-4")
+            .source("feed-alpha"),
+            uniko.Turn("agent", "the beacon signal dropped out twice")
+            .id("pv-5")
+            .source("feed-beta"),
+        ]
+    )
+
+    scope = uniko.Scope().sources(["feed-alpha"])
+    bundle = agent.recall_in_sync("beacon signal", scope)
+    for item in bundle.items:
+        assert item.source_id == "feed-alpha", f"a disallowed source leaked: {item!r}"

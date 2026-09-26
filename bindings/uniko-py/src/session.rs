@@ -69,6 +69,22 @@ impl PyTurn {
         slf
     }
 
+    /// Tag this turn with the caller's own record category (issue #39).
+    ///
+    /// Typed provenance: recall can filter on it, and it never enters the
+    /// searchable text — so a consumer no longer has to encode a class into
+    /// the prose and parse it back out of results.
+    fn category<'py>(slf: PyRef<'py, Self>, category: String) -> PyRef<'py, Self> {
+        slf.map(|t| t.category(category));
+        slf
+    }
+
+    /// Attribute this turn to a stable logical source id (issue #39).
+    fn source<'py>(slf: PyRef<'py, Self>, source_id: String) -> PyRef<'py, Self> {
+        slf.map(|t| t.source(source_id));
+        slf
+    }
+
     /// Override the content type (defaults to `"text"`).
     fn content_type<'py>(slf: PyRef<'py, Self>, content_type: String) -> PyRef<'py, Self> {
         slf.map(|t| t.content_type(content_type));

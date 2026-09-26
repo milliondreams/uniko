@@ -88,6 +88,18 @@ impl PyIngestSource {
         slf
     }
 
+    /// Tag this source with the caller's own record category (issue #39).
+    fn with_category<'py>(slf: PyRef<'py, Self>, category: String) -> PyRef<'py, Self> {
+        slf.map(|s| s.with_category(category));
+        slf
+    }
+
+    /// Attribute this source to a stable logical source id (issue #39).
+    fn with_source<'py>(slf: PyRef<'py, Self>, source_id: String) -> PyRef<'py, Self> {
+        slf.map(|s| s.with_source(source_id));
+        slf
+    }
+
     /// Record a source path / URL on the artifact.
     fn with_path<'py>(slf: PyRef<'py, Self>, path: String) -> PyRef<'py, Self> {
         slf.map(|s| s.with_path(path));
