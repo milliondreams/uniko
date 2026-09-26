@@ -33,8 +33,14 @@ pub(crate) fn register_labels<'a>(
         .property_nullable("uri", DataType::String)
         .property("first_seen", DataType::DateTime)
         .property_nullable("last_seen", DataType::DateTime)
+        // Retiring a source stops EVERY revision of it grounding a current
+        // answer, without deleting anything — history stays attributable.
+        // Retirement lives here, not on the content, so retiring one source
+        // never affects another that merely shares identical bytes.
+        .property_nullable("retired_at", DataType::DateTime)
         .index("source_id", IndexType::Scalar(ScalarType::Hash))
         .index("first_seen", IndexType::Scalar(ScalarType::BTree))
+        .index("retired_at", IndexType::Scalar(ScalarType::BTree))
         .done()
 }
 

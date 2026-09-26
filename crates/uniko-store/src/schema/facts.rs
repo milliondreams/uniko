@@ -19,6 +19,11 @@ pub(crate) fn register_labels<'a>(
         // than a traversal, since it runs inside every candidate query.
         .property_nullable("category", DataType::String)
         .property_nullable("source_id", DataType::String)
+        // Which revision of that source this record came from (issue
+        // #41). Denormalised beside `source_id` so the "is this evidence
+        // still current" filter is a property predicate in candidate
+        // generation rather than a traversal.
+        .property_nullable("revision_id", DataType::String)
         .property("fact_id", DataType::String)
         .property("subject", DataType::String)
         .property("predicate", DataType::String)
