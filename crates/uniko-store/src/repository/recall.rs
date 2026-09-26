@@ -62,6 +62,12 @@ pub struct ScopeFilter {
     pub since: Option<DateTime<Utc>>,
     /// Exclusive upper time bound.
     pub until: Option<DateTime<Utc>>,
+    /// Allowed record categories (`category` on Message/Artifact/
+    /// Observation/Fact).
+    pub categories: Option<Vec<String>>,
+    /// Allowed logical sources (`source_id`, denormalised from
+    /// `FROM_SOURCE`).
+    pub sources: Option<Vec<String>>,
 }
 
 impl ScopeFilter {
@@ -72,6 +78,8 @@ impl ScopeFilter {
             || self.participants.is_some()
             || self.since.is_some()
             || self.until.is_some()
+            || self.categories.is_some()
+            || self.sources.is_some()
     }
 }
 
@@ -169,12 +177,16 @@ impl KnowledgeBase {
         // building an `IN ()` predicate (which the SQL backend rejects).
         if f.sessions.as_ref().is_some_and(|s| s.is_empty())
             || f.participants.as_ref().is_some_and(|p| p.is_empty())
+            || f.categories.as_ref().is_some_and(|c| c.is_empty())
+            || f.sources.as_ref().is_some_and(|s| s.is_empty())
         {
             return Ok(Vec::new());
         }
         let want_session = f.sessions.is_some();
         let want_part = f.participants.is_some();
         let want_time = f.since.is_some() || f.until.is_some();
+        let want_cat = f.categories.is_some();
+        let want_src = f.sources.is_some();
 
         let sess_pred = if want_session {
             " AND sc.session_id IN $sessions"
@@ -183,6 +195,21 @@ impl KnowledgeBase {
         };
         let part_pred = if want_part {
             " AND (pc.participant_id IN $participants OR pc.name IN $participants)"
+        } else {
+            ""
+        };
+        // Denormalised property predicates — `category` and `source_id` live
+        // on every record label, so these need no traversal. That matters:
+        // this runs inside candidate generation, before ranking, which is
+        // what makes limits and coverage apply to eligible items only rather
+        // than to items discarded afterwards (issue #39).
+        let cat_pred = if f.categories.is_some() {
+            " AND m.category IN $categories"
+        } else {
+            ""
+        };
+        let src_pred = if f.sources.is_some() {
+            " AND m.source_id IN $sources"
         } else {
             ""
         };
@@ -212,6 +239,8 @@ impl KnowledgeBase {
             a.push_str(sess_pred);
             a.push_str(part_pred);
             a.push_str(&time_pred("m.timestamp"));
+            a.push_str(cat_pred);
+            a.push_str(src_pred);
             a.push_str(" RETURN id(m) AS nid");
             arms.push(a);
         }
@@ -228,11 +257,16 @@ impl KnowledgeBase {
             a.push_str(sess_pred);
             a.push_str(part_pred);
             a.push_str(&time_pred("m.temporal_anchor"));
+            a.push_str(cat_pred);
+            a.push_str(src_pred);
             a.push_str(" RETURN id(m) AS nid");
             arms.push(a);
         }
-        // Episode — session + time, but no participant anchor.
-        if !want_part {
+        // Episode — session + time, but no participant anchor, and no
+        // category/source_id: a provenance filter therefore excludes it,
+        // matching the documented rule that a node which cannot anchor a
+        // dimension goes dark under a filter on it.
+        if !want_part && !want_cat && !want_src {
             let mut a = String::from("MATCH (m:Episode)");
             if want_session {
                 a.push_str("-[:IN_SESSION]->(sc:Session)");
@@ -248,25 +282,43 @@ impl KnowledgeBase {
         // by an Artifact attached directly to the Session / to one of its
         // Messages.
         if want_session && !want_part && !want_time {
-            arms.push(String::from(
-                "MATCH (sc:Session)-[:HAS_CHUNK]->(m:Chunk) \
-                 WHERE sc.session_id IN $sessions RETURN id(m) AS nid",
-            ));
-            arms.push(String::from(
+            for owner in [
+                "MATCH (sc:Session)-[:HAS_CHUNK]->(m:Chunk)",
                 "MATCH (msg:Message)-[:HAS_CHUNK]->(m:Chunk) \
-                 MATCH (msg)-[:IN_SESSION]->(sc:Session) \
-                 WHERE sc.session_id IN $sessions RETURN id(m) AS nid",
-            ));
-            arms.push(String::from(
+                 MATCH (msg)-[:IN_SESSION]->(sc:Session)",
                 "MATCH (a:Artifact)-[:HAS_CHUNK]->(m:Chunk) \
-                 MATCH (a)-[:ATTACHED_TO]->(sc:Session) \
-                 WHERE sc.session_id IN $sessions RETURN id(m) AS nid",
-            ));
-            arms.push(String::from(
+                 MATCH (a)-[:ATTACHED_TO]->(sc:Session)",
                 "MATCH (a:Artifact)-[:HAS_CHUNK]->(m:Chunk) \
-                 MATCH (a)-[:ATTACHED_TO]->(:Message)-[:IN_SESSION]->(sc:Session) \
-                 WHERE sc.session_id IN $sessions RETURN id(m) AS nid",
-            ));
+                 MATCH (a)-[:ATTACHED_TO]->(:Message)-[:IN_SESSION]->(sc:Session)",
+            ] {
+                let mut a = String::from(owner);
+                a.push_str(" WHERE sc.session_id IN $sessions");
+                a.push_str(cat_pred);
+                a.push_str(src_pred);
+                a.push_str(" RETURN id(m) AS nid");
+                arms.push(a);
+            }
+        } else if (want_cat || want_src) && !want_part && !want_time {
+            // Provenance-only scope: chunks carry `category`/`source_id`
+            // themselves, so they need no owner traversal at all.
+            let mut a = String::from("MATCH (m:Chunk) WHERE 1=1");
+            a.push_str(cat_pred);
+            a.push_str(src_pred);
+            a.push_str(" RETURN id(m) AS nid");
+            arms.push(a);
+        }
+
+        // Artifact and Fact anchor no session/participant/time dimension,
+        // but both carry provenance, so a provenance filter can reach them
+        // where the older dimensions could not.
+        if (want_cat || want_src) && !want_session && !want_part && !want_time {
+            for label in ["Artifact", "Fact"] {
+                let mut a = format!("MATCH (m:{label}) WHERE 1=1");
+                a.push_str(cat_pred);
+                a.push_str(src_pred);
+                a.push_str(" RETURN id(m) AS nid");
+                arms.push(a);
+            }
         }
 
         let query = arms.join(" UNION ");
@@ -279,6 +331,14 @@ impl KnowledgeBase {
         if let Some(p) = &f.participants {
             let list: Vec<Value> = p.iter().map(|x| Value::String(x.clone())).collect();
             builder = builder.param("participants", Value::List(list));
+        }
+        if let Some(c) = &f.categories {
+            let list: Vec<Value> = c.iter().map(|x| Value::String(x.clone())).collect();
+            builder = builder.param("categories", Value::List(list));
+        }
+        if let Some(src) = &f.sources {
+            let list: Vec<Value> = src.iter().map(|x| Value::String(x.clone())).collect();
+            builder = builder.param("sources", Value::List(list));
         }
         if let Some(since) = f.since {
             builder = builder.param("since", datetime_value(since));
@@ -322,6 +382,49 @@ impl KnowledgeBase {
         }
         let result = builder.fetch_all().await?;
         Ok(decode_scored_rows(result.rows()))
+    }
+
+    /// The `(category, source_id)` provenance of each node in `ids`.
+    ///
+    /// One batched read rather than a per-item lookup: recall returns tens of
+    /// items and every one needs its provenance exposed (issue #39). Nodes
+    /// without either property simply do not appear in the map, which the
+    /// caller reads as "this item has no category / no traceable source"
+    /// rather than as a failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`](crate::UnikoError::Storage) on query
+    /// failure.
+    pub async fn provenance_for_nodes(
+        &self,
+        ids: &[NodeId],
+    ) -> Result<std::collections::HashMap<NodeId, (Option<String>, Option<String>)>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let session = self.db.session();
+        let result = session
+            .query_with(
+                "MATCH (n) WHERE id(n) IN $ids \
+                 RETURN id(n) AS nid, n.category AS category, n.source_id AS source_id",
+            )
+            .param(
+                "ids",
+                Value::List(ids.iter().map(|&i| Value::Int(i)).collect()),
+            )
+            .fetch_all()
+            .await?;
+        let mut out = std::collections::HashMap::with_capacity(result.rows().len());
+        for row in result.rows() {
+            let nid: i64 = row.get("nid")?;
+            let category = row.get::<Option<String>>("category").unwrap_or(None);
+            let source_id = row.get::<Option<String>>("source_id").unwrap_or(None);
+            if category.is_some() || source_id.is_some() {
+                out.insert(nid, (category, source_id));
+            }
+        }
+        Ok(out)
     }
 
     /// BM25 fulltext search over `label.content_field`.

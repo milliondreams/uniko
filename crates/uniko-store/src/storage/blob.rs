@@ -78,6 +78,73 @@ impl KnowledgeBase {
         backend.put(content_id, bytes).await
     }
 
+    /// MERGE the `:Source` row for `source_id` inside `tx`, returning its
+    /// `NodeId`.
+    ///
+    /// A `:Source` is the stable logical origin of a record — the page, the
+    /// dataset, the upstream system — as distinct from the `:Artifact` that
+    /// holds one fetch of it (issues #39/#41). Idempotent: re-recording the
+    /// same source id only refreshes `last_seen`.
+    ///
+    /// # Preconditions
+    ///
+    /// The caller holds the `content:<source_id>` RMW guard, taken before
+    /// `tx` was opened. Without it two concurrent ingests of the same source
+    /// both read "absent" and both CREATE — the insert phantom SSI does not
+    /// catch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnikoError::Storage`] on database failure.
+    pub async fn merge_source_in_tx(
+        &self,
+        tx: &uni_db::Transaction,
+        source_id: &str,
+        name: Option<&str>,
+        uri: Option<&str>,
+    ) -> Result<crate::types::NodeId> {
+        let now = datetime_value(Utc::now());
+        let existing = tx
+            .query_with("MATCH (s:Source {source_id: $sid}) RETURN id(s) AS vid LIMIT 1")
+            .param("sid", Value::String(source_id.to_string()))
+            .fetch_all()
+            .await?;
+        if let Some(row) = existing.rows().first() {
+            let vid: i64 = row.get("vid")?;
+            tx.query_with("MATCH (s:Source) WHERE id(s) = $vid SET s.last_seen = $now")
+                .param("vid", Value::Int(vid))
+                .param("now", now)
+                .fetch_all()
+                .await?;
+            return Ok(vid);
+        }
+        let result = tx
+            .query_with(
+                "CREATE (s:Source {
+                    source_id: $sid, name: $name, uri: $uri,
+                    first_seen: $now, last_seen: $now
+                }) RETURN id(s) AS vid",
+            )
+            .param("sid", Value::String(source_id.to_string()))
+            .param(
+                "name",
+                name.map_or(Value::Null, |v| Value::String(v.to_string())),
+            )
+            .param(
+                "uri",
+                uri.map_or(Value::Null, |v| Value::String(v.to_string())),
+            )
+            .param("now", now)
+            .fetch_all()
+            .await?;
+        let row = result
+            .rows()
+            .first()
+            .ok_or_else(|| UnikoError::Storage("CREATE returned no rows".into()))?;
+        let vid: i64 = row.get("vid")?;
+        Ok(vid)
+    }
+
     /// MERGE the `:ArtifactContent` row for `spec.content_id` **inside**
     /// `tx`, deferring the commit to the caller. Returns the `NodeId`.
     /// Idempotent — re-running on the same hash is a no-op on the graph
