@@ -68,6 +68,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed record provenance and pre-ranking recall filters**
+  (`rustic-ai/uniko#39`):
+
+  ```rust
+  session.observe(
+      Turn::new("agent", "the query returned 42 rows")
+          .category("executed_result")
+          .source("warehouse-prod"),
+  ).await?;
+
+  let scope = Scope::default().categories(["executed_result"]);
+  let bundle = agent.recall_in("row counts", scope).await?;
+  ```
+
+  A caller can record a record class and a stable logical source without
+  placing either in searchable prose. A new `:Source` node holds the logical
+  identity, with `FROM_SOURCE` from the Message or Artifact; `category` and
+  `source_id` are denormalised onto Message, Artifact, Chunk, Observation and
+  Fact so the filter is a property predicate rather than a traversal.
+
+  The filters resolve into the allow-set that candidate generation itself
+  uses, so ranking, the result limit and the `coverage` score describe the
+  permitted evidence — not items that ranked well and were discarded after
+  Uniko had already scored them. A filter with no eligible matches returns
+  empty rather than being padded with other categories. Every `RecallItem`
+  reports its own `category` and `source_id`; `None` means "none recorded" or
+  "no single traceable source", not "filtered out".
+
+  `Episode` carries no provenance, so a provenance filter excludes it,
+  matching the documented rule that a node which cannot anchor a dimension
+  goes dark under a filter on it. `Artifact` and `Fact` become reachable by a
+  filter for the first time: neither anchors session, participant or time, so
+  the older dimensions had no arm for them.
+
+  Schema is now **26 node types, 55 edge types**.
+
 - **Atomic, idempotent multi-turn units** (`rustic-ai/uniko#40`):
 
   ```rust

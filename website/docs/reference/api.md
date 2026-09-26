@@ -157,8 +157,27 @@ for item in &bundle.items {
 | `RecallTier` | `Semantic · Procedural · Episodic · KnowledgeBase · Provenance` | Scoring weight band. |
 
 **Scoping (`Scope`)** — chainable, passed to the `_in` variants: `.sessions([...])` ·
-`.participants([...])` · `.since(DateTime)` · `.until(DateTime)` · `.as_viewer(Viewer)`.
+`.participants([...])` · `.since(DateTime)` · `.until(DateTime)` · `.categories([...])` ·
+`.sources([...])` · `.as_viewer(Viewer)`.
 `Dimensions` holds the resolved filters; `ViewerScope` is `Unrestricted | As(Viewer)`.
+
+**Typed provenance.** `Turn::category(..)` / `Turn::source(..)` and
+`IngestSource::with_category(..)` / `.with_source(..)` record a record class and a
+stable logical source without putting either in searchable prose. A `:Source` node
+carries the logical identity (`FROM_SOURCE` from the Message/Artifact); `category` and
+`source_id` are denormalised onto Message, Artifact, Chunk, Observation and Fact so
+`.categories(..)` / `.sources(..)` filter with a property predicate. Every
+`RecallItem` reports its own `category` and `source_id`, with `None` meaning "no
+category" / "no traceable single source" rather than "filtered out".
+
+!!! note "Filters apply before ranking"
+    `.categories(..)` and `.sources(..)` are resolved into the allow-set that
+    candidate generation itself uses, so the result limit and the `coverage` score
+    describe the permitted evidence — not candidates that ranked well and were
+    discarded afterwards. A filter with no eligible matches returns an empty result;
+    it is never padded out with other categories. `Episode` carries no provenance, so
+    a provenance filter excludes it, matching the existing rule that a node which
+    cannot anchor a dimension goes dark under a filter on it.
 
 !!! warning
     Unscoped reads default to `ViewerScope::Unrestricted` — recall does **not** filter
