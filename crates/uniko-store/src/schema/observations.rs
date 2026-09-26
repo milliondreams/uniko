@@ -16,6 +16,14 @@ pub(crate) fn register_labels<'a>(
     // claim-form a question's gold answer is closest to.
     let mut b = builder
         .label(labels::OBSERVATION)
+        // Typed provenance (issue #39). `category` is the caller's own
+        // record class — a user assertion, an executed result, a model
+        // interpretation — kept OUT of searchable prose so a recall scope
+        // can filter on it. `source_id` is denormalised from the
+        // FROM_SOURCE edge so that filter is a property predicate rather
+        // than a traversal, since it runs inside every candidate query.
+        .property_nullable("category", DataType::String)
+        .property_nullable("source_id", DataType::String)
         .property("observation_id", DataType::String)
         .property("content", DataType::String)
         .property_nullable("subject", DataType::String)

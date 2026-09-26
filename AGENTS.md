@@ -43,7 +43,7 @@ cargo nextest run -E 'test(recall_cascade)'   # filter by name
 
 `KnowledgeBase::in_memory()` is not actually in memory — uni-db materializes
 it as a store directory under `TMPDIR`, and standing one up writes the whole
-schema (24 node types, 53 edge types, plus indexes) as many small files. One
+schema (26 node types, 55 edge types, plus indexes) as many small files. One
 store per test, N tests in parallel.
 
 On macOS that lands on the APFS Data volume, where small-file writes get
@@ -166,7 +166,7 @@ signatures must trace to a source `file:line`, not to design docs.
 ## Source-of-truth gotchas
 
 - **Schema** lives in `crates/uniko-store/src/schema/constants.rs`
-  (`labels::ALL` and `edges::ALL`). Current counts: **24 node types, 53 edge
+  (`labels::ALL` and `edges::ALL`). Current counts: **26 node types, 55 edge
   types.** Ignore stale `schema/mod.rs` doc-comments with lower numbers.
 - **Effective config defaults** come from `UnikoConfig::default()` — the pipeline
   builds `RecallConfig::from_uniko_config` / `ChunkConfig::from_uniko_config` from

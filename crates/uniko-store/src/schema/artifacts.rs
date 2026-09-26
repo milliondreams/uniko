@@ -11,6 +11,14 @@ pub(crate) fn register_labels<'a>(
 ) -> SchemaBuilder<'a> {
     builder
         .label(labels::ARTIFACT)
+        // Typed provenance (issue #39). `category` is the caller's own
+        // record class — a user assertion, an executed result, a model
+        // interpretation — kept OUT of searchable prose so a recall scope
+        // can filter on it. `source_id` is denormalised from the
+        // FROM_SOURCE edge so that filter is a property predicate rather
+        // than a traversal, since it runs inside every candidate query.
+        .property_nullable("category", DataType::String)
+        .property_nullable("source_id", DataType::String)
         .property("artifact_id", DataType::String)
         .property("kind", DataType::String)
         .property_nullable("path", DataType::String)

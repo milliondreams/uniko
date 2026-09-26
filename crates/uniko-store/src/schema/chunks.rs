@@ -11,6 +11,12 @@ pub(crate) fn register_labels<'a>(
 ) -> SchemaBuilder<'a> {
     let mut b = builder
         .label(labels::CHUNK)
+        // Typed provenance (issue #39), denormalised from the parent
+        // Message/Artifact. Chunks are the primary content-bearing recall
+        // unit, so a category or source filter that could not reach them
+        // would gut recall rather than narrow it.
+        .property_nullable("category", DataType::String)
+        .property_nullable("source_id", DataType::String)
         .property("chunk_id", DataType::String)
         .property("text", DataType::String)
         .property_nullable("index", DataType::Int64)
