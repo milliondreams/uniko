@@ -39,6 +39,30 @@ cargo nextest run -p uniko-memory        # one crate
 cargo nextest run -E 'test(recall_cascade)'   # filter by name
 ```
 
+### Recall needs more than a 2 MiB stack
+
+An ingest-plus-recall pass needs **between 1 and 2 MiB of stack**, which sits
+right at the default for a spawned thread. libtest gives each test a 2 MiB
+thread (not the main thread's 8 MiB), and tokio's workers default to 2 MiB
+too, so anything running recall on a spawned thread is close to the edge.
+
+The failure mode is a `SIGABRT` stack overflow, not an error: the process dies,
+so whatever else that test run reported becomes untrustworthy. It reproduces
+deterministically with `RUST_MIN_STACK=1048576` and disappeared in isolation,
+which is why it read as a ~50% flake under suite load for a long time.
+
+The depth is in the store's query execution, not in uniko's own frames —
+boxing the large ingest and recall futures did not move the threshold, no
+single store query is deep (see
+`crates/uniko-store/tests/stack_depth_repro.rs`), and under a 256 KiB stack
+the overflow lands on uni-db's `uni-io` thread. So give it headroom rather
+than trying to shrink it:
+
+- a test that drives ingest + recall should run on an explicit thread — see
+  `crates/uniko-bench/tests/smoke_test.rs`, which uses 16 MiB;
+- a host embedding uniko should size the thread that calls `recall` (for tokio,
+  `Builder::thread_stack_size`), or call it from the main thread.
+
 ### macOS: put `TMPDIR` on a RAM disk
 
 `KnowledgeBase::in_memory()` is not actually in memory — uni-db materializes
