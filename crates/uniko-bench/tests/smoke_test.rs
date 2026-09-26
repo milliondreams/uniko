@@ -54,36 +54,38 @@ fn msg(id: &str, content: &str, sender: &str) -> IngestMessage {
     }
 }
 
-/// Stack for the test thread.
+/// Run an async test body on a thread with enough stack for recall.
 ///
-/// The default is 2 MiB — libtest runs each test on a spawned thread, not the
-/// 8 MiB main thread — and an ingest-plus-recall pass sits right at that
-/// limit: it passes at 2 MiB and overflows deterministically at 1 MiB. Under
-/// full-suite load a slightly deeper call chain tipped it over in roughly
-/// half of runs, aborting the process with SIGABRT rather than failing an
-/// assertion, which silently invalidated whatever else that run reported.
+/// An ingest-plus-recall pass needs more than the 2 MiB libtest gives a
+/// spawned thread (it passes at 2 MiB, overflows at 1 MiB), and under parallel
+/// load that margin vanishes — the process aborts with SIGABRT rather than
+/// failing an assertion, invalidating whatever else the run reported.
 ///
-/// The depth is inside the store's query execution (recursive query planning),
-/// not in uniko's own frames: boxing the large ingest/recall futures moved the
-/// 1 MiB threshold not at all. So this asks for headroom rather than
-/// pretending the requirement is smaller than it is.
-const TEST_STACK_BYTES: usize = 16 * 1024 * 1024;
-
-#[test]
-fn test_ingest_and_recall() {
+/// This is done per test rather than globally because there is no global lever:
+/// nextest 0.9.143 ignores a top-level `[env]` key in its config (it warns and
+/// carries on), and `RUST_MIN_STACK` in the environment also governs rustc's
+/// threads, so shrinking it breaks the build instead.
+///
+/// The depth is in the store's query execution, not uniko's frames — see
+/// `crates/uniko-store/tests/stack_depth_repro.rs`.
+pub fn with_recall_stack<F: std::future::Future<Output = ()> + Send + 'static>(body: F) {
     std::thread::Builder::new()
-        .stack_size(TEST_STACK_BYTES)
-        .name("test_ingest_and_recall".into())
-        .spawn(|| {
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("runtime")
-                .block_on(ingest_and_recall_body());
+                .block_on(body);
         })
         .expect("spawn test thread")
         .join()
         .expect("test thread panicked");
+}
+
+#[test]
+fn test_ingest_and_recall() {
+    with_recall_stack(ingest_and_recall_body());
 }
 
 async fn ingest_and_recall_body() {
