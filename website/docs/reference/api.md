@@ -170,6 +170,24 @@ carries the logical identity (`FROM_SOURCE` from the Message/Artifact); `categor
 `RecallItem` reports its own `category` and `source_id`, with `None` meaning "no
 category" / "no traceable single source" rather than "filtered out".
 
+**Revisions and retirement.** `IngestSource::with_revision(..)` / `Turn::revision(..)`
+declare which revision of a source the bytes are. A new revision stamps
+`superseded_at` on the previous one and records `SUPERSEDES` from new to old;
+`Agent::retire_source(..)` stamps `Source.retired_at` (`restore_source` reverses it).
+Ordinary recall excludes superseded revisions and retired sources, so replaced or
+retired evidence cannot ground a current answer; `Scope::include_superseded()` reaches
+it, which is how a past result stays attributable to the revision behind it. Nothing is
+deleted, and retirement lives on the source rather than the content — retiring one
+source never affects another that merely shares identical bytes.
+
+Re-ingesting the same revision with identical bytes is a no-op; the same revision with
+changed bytes raises `IdConflict`, since a revision id is a promise about the content.
+
+!!! note "Revisions do not change existing results on their own"
+    The exclusion set is resolved before candidate generation, and when nothing has
+    been retired or superseded it is empty and no predicate is emitted. Results shrink
+    only once something has actually been retired or replaced.
+
 !!! note "Filters apply before ranking"
     `.categories(..)` and `.sources(..)` are resolved into the allow-set that
     candidate generation itself uses, so the result limit and the `coverage` score

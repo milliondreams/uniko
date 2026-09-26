@@ -68,6 +68,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Source revisions and retirement** (`rustic-ai/uniko#41`):
+
+  ```rust
+  // A newer revision of the same source replaces the previous one.
+  session.ingest(
+      IngestSource::text(page_v2).with_source("wiki-summit").with_revision("rev-b"),
+  ).await?;
+
+  agent.recall("summit elevation").await?;                          // rev-b only
+  agent.recall_in("summit elevation",
+      Scope::default().include_superseded()).await?;                // history too
+  agent.retire_source("wiki-summit").await?;                        // neither
+  ```
+
+  `IngestSource::with_revision` / `Turn::revision` declare an immutable
+  revision identity. Together with the existing content fingerprint it
+  decides idempotency: the same revision with identical bytes is a no-op, and
+  the same revision with changed bytes is rejected with `IdConflict`, because
+  a revision id is a promise about the content.
+
+  A new revision of a source stamps `superseded_at` on the previous one and
+  records `SUPERSEDES` from new to old. `Agent::retire_source` stamps
+  `Source.retired_at`. **Ordinary recall excludes both**, so replaced or
+  retired evidence cannot ground a current answer, while
+  `Scope::include_superseded` reaches it so an older result stays
+  attributable to the revision that grounded it. Nothing is deleted.
+
+  Landing this does not change anyone's results on its own: the exclusion set
+  is resolved first, and when nothing has been retired or superseded it comes
+  back empty and no predicate is emitted at all. Results shrink only once
+  something has actually been retired or replaced.
+
+  Retirement is recorded on the `:Source`, never on the content, so retiring
+  one source cannot affect another that merely shares identical bytes — those
+  share an `:ArtifactContent` row but not a `:Source`.
+
+  `SUPERSEDES` was already declared `Rule → Rule`; uni-db permits one
+  declaration per edge type, so both endpoint pairs are now declared
+  together. Schema node and edge counts are unchanged.
+
 - **Typed record provenance and pre-ranking recall filters**
   (`rustic-ai/uniko#39`):
 
