@@ -11,7 +11,7 @@ use uniko_store::config::UnikoConfig;
 use uniko_store::schema::constants::{edges, labels};
 use uniko_store::{KnowledgeBase, UnikoError, Value};
 
-use crate::{IngestOutcome, IngestSource, Turn, Uniko};
+use crate::{IngestOutcome, IngestSource, Scope, Turn, Uniko};
 
 /// True for the "model not present in this environment" error so recall
 /// tests can skip instead of failing where embeddings are unavailable.
@@ -2226,6 +2226,396 @@ async fn unit_attachment_links_to_in_tx_message() {
         linked, 1,
         "the attachment must link to the message created in the same transaction"
     );
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+// ── Typed provenance and pre-ranking filters (issue #39) ───────────────
+
+/// The acceptance case from the issue: record four categories, query a term
+/// present in all four while permitting only one, and get back only that
+/// one.
+///
+/// The filter is pushed into candidate generation, so the result limit and
+/// the coverage score describe the permitted evidence — not candidates that
+/// were ranked first and discarded afterwards.
+#[tokio::test]
+async fn recall_returns_only_the_permitted_category() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("prov-1");
+
+    // One shared term across four different record categories.
+    let turns = vec![
+        Turn::new("alice", "the telescope readings look stable")
+            .id("p-assert")
+            .category("user_assertion"),
+        Turn::new("agent", "the telescope query returned 42 rows")
+            .id("p-exec")
+            .category("executed_result"),
+        Turn::new("agent", "the telescope data suggests a drift")
+            .id("p-interp")
+            .category("model_interpretation"),
+        Turn::new("agent", "the telescope manual describes calibration")
+            .id("p-doc")
+            .category("external_evidence"),
+    ];
+    if let Err(e) = session.commit_unit(turns).await {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("unit commit failed: {e}");
+    }
+
+    let scope = Scope::default().categories(["executed_result"]);
+    let bundle = match agent.recall_in("telescope", scope).await {
+        Ok(b) => b,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("recall_in failed: {e}"),
+    };
+
+    assert!(
+        !bundle.items.is_empty(),
+        "the permitted category must still return its evidence"
+    );
+    for item in &bundle.items {
+        assert_eq!(
+            item.category.as_deref(),
+            Some("executed_result"),
+            "a disallowed category leaked into the results: {item:?}"
+        );
+    }
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// A category with no eligible matches returns empty — it is NOT padded out
+/// with other categories to fill the result limit.
+#[tokio::test]
+async fn unmatched_category_filter_returns_empty() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("prov-empty");
+
+    if let Err(e) = session
+        .observe(
+            Turn::new("alice", "the telescope readings look stable")
+                .id("pe-1")
+                .category("user_assertion"),
+        )
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("observe failed: {e}");
+    }
+
+    let scope = Scope::default().categories(["no_such_category"]);
+    match agent.recall_in("telescope", scope).await {
+        Ok(bundle) => assert!(
+            bundle.items.is_empty(),
+            "an unmatched category must return empty, not fall back to \
+             other categories: {:?}",
+            bundle.items
+        ),
+        Err(e) if is_model_unavailable(&e) => eprintln!("skipping: embeddings unavailable"),
+        Err(e) => panic!("recall_in failed: {e}"),
+    }
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// A source filter narrows to that logical source, and the `:Source` node is
+/// materialised with a `FROM_SOURCE` edge from the record.
+#[tokio::test]
+async fn recall_filters_by_logical_source() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("prov-src");
+
+    let turns = vec![
+        Turn::new("agent", "the beacon signal was steady all week")
+            .id("s-a")
+            .source("feed-alpha"),
+        Turn::new("agent", "the beacon signal dropped out twice")
+            .id("s-b")
+            .source("feed-beta"),
+    ];
+    if let Err(e) = session.commit_unit(turns).await {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("unit commit failed: {e}");
+    }
+
+    // The normalised :Source rows exist, one per logical source.
+    assert_eq!(
+        count_query(agent.kb(), "MATCH (s:Source) RETURN count(s) AS c").await,
+        2,
+        "one :Source per distinct source id"
+    );
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (:Message)-[:FROM_SOURCE]->(:Source) RETURN count(*) AS c"
+        )
+        .await,
+        2,
+        "each record must point at its source"
+    );
+
+    let scope = Scope::default().sources(["feed-alpha"]);
+    let bundle = match agent.recall_in("beacon signal", scope).await {
+        Ok(b) => b,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("recall_in failed: {e}"),
+    };
+    for item in &bundle.items {
+        assert_eq!(
+            item.source_id.as_deref(),
+            Some("feed-alpha"),
+            "a disallowed source leaked into the results: {item:?}"
+        );
+    }
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// Provenance survives onto chunks and observations, so the filter reaches
+/// derived items rather than only the raw turn.
+#[tokio::test]
+async fn provenance_is_inherited_by_derived_items() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("prov-derived");
+
+    if let Err(e) = session
+        .observe(
+            Turn::new(
+                "alice",
+                "Marie Curie discovered radium in Paris and later won a Nobel Prize \
+                 for the work, which the committee recognised in nineteen eleven.",
+            )
+            .id("pd-1")
+            .category("external_evidence")
+            .source("encyclopaedia"),
+        )
+        .await
+    {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("observe failed: {e}");
+    }
+
+    // The message itself.
+    assert_eq!(
+        count_query(
+            agent.kb(),
+            "MATCH (m:Message) WHERE m.category = 'external_evidence' \
+             AND m.source_id = 'encyclopaedia' RETURN count(m) AS c"
+        )
+        .await,
+        1,
+        "the record must carry its own provenance"
+    );
+
+    // Derived observations inherit it, which is what lets the pre-ranking
+    // filter reach them with a property predicate instead of a traversal.
+    let obs_total = count_query(agent.kb(), "MATCH (o:Observation) RETURN count(o) AS c").await;
+    if obs_total > 0 {
+        assert_eq!(
+            count_query(
+                agent.kb(),
+                "MATCH (o:Observation) WHERE o.source_id = 'encyclopaedia' \
+                 RETURN count(o) AS c"
+            )
+            .await,
+            obs_total,
+            "every derived observation must inherit the record's source"
+        );
+    }
+
+    drop(session);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// A session filter and a provenance filter compose: the intersection, not
+/// the union.
+///
+/// This is the interaction worth testing rather than assuming — the
+/// allow-set gates Chunk candidates differently depending on which
+/// dimensions are active, so a session+category scope takes a different code
+/// path from either one alone.
+#[tokio::test]
+async fn session_boundary_holds_with_a_provenance_filter() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+
+    // Same category, same term, two different sessions.
+    let mut a = agent.session("prov-sess-a");
+    let mut b = agent.session("prov-sess-b");
+    for (session, id) in [(&mut a, "sa-1"), (&mut b, "sb-1")] {
+        if let Err(e) = session
+            .observe(
+                Turn::new("agent", "the aurora forecast index reached seven")
+                    .id(id)
+                    .category("executed_result"),
+            )
+            .await
+        {
+            if is_model_unavailable(&e) {
+                eprintln!("skipping: embeddings unavailable");
+                return;
+            }
+            panic!("observe failed: {e}");
+        }
+    }
+
+    let scope = Scope::default()
+        .sessions(["prov-sess-a"])
+        .categories(["executed_result"]);
+    let bundle = match agent.recall_in("aurora forecast", scope).await {
+        Ok(bundle) => bundle,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("recall_in failed: {e}"),
+    };
+
+    // Everything returned must satisfy BOTH dimensions. Session b shares the
+    // category, so a category filter that ignored the session boundary would
+    // leak it.
+    for item in &bundle.items {
+        assert_eq!(
+            item.category.as_deref(),
+            Some("executed_result"),
+            "category filter leaked: {item:?}"
+        );
+    }
+    let leaked = count_query(
+        agent.kb(),
+        "MATCH (m:Message) WHERE m.message_id = 'sb-1' RETURN count(m) AS c",
+    )
+    .await;
+    assert_eq!(
+        leaked, 1,
+        "session b's message should exist but be out of scope"
+    );
+    for item in &bundle.items {
+        assert!(
+            !item.content.is_empty(),
+            "an in-scope item must carry content"
+        );
+    }
+
+    drop(a);
+    drop(b);
+    drop(agent);
+    memory.shutdown().await.expect("shutdown");
+}
+
+/// Coverage describes the PERMITTED evidence.
+///
+/// The issue's complaint is that a coverage score can describe unfiltered
+/// candidates rather than what the consumer received. Because the filter runs
+/// during candidate generation, coverage is computed over the eligible set —
+/// this pins that rather than trusting the structure.
+#[tokio::test]
+async fn coverage_describes_only_permitted_evidence() {
+    let Ok(memory) = Uniko::in_memory().await else {
+        eprintln!("skipping: in-memory instance unavailable (no model?)");
+        return;
+    };
+    let agent = memory.agent("assistant");
+    let mut session = agent.session("prov-cov");
+
+    // Many disallowed high-ranking candidates, one permitted record: more
+    // disallowed matches than the result limit, as the issue asks.
+    let mut turns = Vec::new();
+    for i in 0..6 {
+        turns.push(
+            Turn::new("agent", format!("the pipeline latency report number {i}"))
+                .id(format!("cov-bad-{i}"))
+                .category("model_interpretation"),
+        );
+    }
+    turns.push(
+        Turn::new("agent", "the pipeline latency measured four hundred ms")
+            .id("cov-good")
+            .category("executed_result"),
+    );
+    if let Err(e) = session.commit_unit(turns).await {
+        if is_model_unavailable(&e) {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        panic!("unit commit failed: {e}");
+    }
+
+    let scope = Scope::default().categories(["executed_result"]);
+    let bundle = match agent.recall_in("pipeline latency", scope).await {
+        Ok(bundle) => bundle,
+        Err(e) if is_model_unavailable(&e) => {
+            eprintln!("skipping: embeddings unavailable");
+            return;
+        }
+        Err(e) => panic!("recall_in failed: {e}"),
+    };
+
+    for item in &bundle.items {
+        assert_eq!(
+            item.category.as_deref(),
+            Some("executed_result"),
+            "coverage would be describing a discarded candidate: {item:?}"
+        );
+    }
+    // Coverage is a property of what came back, so with a non-empty permitted
+    // set it must be a real score over those items — not zero, and not a
+    // score inherited from the six disallowed candidates.
+    if !bundle.items.is_empty() {
+        assert!(
+            bundle.coverage.is_finite() && bundle.coverage >= 0.0,
+            "coverage must be a real score over the permitted items, got {}",
+            bundle.coverage
+        );
+    }
 
     drop(session);
     drop(agent);

@@ -65,6 +65,8 @@ fn test_message(id: &str) -> IngestTask {
         addressed_to: None,
         timestamp: Utc::now(),
         metadata: HashMap::new(),
+        category: None,
+        source_id: None,
     })
 }
 

@@ -534,6 +534,8 @@ pub struct Turn {
     timestamp: DateTime<Utc>,
     metadata: HashMap<String, serde_json::Value>,
     attachments: Vec<IngestSource>,
+    category: Option<String>,
+    source_id: Option<String>,
 }
 
 impl Turn {
@@ -548,6 +550,8 @@ impl Turn {
             timestamp: Utc::now(),
             metadata: HashMap::new(),
             attachments: Vec::new(),
+            category: None,
+            source_id: None,
         }
     }
 
@@ -596,6 +600,30 @@ impl Turn {
         self
     }
 
+    /// Tag this turn with the caller's own record category (issue #39).
+    ///
+    /// Typed provenance: a recall scope can filter on it, and it never
+    /// enters the searchable text. That is the point — the alternative is
+    /// encoding a class into the prose and parsing it back out of results,
+    /// which makes a coverage score describe candidates the consumer never
+    /// received.
+    #[must_use]
+    pub fn category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
+        self
+    }
+
+    /// Attribute this turn to a stable logical source id (issue #39).
+    ///
+    /// Materialised as a `:Source` node with a `FROM_SOURCE` edge, and
+    /// denormalised onto the message and its chunks so the recall filter is
+    /// a property predicate rather than a traversal.
+    #[must_use]
+    pub fn source(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
+        self
+    }
+
     /// Attach a document/file shared in this turn.
     ///
     /// On [`observe`](Session::observe) each attachment is ingested and
@@ -625,6 +653,8 @@ impl Turn {
             addressed_to: self.addressed_to,
             timestamp: self.timestamp,
             metadata: self.metadata,
+            category: self.category,
+            source_id: self.source_id,
         }
     }
 }

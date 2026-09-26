@@ -181,6 +181,8 @@ impl Agent {
             participants: scope.dims.participants.clone(),
             since: scope.dims.since,
             until: scope.dims.until,
+            categories: scope.dims.categories.clone(),
+            sources: scope.dims.sources.clone(),
         };
         let mut params: HashMap<String, Value> = HashMap::new();
         if filter.is_active() {

@@ -171,6 +171,15 @@ pub struct RecallItem {
     /// Lineage — the messages/attachments this content came from. One entry
     /// for a chunk, many for a Fact, empty for aggregates.
     pub sources: Vec<RecallSource>,
+    /// The caller's record category, when the record carries one (issue
+    /// #39). `None` means the item genuinely has no category — not that it
+    /// was filtered out, since a category filter is applied during candidate
+    /// generation.
+    pub category: Option<String>,
+    /// The logical `Source.source_id` this item traces to, when known.
+    /// `None` on an aggregate with no single source, which is the explicit
+    /// "lineage unavailable" signal rather than a silent blank.
+    pub source_id: Option<String>,
 }
 
 impl RecallItem {
@@ -265,6 +274,13 @@ pub struct Dimensions {
     pub since: Option<chrono::DateTime<chrono::Utc>>,
     /// Upper time bound, exclusive.
     pub until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Restrict to records whose `category` is one of these — the caller's
+    /// own record class (a user assertion, an executed result, a model
+    /// interpretation), recorded as typed provenance rather than embedded
+    /// in searchable prose.
+    pub categories: Option<Vec<String>>,
+    /// Restrict to records from one of these logical `Source.source_id`s.
+    pub sources: Option<Vec<String>>,
 }
 
 impl Dimensions {
@@ -278,6 +294,8 @@ impl Dimensions {
             && self.participants.is_none()
             && self.since.is_none()
             && self.until.is_none()
+            && self.categories.is_none()
+            && self.sources.is_none()
     }
 }
 
@@ -337,6 +355,29 @@ impl Scope {
     #[must_use]
     pub fn until(mut self, until: chrono::DateTime<chrono::Utc>) -> Self {
         self.dims.until = Some(until);
+        self
+    }
+
+    /// Restrict recall to these record categories.
+    ///
+    /// The filter is pushed into candidate generation, so ranking, result
+    /// limits and coverage all apply to the permitted items — not to items
+    /// discarded after Uniko had already ranked them. A category with no
+    /// eligible matches returns an empty result rather than being padded
+    /// out with other categories.
+    #[must_use]
+    pub fn categories(mut self, categories: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.dims.categories = Some(categories.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Restrict recall to these logical source ids.
+    ///
+    /// Pushed into candidate generation for the same reason as
+    /// [`categories`](Self::categories).
+    #[must_use]
+    pub fn sources(mut self, sources: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.dims.sources = Some(sources.into_iter().map(Into::into).collect());
         self
     }
 
@@ -654,6 +695,37 @@ const TOKENS_PER_ITEM: usize = 50;
 /// rank order summing [`TOKENS_PER_ITEM`] until the budget would be
 /// exceeded.  Returns `(kept_items, total_tokens)` for the caller to
 /// wrap in a [`ContextBundle`] with phase-specific flags.
+/// Populate each item's `category` / `source_id` from the graph.
+///
+/// One batched read for the whole result set. Derived items (Observation,
+/// Fact, Chunk) carry the provenance denormalised from their originating
+/// record, so this needs no lineage traversal — which is also why the recall
+/// filter that selected them could be a property predicate.
+///
+/// A failure here is logged, not propagated: provenance is metadata ABOUT a
+/// result the caller has already earned, and losing it must not turn a
+/// successful recall into an error.
+async fn attach_provenance(kb: &KnowledgeBase, items: &mut [RecallItem]) {
+    if items.is_empty() {
+        return;
+    }
+    let ids: Vec<NodeId> = items.iter().map(|i| i.node_id).collect();
+    match kb.provenance_for_nodes(&ids).await {
+        Ok(map) => {
+            for item in items.iter_mut() {
+                if let Some((category, source_id)) = map.get(&item.node_id) {
+                    item.category = category.clone();
+                    item.source_id = source_id.clone();
+                }
+            }
+        }
+        Err(e) => tracing::warn!(
+            error = %e,
+            "recall: could not resolve item provenance; category/source_id left unset"
+        ),
+    }
+}
+
 fn finalize_bundle(
     mut items: Vec<RecallItem>,
     limit: usize,
@@ -965,6 +1037,8 @@ async fn recall_unfiltered(
             participants: config.dimensions.participants.clone(),
             since: config.dimensions.since,
             until: config.dimensions.until,
+            categories: config.dimensions.categories.clone(),
+            sources: config.dimensions.sources.clone(),
         };
         let allow = kb.resolve_scope_allow_set(&filter).await?;
         let mut scoped = config.clone();
@@ -1012,8 +1086,9 @@ async fn recall_unfiltered(
             coverage = phase1_coverage,
             "phase 1 (compact) sufficient — skipping phase 3"
         );
-        let (final_items, total_tokens) =
+        let (mut final_items, total_tokens) =
             finalize_bundle(phase1_items, config.limit, config.token_budget);
+        attach_provenance(kb, &mut final_items).await;
         return Ok(ContextBundle {
             total_tokens,
             items: final_items,
@@ -1057,8 +1132,9 @@ async fn recall_unfiltered(
             combined.extend(p1);
         }
 
-        let (final_items, total_tokens) =
+        let (mut final_items, total_tokens) =
             finalize_bundle(combined, config.limit, config.token_budget);
+        attach_provenance(kb, &mut final_items).await;
         return Ok(ContextBundle {
             total_tokens,
             items: final_items,
@@ -1144,8 +1220,9 @@ async fn recall_unfiltered(
                 phase2_items = phase2_items.len(),
                 "phase 3 empty — returning phase 2 fallback bundle"
             );
-            let (final_items, total_tokens) =
+            let (mut final_items, total_tokens) =
                 finalize_bundle(phase2_items, config.limit, config.token_budget);
+            attach_provenance(kb, &mut final_items).await;
             let coverage = compute_coverage(&final_items, intent.facet_count);
             return Ok(ContextBundle {
                 total_tokens,
@@ -1166,6 +1243,8 @@ async fn recall_unfiltered(
             let kind = RecallKind::from_label(&label);
             RecallItem {
                 node_id: nid,
+                category: None,
+                source_id: None,
                 kind,
                 score: score * kind.tier().weight(),
                 content,
@@ -1298,7 +1377,8 @@ async fn recall_unfiltered(
         }
     }
 
-    let (final_items, total_tokens) = finalize_bundle(items, config.limit, config.token_budget);
+    let (mut final_items, total_tokens) = finalize_bundle(items, config.limit, config.token_budget);
+    attach_provenance(kb, &mut final_items).await;
 
     let coverage = compute_coverage(&final_items, intent.facet_count);
 
@@ -1468,6 +1548,8 @@ async fn phase1_compact(
                 })
                 .or_insert(RecallItem {
                     node_id: row.node_id,
+                    category: None,
+                    source_id: None,
                     kind,
                     score: weighted,
                     content: row.content,
@@ -1724,6 +1806,8 @@ fn fuse_and_score_phase2(
             let kind = RecallKind::from_label(&label);
             RecallItem {
                 node_id: nid,
+                category: None,
+                source_id: None,
                 kind,
                 score: score * kind.tier().weight(),
                 content,

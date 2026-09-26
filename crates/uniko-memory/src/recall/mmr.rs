@@ -123,6 +123,8 @@ mod tests {
             score,
             content: content.into(),
             sources: Vec::new(),
+            category: None,
+            source_id: None,
         }
     }
 

@@ -72,6 +72,8 @@ fn fact_item(node_id: i64) -> RecallItem {
         score: 1.0,
         content: "x".into(),
         sources: Vec::new(),
+        category: None,
+        source_id: None,
     }
 }
 
@@ -149,6 +151,8 @@ async fn filter_bundle_leaves_non_policy_items_alone() {
             score: 0.5,
             content: "x".into(),
             sources: Vec::new(),
+            category: None,
+            source_id: None,
         },
     ]);
     filter_bundle(&kb, &mut bundle, &alice)
